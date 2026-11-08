@@ -73,6 +73,7 @@ type Server struct {
 	pending map[string]*pendingQuery // by transaction ID
 	nextTID uint16
 	routers map[netip.AddrPort]bool // resolved bootstrap addresses: never in the table
+	filled  [160]time.Time          // last targeted lookup per bucket (fillBuckets)
 
 	verifying sync.Map      // addresses being pinged before joining the table
 	verifySem chan struct{} // bounds those pings
@@ -403,9 +404,13 @@ func (s *Server) maintain() {
 			}
 			wg.Wait()
 			s.store.expire(now)
-			if _, good := s.table.counts(now); good < K {
+			_, good := s.table.counts(now)
+			switch {
+			case good < K:
 				s.bootstrap()
-			} else if now.Sub(lastRefresh) >= s.cfg.RefreshEvery {
+			case good < growUntil:
+				s.fillBuckets(growLookups)
+			case now.Sub(lastRefresh) >= s.cfg.RefreshEvery:
 				lastRefresh = now
 				s.lookup(s.ctx, NewID(), false)
 				s.saveState()
@@ -438,8 +443,55 @@ func (s *Server) bootstrap() {
 		s.mu.Unlock()
 	}
 	s.lookup(s.ctx, s.id, false)
+	s.fillBuckets(growLookups)
 	all, good := s.table.counts(time.Now())
 	s.log.Debug("bootstrap done", "nodes", all, "good", good)
+}
+
+// Filling the table (D42). Looking up our own ID only fills the buckets
+// near us, and a random ID lands in bucket 0 half the time, so instead we
+// look up a random ID *inside* each bucket that has room. Until the table
+// has growUntil good nodes this runs every maintenance round, but each
+// bucket is tried at most once per RefreshEvery (as Kademlia refreshes
+// buckets): a network too small to fill a bucket isn't asked again and
+// again.
+const (
+	growUntil    = 100 // good nodes; a full table on the public DHT holds ~150–200
+	growLookups  = 8   // bucket lookups per round, growParallel at a time
+	growParallel = 4
+)
+
+// fillBuckets runs lookups aimed at up to n sparse buckets not tried
+// recently, shallowest first.
+func (s *Server) fillBuckets(n int) {
+	now := time.Now()
+	var buckets []int
+	s.mu.Lock()
+	for _, b := range s.table.sparse() {
+		if len(buckets) < n && now.Sub(s.filled[b]) >= s.cfg.RefreshEvery {
+			s.filled[b] = now
+			buckets = append(buckets, b)
+		}
+	}
+	s.mu.Unlock()
+	sem := make(chan struct{}, growParallel)
+	var wg sync.WaitGroup
+	for _, b := range buckets {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if res := s.lookup(s.ctx, idInBucket(s.id, b), false); len(res.closest) == 0 {
+				// Reached no one (e.g. the routers were busy): not a real
+				// try, so the bucket may be tried again next round.
+				s.mu.Lock()
+				s.filled[b] = time.Time{}
+				s.mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func (s *Server) routerList() []netip.AddrPort {

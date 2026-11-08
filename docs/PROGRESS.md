@@ -6,8 +6,8 @@
 `docs/ROADMAP.md`, then plan **Phase 12 — Daily-driver polish** with the
 user before coding: file selection (skip files), stop-seeding / pause-
 uploads controls, ratio display, UPnP/NAT-PMP, snub timeout vs low limits
-(D36), real-world interoperability testing (incl. the public DHT — so far
-the DHT is only tested against Denco nodes on loopback), README/usage docs.
+(D36), more real-world interoperability testing
+(full downloads, trackers), README/usage docs.
 
 ## Known issues
 - Fetching metadata uses its own connections; the download then reconnects
@@ -16,9 +16,7 @@ the DHT is only tested against Denco nodes on loopback), README/usage docs.
   timeout and cause peer churn (D36). Phase 12 candidate.
 - No NAT traversal (UPnP/NAT-PMP): incoming peers need a forwarded port.
   Planned for Phase 12.
-- DHT: tested only against Denco nodes on loopback, not yet the public
-  network (no test may use it; a manual check is a Phase 12 item). IPv4
-  only (no BEP 32); no BEP 42 secure node IDs.
+- DHT: IPv4 only (no BEP 32); no BEP 42 secure node IDs.
 - Behind NAT without a forwarded port, other DHT nodes can't reach us, so
   we answer few queries and the table fills slowly (UPnP: Phase 12).
 - `denco download` (standalone tool) doesn't use extensions or DHT: no
@@ -56,8 +54,32 @@ the DHT is only tested against Denco nodes on loopback), README/usage docs.
   B and C bootstrap from A): C added a magnet with only the info hash, found
   A through B's stored announce, had the metadata and all data in ~5 s,
   byte-identical to A's; every node saved `dht.json`; all stopped cleanly
+- **public DHT check (manual, user-approved, 2026-11-08):** one daemon in
+  a scratch home with the default routers joined the public DHT (10 good
+  nodes after 1 min, 19 at the end). A magnet with only the info hash of
+  Ubuntu's official `ubuntu-24.04.4-live-server-amd64.iso` torrent
+  (62a4d9e1…) got its metadata from real peers in 25 s; name, size and
+  12,991 pieces match the official .torrent. Connected peers were
+  qBittorrent 5.2.3 and 5.3.0. Paused at once (0 bytes of the ISO
+  downloaded), removed with -delete, daemon stopped; 19 nodes saved to
+  dht.json. Finding: slow table growth (~10 nodes after a minute)
+- **fix: targeted bucket lookups** (D42). Developing it, the stress runs
+  exposed two more real flaws, each now covered by a test:
+  (1) an attempt that reached nobody (routers busy at start) used up the
+  bucket's 15-min slot — attempts that reach no one no longer count;
+  (2) a lookup into a region nobody in our table knows dead-ended among our
+  own neighbours — routers are now asked when no known node shares more
+  leading bits with the target than we do (a first version comparing whole
+  distances still failed 1 in 60). `TestNewNodeFillsShallowBuckets` fails
+  10/10 without bucket filling; `TestLookupAsksRoutersForUnknownRegions`
+  fails 10/10 with the old rule and with the whole-distance rule; both pass
+  90/90 under `-race -cpu=1,2,8`; `dht` and `engine` stress (30 runs
+  each) and the full suite pass
+- **public re-check from a fresh home:** 11 nodes at 5 s, 40 at 15 s, 78 at
+  1 min, 112 (all good) at ~2.5 min, then growth stops as designed; 112
+  saved to dht.json; daemon stopped cleanly
 - real config dir (`~/Library/Application Support/denco`) untouched; no
-  test contacts the public DHT (`config.DefaultDHTBootstrap` cleared in the
+  automated test contacts the public DHT (`config.DefaultDHTBootstrap` cleared in the
   CLI's TestMain; other packages use loopback nodes or fakes)
 - `go vet` (darwin, linux, windows) clean · gofmt clean
 - cross-compile linux/windows/darwin × amd64/arm64 — all build
@@ -149,4 +171,5 @@ the DHT is only tested against Denco nodes on loopback), README/usage docs.
   sessions look up + announce (retry backoff, never for private torrents)
   and exchange PORT messages; the magnet fetcher looks up via DHT;
   engine runs one node on the peer port's number; `enable_dht` works,
-  new `dht_bootstrap`; DHT rows in `denco status`/`info`. D42–D43.
+  new `dht_bootstrap`; DHT rows in `denco status`/`info`; targeted bucket
+  lookups fill the table (10 → 112 nodes on the public DHT). D42–D43.

@@ -188,6 +188,40 @@ func (t *table) questionable(now time.Time, n int) []NodeInfo {
 	return out
 }
 
+// sparse returns the buckets, from 0 to the deepest one holding any node,
+// that have room — the ones targeted lookups should fill. Buckets past the
+// deepest are left alone: the network is too small to have nodes there.
+func (t *table) sparse() []int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	deepest := 0
+	for b := range t.buckets {
+		if len(t.buckets[b]) > 0 {
+			deepest = b
+		}
+	}
+	var out []int
+	for b := 0; b <= deepest; b++ {
+		if len(t.buckets[b]) < K {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// idInBucket returns a random ID that falls in bucket b: it shares exactly
+// b leading bits with self.
+func idInBucket(self ID, b int) ID {
+	id := NewID()
+	for i := 0; i < b; i++ {
+		mask := byte(0x80 >> (i % 8))
+		id[i/8] = id[i/8]&^mask | self[i/8]&mask
+	}
+	mask := byte(0x80 >> (b % 8))
+	id[b/8] = id[b/8]&^mask | ^self[b/8]&mask
+	return id
+}
+
 // counts returns the number of nodes and how many are good.
 func (t *table) counts(now time.Time) (all, good int) {
 	t.mu.Lock()

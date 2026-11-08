@@ -84,18 +84,6 @@ func TestTokens(t *testing.T) {
 
 // --- routing table ------------------------------------------------------------------------
 
-// idWithPrefix returns an ID sharing exactly n leading bits with self.
-func idWithPrefix(self ID, n int) ID {
-	id := NewID()
-	for i := 0; i < n; i++ { // copy n bits
-		mask := byte(0x80 >> (i % 8))
-		id[i/8] = id[i/8]&^mask | self[i/8]&mask
-	}
-	mask := byte(0x80 >> (n % 8)) // flip bit n
-	id[n/8] = id[n/8]&^mask | ^self[n/8]&mask
-	return id
-}
-
 func addr(i int) netip.AddrPort {
 	return netip.AddrPortFrom(netip.MustParseAddr("10.0.0.1"), uint16(1000+i))
 }
@@ -108,18 +96,18 @@ func TestTable(t *testing.T) {
 	if all, _ := tb.counts(now); all != 0 {
 		t.Fatal("added our own ID")
 	}
-	if tb.bucket(idWithPrefix(self, 3)) != 3 || tb.bucket(self) != -1 {
+	if tb.bucket(idInBucket(self, 3)) != 3 || tb.bucket(self) != -1 {
 		t.Fatal("bucket index")
 	}
 
 	// Bucket 0 fills up at K; a newcomer is refused while everyone is fine…
 	var first []NodeInfo
 	for i := 0; i < K; i++ {
-		n := NodeInfo{idWithPrefix(self, 0), addr(i)}
+		n := NodeInfo{idInBucket(self, 0), addr(i)}
 		first = append(first, n)
 		tb.seen(n, now)
 	}
-	late := NodeInfo{idWithPrefix(self, 0), addr(100)}
+	late := NodeInfo{idInBucket(self, 0), addr(100)}
 	tb.seen(late, now)
 	if tb.has(late) || tb.room(late.ID) {
 		t.Fatal("full bucket took a new node without a bad one to replace")
@@ -146,7 +134,7 @@ func TestTable(t *testing.T) {
 	}
 
 	// closest is ordered by XOR distance and skips bad nodes.
-	target := idWithPrefix(self, 0)
+	target := idInBucket(self, 0)
 	got := tb.closest(target, 100)
 	for i := 1; i < len(got); i++ {
 		if closer(target, got[i].ID, got[i-1].ID) {
@@ -159,7 +147,7 @@ func TestTable(t *testing.T) {
 		t.Fatal("bad node returned by closest")
 	}
 	// An address that comes back with a different ID replaces its old entry.
-	moved := NodeInfo{idWithPrefix(self, 7), first[6].Addr}
+	moved := NodeInfo{idInBucket(self, 7), first[6].Addr}
 	tb.seen(moved, now)
 	if !tb.has(moved) || slices.Contains(tb.closest(first[6].ID, 100), first[6]) {
 		t.Fatal("address re-use")
@@ -460,5 +448,95 @@ func TestResponsesMustComeFromTheQueriedNode(t *testing.T) {
 	r := <-done
 	if r.err != nil || r.m.id != asked.id {
 		t.Fatalf("got %v / %v; want the asked node's answer, not the forger's", r.m.id, r.err)
+	}
+}
+
+func TestBucketTargets(t *testing.T) {
+	self := NewID()
+	for b := 0; b < 160; b++ {
+		if got := commonPrefix(self, idInBucket(self, b)); got != b {
+			t.Fatalf("idInBucket(%d) shares %d bits", b, got)
+		}
+	}
+	tb := newTable(self)
+	if got := tb.sparse(); !slices.Equal(got, []int{0}) {
+		t.Fatalf("empty table: sparse = %v, want [0]", got)
+	}
+	now := time.Now()
+	for i := 0; i < K; i++ {
+		tb.seen(NodeInfo{idInBucket(self, 0), addr(i)}, now) // bucket 0 full
+	}
+	tb.seen(NodeInfo{idInBucket(self, 3), addr(50)}, now) // deepest: 3
+	if got := tb.sparse(); !slices.Equal(got, []int{1, 2, 3}) {
+		t.Fatalf("sparse = %v, want [1 2 3] (full bucket 0 skipped, nothing past the deepest)", got)
+	}
+}
+
+// A newcomer fills its shallow buckets too — not only those near its own
+// ID, which is all a lookup of its own ID reaches.
+func TestNewNodeFillsShallowBuckets(t *testing.T) {
+	nodes := network(t, 40)
+	s := testServer(t, Config{Bootstrap: []string{nodes[0].Addr().String()}})
+	sizes := func() []int {
+		s.table.mu.Lock()
+		defer s.table.mu.Unlock()
+		out := make([]int, 8)
+		for b := range out {
+			out[b] = len(s.table.buckets[b])
+		}
+		return out
+	}
+	// Fill to what exists: a bucket can't hold more nodes than the network
+	// has in its range.
+	in := make([]int, 2)
+	for _, n := range nodes {
+		if b := s.table.bucket(n.ID()); b == 0 || b == 1 {
+			in[b]++
+		}
+	}
+	want0, want1 := min(K, in[0]), min(K/2, in[1])
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		sz := sizes()
+		if sz[0] >= want0 && sz[1] >= want1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("bucket sizes %v; network has %v nodes in buckets 0,1", sz, in)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// When our table knows nobody in the target's bucket, the routers are asked
+// even though the table has K nodes — else a lookup into the far half of
+// the ID space dead-ends among our own neighbours.
+func TestLookupAsksRoutersForUnknownRegions(t *testing.T) {
+	router := testServer(t, Config{})
+	for i := 0; i < 16; i++ { // a network the router knows, both halves
+		testServer(t, Config{Bootstrap: []string{router.Addr().String()}})
+	}
+	waitFor(t, func() bool { return router.Stats().GoodNodes >= 12 })
+
+	s := testServer(t, Config{})
+	// K isolated nodes in s's own half: they know nobody.
+	for near := 0; near < K; {
+		n := testServer(t, Config{})
+		if s.table.bucket(n.ID()) >= 1 {
+			s.table.seen(NodeInfo{n.ID(), n.Addr()}, time.Now())
+			near++
+		}
+	}
+	// Only now the router (earlier, maintenance would bootstrap through it
+	// while the table was small and learn the far half that way).
+	s.mu.Lock()
+	s.routers[router.Addr()] = true
+	s.mu.Unlock()
+	s.lookup(context.Background(), idInBucket(s.ID(), 0), false)
+	s.table.mu.Lock()
+	far := len(s.table.buckets[0])
+	s.table.mu.Unlock()
+	if far == 0 {
+		t.Fatal("lookup into the far half found nobody: routers weren't asked")
 	}
 }

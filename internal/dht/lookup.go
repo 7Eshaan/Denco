@@ -47,7 +47,7 @@ type cand struct {
 // closest nodes we know, learn closer ones from their answers, and repeat
 // until the K closest nodes we've heard of have all answered. With
 // getPeers it asks get_peers (collecting peers and tokens), else find_node.
-// If the table is nearly empty the routers are asked too.
+// If our table knows nobody in target's bucket, the routers are asked too.
 func (s *Server) lookup(ctx context.Context, target ID, getPeers bool) lookupResult {
 	cands := map[netip.AddrPort]*cand{}
 	add := func(n NodeInfo, router bool) {
@@ -56,10 +56,16 @@ func (s *Server) lookup(ctx context.Context, target ID, getPeers bool) lookupRes
 		}
 		cands[n.Addr] = &cand{NodeInfo: n, router: router}
 	}
-	for _, n := range s.table.closest(target, K) {
+	known := s.table.closest(target, K)
+	for _, n := range known {
 		add(n, false)
 	}
-	if len(cands) < K {
+	// The routers are asked too when the table can't lead anywhere: fewer
+	// than K nodes, or none sharing more leading bits with the target than
+	// we do — we know nobody in the target's bucket (common for the far
+	// buckets in small networks). Comparing whole distances isn't enough:
+	// a node from the wrong half can be "closer" by its trailing bits.
+	if len(known) < K || commonPrefix(known[0].ID, target) <= commonPrefix(s.id, target) {
 		for _, r := range s.routerList() {
 			add(NodeInfo{Addr: r}, true)
 		}

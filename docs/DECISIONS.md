@@ -564,8 +564,18 @@ One short entry per decision. Newest at the bottom. Format:
     ≤ 500 per hash, ≤ 5000 hashes; ≤ 50 values per answer.
   - **Lookups:** iterative, α = 4 queries in flight, stop when the K closest
     known nodes have all answered; ≤ 200 queries and ≤ 1000 candidates per
-    lookup. When the table has < K nodes the routers are asked too, so a
-    lookup works from a cold start.
+    lookup. The routers are asked too when the table has < K nodes *or*
+    knows nobody sharing more leading bits with the target than we do (no
+    node in the target's bucket) — comparing whole distances isn't enough,
+    a node from the wrong half can win on trailing bits.
+  - **Filling the table** (added after the public-DHT check, which showed
+    ~10 nodes after a minute): bootstrap looks up our own ID, then a random
+    ID *inside* each bucket that has room, shallowest first (8 lookups per
+    round, 4 at a time); repeated every maintenance round until 100 good
+    nodes. Each bucket is tried at most once per refresh period (15 min),
+    except that an attempt that reached nobody doesn't count. Random IDs
+    alone don't work: half of them land in bucket 0. Result on the public
+    DHT: 78 nodes after 1 min, 112 after ~2.5 min.
   - **Sessions:** look up (and announce our TCP port to the K closest that
     gave tokens) at start and every 15 min; a lookup that finds no one is
     retried after 1 min, doubling up to 15 (at daemon start the table is
