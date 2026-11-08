@@ -1,0 +1,52 @@
+# --- Build output -------------------------------------------------------
+# `go build ./cmd/denco` drops the binary in the repo root.
+/denco
+/denco.exe
+/dist/
+/bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# --- Go test / profiling artefacts --------------------------------------
+*.test
+*.out
+coverage.*
+*.prof
+*.pprof
+# NOTE: testdata/fuzz/ is intentionally NOT ignored. When a fuzz test finds a
+# crasher, Go saves it there, and it should be committed as a regression test.
+
+# --- Local runtime data -------------------------------------------------
+# Denco keeps its real state (resume data, config, IPC token) in the OS
+# user config dir, not the repo. These cover running it with paths inside
+# the repo during development.
+/downloads/
+/.denco/
+*.torrent
+!**/testdata/**/*.torrent
+.env
+.env.*
+
+# --- OS junk ------------------------------------------------------------
+.DS_Store
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*~
+
+# --- Editors / IDEs -----------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+.fleet/
+.zed/
+
+# --- Claude Code personal settings --------------------------------------
+# Shared project settings (.claude/settings.json) may be committed;
+# personal overrides stay local.
+.claude/settings.local.json
