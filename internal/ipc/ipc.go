@@ -112,10 +112,12 @@ func ReadInfo(path string) (Info, error) {
 	return info, nil
 }
 
-// AddRequest adds one .torrent file. Torrent carries the file's bytes
-// (base64 in JSON), so the daemon never needs to read the client's paths.
+// AddRequest adds one torrent: either a .torrent file's bytes (Torrent,
+// base64 in JSON — the daemon never reads the client's paths) or a magnet
+// link (Magnet).
 type AddRequest struct {
-	Torrent  []byte `json:"torrent"`
+	Torrent  []byte `json:"torrent,omitempty"`
+	Magnet   string `json:"magnet,omitempty"`
 	Dir      string `json:"dir,omitempty"` // absolute; "" = daemon default
 	Existing bool   `json:"existing,omitempty"`
 	Paused   bool   `json:"paused,omitempty"`
@@ -146,6 +148,7 @@ const (
 	CodeExists    = "files_exist"
 	CodeInvalid   = "invalid"
 	CodeBusy      = "busy"
+	CodeNoMeta    = "no_metadata"
 	CodeAuth      = "unauthorized"
 	CodeInternal  = "internal"
 )

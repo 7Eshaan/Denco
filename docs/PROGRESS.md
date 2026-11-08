@@ -1,24 +1,27 @@
 # Progress
 
-**Current phase:** 9 — Configuration · ✅ done, waiting for the user's commit
+**Current phase:** 10 — Magnets end-to-end · ✅ done, waiting for the user's commit
 
-**Next action:** once the user has committed Phase 9, tick it in
-`docs/ROADMAP.md` and start **Phase 10 — Magnets end-to-end**: BEP 10
-extension handshake in `peer`/`torrent` (advertise `ut_metadata`, parse the
-peer's `m` dict and `metadata_size`), BEP 9 `ut_metadata` (request/data/reject
-pieces of 16 KiB, assemble, SHA-1 must equal the info hash, then
-`metainfo.ParseInfo`), a "fetching metadata" state in the engine (torrent
-known by hash + name only, peers from magnet `tr`/`x.pe`), then switch to a
-normal session; `denco add <magnet>` and `denco add <http(s) URL>` (download
-the .torrent, size cap, timeout). Design the extension layer so Phase 10b
-(PEX, D37) plugs into it.
+**Next action:** once the user has committed Phase 10, tick it in
+`docs/ROADMAP.md` and start **Phase 10b — PEX** (D37): `ut_pex` (BEP 11) in
+`torrent/extensions.go` — advertise `"ut_pex": 2` (new `peer.ExtPEXID`),
+send `added`/`added.f`/`dropped` (+ `added6`/`dropped6`) about once a minute
+to peers that support it (≤ 50 added per message), feed received peers into
+the swarm (`swarm.add`), never for private torrents, only when
+`enable_pex` is on (plumb the config flag: daemon → engine.Config →
+torrent.Config). Rate-limit what we accept from one peer. Then drop the
+"not available" note for PEX.
 
 ## Known issues
+- A magnet link with no trackers and no `x.pe` peers can't find anyone until
+  DHT (Phase 11); it waits in "Fetching metadata" and says why.
+- Fetching metadata uses its own connections; the download then reconnects
+  to the same peers (D38) — one extra handshake per peer, once per magnet.
 - Low download/upload limits shared by many peers can trip the 60s snub
   timeout and cause peer churn (D36). Phase 12 candidate.
 - No NAT traversal (UPnP/NAT-PMP): incoming peers need a forwarded port.
   Planned for Phase 12.
-- DHT and PEX are config keys only (Phases 11 and 10b); the daemon says so.
+- DHT and PEX are config keys only so far (Phases 11 and 10b).
 - Resume: a file edited externally *during* a run that then crashed isn't
   detected (D27); `denco verify` checks manually.
 - Daemon runs in the foreground and logs to its terminal; no log file or
@@ -32,22 +35,24 @@ the .torrent, size cap, timeout). Design the extension layer so Phase 10b
   confirmed). Auto-start from `denco add` is possible later.
 - UPnP/NAT-PMP in Phase 12, MSE encryption out of scope — OK?
 
-## Last test run (2026-11-08, end of Phase 9)
-- `go test -race -count=1 ./...` — all 17 packages pass
-- `-race -count=5 -cpu=1,2,8` on `torrent`, `peer`, `engine`, `ipc`, `cli`,
-  `ratelimit` — pass
-- speed-limit test mutation-checked: removing the upload limiter, the
-  download limiter, or the uploader's wait each makes it fail
-- found while writing it: shared fake tracker let earlier unlimited engines
-  join the swarm and hide the limit — test fixed (one tracker per measurement)
-- manual smoke test of the built binary: `config` list/set/get/invalid
-  value, file created with header, daemon picks up the file, `-down-limit`
-  flag overrides it, live `config set upload_limit` applied, status shows it
-- real config dir (`~/Library/Application Support/denco`) confirmed untouched
+## Last test run (2026-11-08, end of Phase 10)
+- first full run: **`metadata` TestFetchFromPeers hung in 3 of 31 runs** —
+  a real design bug (mixed-peer assembly banned honest peers alongside a
+  liar). Fetcher redesigned to per-peer assembly (D38); regression assert
+  added (honest peer never banned)
+- after the fix: `go test -race -count=1 ./...` — all 18 packages pass
+- `-race -count=10 -cpu=1,2,8` on `metadata`, `engine`, `torrent` (30 runs
+  each) and `-count=5 -cpu=1,2,8` on `peer`, `ipc`, `cli` — pass
+- mutation check: removing the fetcher→session peer handoff makes the
+  x.pe-only magnet test stall (that bug was found by the test first)
+- smoke test, two real daemons with separate homes: B added a magnet with
+  only the hash and A's address, got the metadata in ~17 ms, downloaded
+  3 files byte-identical to A's (re-run on the final build)
+- real config dir (`~/Library/Application Support/denco`) untouched
 - `go vet` (darwin, linux, windows) clean · gofmt clean
 - cross-compile linux/windows/darwin × amd64/arm64 — all build
-- coverage: config 91%, ratelimit 100%, engine 87%, ipc 86%, cli 81%,
-  others 88–100%
+- coverage: metadata 89%, engine 88%, cli 82%, torrent 91%, peer 94%,
+  others 85–100%
 - external deps: none
 
 ## History
@@ -102,7 +107,7 @@ the .torrent, size cap, timeout). Design the extension layer so Phase 10b
   torrents (D34); tracker errors no longer echo the announce URL. Review
   fixes: second Ctrl-C force-quits, `remove -delete` reports what it deleted,
   stronger restart test. D29–D34.
-- **Phase 9 (2026-11-08):** `config` (strict flat file, defaults, in-place
+- **Phase 9 (2026-11-08, commit ef2f4f0):** `config` (strict flat file, defaults, in-place
   set/unset/init, rate syntax); `ratelimit` (shared token bucket, live
   SetRate); download limit in `peer.Conn` reader, upload limit in the
   session uploader; engine `SetLimits`, max peers per torrent; IPC
@@ -110,4 +115,13 @@ the .torrent, size cap, timeout). Design the extension layer so Phase 10b
   (`-dir -port -max-active -max-peers -down-limit -up-limit`),
   `resume_enabled: false`, notes for DHT/PEX. PEX scheduled as Phase 10b
   (D37). D35–D37.
+- **Phase 10 (2026-11-08):** BEP 10 `peer.ExtHandshake`; `metadata`
+  package (BEP 9 messages, Assembler, Fetcher with per-peer assembly);
+  sessions advertise ut_metadata and serve their info dict; engine
+  `AddMagnet` + fetch-before-first-run, pending magnets persisted without a
+  .torrent (`State.Magnet`) and restored, fetcher's peers handed to the
+  session; IPC `magnet` in add, `no_metadata` error; `denco add` takes
+  magnet links and HTTP(S) URLs (incl. redirects to magnets); "Fetching
+  metadata" in list/info. Found and fixed: x.pe-only magnets stalled after
+  metadata; honest peers banned on bad metadata. D38–D40.
 

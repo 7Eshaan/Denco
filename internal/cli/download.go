@@ -69,7 +69,7 @@ func runDownload(ctx context.Context, e *env, args []string) int {
 		return 1
 	}
 	if magnet.IsMagnet(torrentPath) {
-		fmt.Fprintln(stderr, "denco: magnet downloads need metadata exchange (Phase 10); use a .torrent file for now")
+		fmt.Fprintln(stderr, "denco: download takes a .torrent file; add magnet links with 'denco add' (needs the daemon)")
 		return 1
 	}
 	mi, err := metainfo.Load(torrentPath)

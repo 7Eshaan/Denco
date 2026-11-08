@@ -305,7 +305,7 @@ func TestDownloadCommandErrors(t *testing.T) {
 	if code := run([]string{"download", "-state", t.TempDir(), "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a"}, &out, &errOut); code != 1 {
 		t.Errorf("magnet exit = %d", code)
 	}
-	if !strings.Contains(errOut.String(), "Phase 10") {
+	if !strings.Contains(errOut.String(), "denco add") {
 		t.Errorf("stderr = %q", errOut.String())
 	}
 }

@@ -15,6 +15,7 @@
 //	session.go  – Session, Config, Run and the event loop
 //	peers.go    – per-peer state and wire message handling (download side)
 //	upload.go   – serving requests and the choking algorithm
+//	extensions.go – BEP 10 extension handshake; serving metadata (BEP 9)
 //	listener.go – one TCP listener routing incoming peers to sessions
 //	swarm.go    – known addresses, dialing, backoff, bans
 //	announce.go – tracker announce loop

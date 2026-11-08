@@ -22,10 +22,28 @@ func newTable(w io.Writer) *tabwriter.Writer { return tabwriter.NewWriter(w, 0, 
 
 // stateLabel is the user-facing status word.
 func stateLabel(s engine.State) string {
-	if s == "" {
+	switch s {
+	case "":
 		return "Unknown"
+	case engine.StateMetadata:
+		return "Fetching metadata"
 	}
 	return strings.ToUpper(string(s[:1])) + string(s[1:])
+}
+
+// sizeText and progressText show "?" until a magnet's metadata arrives.
+func sizeText(t engine.Torrent) string {
+	if !t.HasMetadata {
+		return "?"
+	}
+	return format.Bytes(t.TotalBytes)
+}
+
+func progressText(t engine.Torrent) string {
+	if !t.HasMetadata {
+		return "-"
+	}
+	return format.Percent(t.DoneBytes, t.TotalBytes)
 }
 
 // short cuts s to n runes, marking the cut with "…".
@@ -73,9 +91,11 @@ func renderList(w io.Writer, list []engine.Torrent) {
 					down, eta = format.Speed(t.DownloadRate), format.Duration(t.ETA)
 				}
 			}
+			if t.State == engine.StateMetadata {
+				peers = fmt.Sprint(t.Peers)
+			}
 			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, short(t.Name, maxNameWidth),
-				format.Bytes(t.TotalBytes), format.Percent(t.DoneBytes, t.TotalBytes), stateLabel(t.State),
-				down, up, eta, peers)
+				sizeText(t), progressText(t), stateLabel(t.State), down, up, eta, peers)
 		}
 		tw.Flush()
 	}
@@ -110,6 +130,20 @@ func renderInfo(w io.Writer, t engine.Torrent) {
 	row("Info hash", t.InfoHash)
 	row("Location", t.Dir)
 	blank()
+	if !t.HasMetadata {
+		meta := "waiting for peers"
+		if t.MetaTotal > 0 {
+			meta = fmt.Sprintf("%d / %d pieces", t.MetaHave, t.MetaTotal)
+		}
+		row("Metadata", fmt.Sprintf("%s (%d peer%s offering it)", meta, t.Peers, plural(t.Peers)))
+		if t.TrackerError != "" {
+			row("Trackers", firstLine(t.TrackerError))
+		}
+		row("Size", "unknown until the metadata arrives")
+		row("Added", formatTime(t.AddedAt))
+		tw.Flush()
+		return
+	}
 	row("Size", format.Bytes(t.TotalBytes))
 	row("Downloaded", format.Bytes(t.DoneBytes))
 	row("Progress", format.Percent(t.DoneBytes, t.TotalBytes))

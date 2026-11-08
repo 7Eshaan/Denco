@@ -159,12 +159,12 @@ func TestDaemonWorkflow(t *testing.T) {
 		t.Fatalf("empty list:\n%s", out)
 	}
 
-	// Add two torrents (and a magnet, which isn't supported yet) in one go.
+	// Add two torrents (and one missing file) in one go.
 	one, _ := writeTorrent(t, tmp, "alpha", 1)
 	two, _ := writeTorrent(t, tmp, "beta", 3)
-	code, out, errOut := h.cmd("add", one, two, "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a")
-	if code != 1 || !strings.Contains(errOut, "Phase 10") {
-		t.Fatalf("add with magnet: exit %d, stderr %q", code, errOut)
+	code, out, errOut := h.cmd("add", one, filepath.Join(tmp, "missing.torrent"), two)
+	if code != 1 || !strings.Contains(errOut, "missing.torrent") {
+		t.Fatalf("add with a missing file: exit %d, stderr %q", code, errOut)
 	}
 	for _, want := range []string{"alpha", "beta", "3 files", "partB.bin", "Added as #1", "Added as #2"} {
 		if !strings.Contains(out, want) {
@@ -280,14 +280,15 @@ func TestDaemonWorkflow(t *testing.T) {
 func TestRenderList(t *testing.T) {
 	var b bytes.Buffer
 	renderList(&b, []engine.Torrent{
-		{ID: 1, Name: "ubuntu.iso", State: engine.StateDownloading, TotalBytes: 5_200_000_000, DoneBytes: 3_400_800_000,
+		{ID: 1, Name: "ubuntu.iso", State: engine.StateDownloading, HasMetadata: true, TotalBytes: 5_200_000_000, DoneBytes: 3_400_800_000,
 			DownloadRate: 4_200_000, UploadRate: 120_000, ETA: 7*time.Minute + 42*time.Second, Peers: 18},
-		{ID: 2, Name: "sample.zip", State: engine.StateSeeding, Complete: true, TotalBytes: 850_000_000, DoneBytes: 850_000_000},
-		{ID: 3, Name: strings.Repeat("long name ", 10), State: engine.StateError, Error: "disk full", TotalBytes: 1},
+		{ID: 2, Name: "sample.zip", State: engine.StateSeeding, Complete: true, HasMetadata: true, TotalBytes: 850_000_000, DoneBytes: 850_000_000},
+		{ID: 3, Name: strings.Repeat("long name ", 10), State: engine.StateError, Error: "disk full", HasMetadata: true, TotalBytes: 1},
+		{ID: 4, Name: "from a magnet", State: engine.StateMetadata, Peers: 3},
 	})
 	out := b.String()
-	for _, want := range []string{"Downloading (2)", "Completed (1)", "5.2 GB", "65.4%", "4.2 MB/s", "120.0 KB/s",
-		"7m 42s", "18", "Seeding", "100%", "#3 failed: disk full", "…"} {
+	for _, want := range []string{"Downloading (3)", "Completed (1)", "5.2 GB", "65.4%", "4.2 MB/s", "120.0 KB/s",
+		"7m 42s", "18", "Seeding", "100%", "#3 failed: disk full", "…", "Fetching metadata"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}

@@ -15,6 +15,7 @@ import (
 type State string
 
 const (
+	StateMetadata    State = "metadata"    // magnet link: fetching the torrent's metadata from peers
 	StateChecking    State = "checking"    // opening files / verifying saved progress
 	StateDownloading State = "downloading" // incomplete, connected to peers
 	StateStalled     State = "stalled"     // incomplete, no peers connected
@@ -37,6 +38,12 @@ type Torrent struct {
 	Private     bool   `json:"private"`
 	Files       int    `json:"files"`
 	PieceLength int64  `json:"piece_length"`
+	// HasMetadata is false for a magnet link whose metadata hasn't arrived;
+	// sizes, pieces and files are then unknown (zero). MetaHave/MetaTotal
+	// count metadata pieces while fetching.
+	HasMetadata bool `json:"has_metadata"`
+	MetaHave    int  `json:"meta_have,omitempty"`
+	MetaTotal   int  `json:"meta_total,omitempty"`
 
 	TotalBytes  int64 `json:"total_bytes"`
 	DoneBytes   int64 `json:"done_bytes"` // verified
@@ -138,6 +145,9 @@ func (e *Engine) Files(ref string) ([]File, error) {
 	if err != nil {
 		return nil, err
 	}
+	if t.mi == nil {
+		return nil, fmt.Errorf("%s: %w", t.name(), ErrNoMetadata)
+	}
 	have := t.haveLocked()
 	out := make([]File, len(t.layout.Files))
 	for i, f := range t.layout.Files {
@@ -213,15 +223,33 @@ func (t *entry) haveLocked() *bitfield.Bitfield {
 }
 
 func (e *Engine) viewLocked(t *entry) Torrent {
-	info := &t.mi.Info
 	v := Torrent{
-		ID: t.id, InfoHash: t.mi.InfoHash.String(), Name: info.Name, Dir: t.layout.Root,
-		Private: info.Private, Files: len(info.Files), PieceLength: info.PieceLength,
-		TotalBytes: info.TotalLength, PiecesTotal: info.NumPieces(),
+		ID: t.id, InfoHash: t.hash.String(), Name: t.name(), Dir: t.state.DownloadDir,
 		Downloaded: t.state.Downloaded, Uploaded: t.state.Uploaded,
 		TrackerSeeders: -1, TrackerLeechers: -1, ETA: -1,
 		AddedAt: t.state.AddedAt, CompletedAt: t.state.CompletedAt,
 	}
+	if t.mi == nil { // magnet link without metadata
+		if t.fetcher != nil {
+			fs := t.fetcher.Status()
+			v.Peers, v.MetaHave, v.MetaTotal, v.TrackerError = fs.Peers, fs.Have, fs.Total, fs.TrackerError
+		}
+		switch {
+		case t.err != nil:
+			v.State, v.Error = StateError, t.err.Error()
+		case t.paused:
+			v.State = StatePaused
+		case t.running:
+			v.State = StateMetadata
+		default:
+			v.State = StateQueued
+		}
+		return v
+	}
+	info := &t.mi.Info
+	v.HasMetadata, v.Dir = true, t.layout.Root
+	v.Private, v.Files, v.PieceLength = info.Private, len(info.Files), info.PieceLength
+	v.TotalBytes, v.PiecesTotal = info.TotalLength, info.NumPieces()
 	if t.sess != nil {
 		st := t.sess.Stats()
 		v.DoneBytes = st.TotalBytes - st.BytesLeft

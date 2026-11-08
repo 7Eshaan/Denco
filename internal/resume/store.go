@@ -70,6 +70,10 @@ type State struct {
 	// Existing: the user asked to reuse data already at the paths; it is
 	// hash-checked on the first start.
 	Existing bool `json:"existing,omitempty"`
+	// Magnet is set while a torrent added by magnet link has no metadata
+	// yet. Such a state has no .torrent file (and Pieces/Have are empty);
+	// once the metadata arrives the .torrent is written and Magnet cleared.
+	Magnet string `json:"magnet,omitempty"`
 }
 
 // FileStamp is a file's size and mtime when the state was saved.
@@ -116,11 +120,13 @@ func (s *Store) Save(st *State, torrent []byte) error {
 	st.Version = FormatVersion
 	st.SavedAt = time.Now().UTC()
 	if _, err := os.Stat(s.path(st.InfoHash, ".torrent")); errors.Is(err, os.ErrNotExist) {
-		if len(torrent) == 0 {
+		switch {
+		case len(torrent) > 0:
+			if err := writeAtomic(s.path(st.InfoHash, ".torrent"), torrent); err != nil {
+				return err
+			}
+		case st.Magnet == "":
 			return errors.New("resume: first save needs the .torrent bytes")
-		}
-		if err := writeAtomic(s.path(st.InfoHash, ".torrent"), torrent); err != nil {
-			return err
 		}
 	}
 	data, err := json.MarshalIndent(st, "", "  ")
@@ -130,7 +136,8 @@ func (s *Store) Save(st *State, torrent []byte) error {
 	return writeAtomic(s.path(st.InfoHash, ".json"), data)
 }
 
-// Load returns the saved state and parsed torrent for an info hash.
+// Load returns the saved state and parsed torrent for an info hash. For a
+// magnet link still waiting for metadata the MetaInfo is nil.
 func (s *Store) Load(hash metainfo.Hash) (*State, *metainfo.MetaInfo, error) {
 	return s.load(hash.String())
 }
@@ -150,7 +157,13 @@ func (s *Store) load(hash string) (*State, *metainfo.MetaInfo, error) {
 	if st.Version != FormatVersion {
 		return nil, nil, fmt.Errorf("resume: %s has format version %d, want %d", s.path(hash, ".json"), st.Version, FormatVersion)
 	}
+	if st.InfoHash != hash {
+		return nil, nil, fmt.Errorf("resume: %s: info hash mismatch", hash)
+	}
 	mi, err := metainfo.Load(s.path(hash, ".torrent"))
+	if errors.Is(err, os.ErrNotExist) && st.Magnet != "" {
+		return &st, nil, nil // magnet without metadata yet
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("resume: %w", err)
 	}
@@ -163,8 +176,8 @@ func (s *Store) load(hash string) (*State, *metainfo.MetaInfo, error) {
 // Entry is one stored torrent, as returned by List.
 type Entry struct {
 	State *State
-	Meta  *metainfo.MetaInfo
-	Err   error // set if this entry couldn't be loaded; the others still are
+	Meta  *metainfo.MetaInfo // nil for a magnet link without metadata yet
+	Err   error              // set if this entry couldn't be loaded; the others still are
 }
 
 // List loads every stored torrent, oldest first. A broken entry is

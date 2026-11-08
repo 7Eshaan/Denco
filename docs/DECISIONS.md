@@ -451,3 +451,54 @@ One short entry per decision. Newest at the bottom. Format:
   for `ut_metadata`. Doing it before Phase 10 would mean building that
   layer twice; after, it's a small addition. Never used for private torrents.
 
+### D38 — Magnet links: fetch metadata first, then a normal session
+- **Decision:** a magnet torrent's run goroutine first runs a
+  `metadata.Fetcher` (own announce loop with `left=1`, ≤ 10 peers at a time,
+  BEP 10 handshake, BEP 9 requests of 16 KiB pieces, ≤ 4 outstanding per
+  peer), verifies SHA-1 = info hash, validates with `metainfo.Parse`, wraps
+  the info dict in a `.torrent` (magnet trackers as tiers) and saves it.
+  Then it continues as an ordinary torrent: same fresh/existing-file rules
+  (D32), same session. Every peer the fetcher heard of (incl. `x.pe`) is
+  handed to that first session — without this, an `x.pe`-only magnet
+  fetched its metadata and then stalled (found by a test). Until metadata
+  arrives the resume state has `magnet` set and no `.torrent` file, so a
+  pending magnet survives restarts. State `metadata` ("Fetching metadata")
+  counts as an active download for the queue.
+  **Each peer's worker assembles the whole metadata from that peer alone**;
+  the first copy that hashes right wins, and a peer whose full copy fails
+  is certainly lying and is banned for this fetch. Metadata > 16 MiB is
+  refused. *First version* mixed pieces from several peers and, on a bad
+  hash, banned every contributor — which banned honest peers alongside a
+  liar and could hang the fetch forever (caught by the multi-CPU stress
+  run: 3 of 31 runs hung). Metadata is small, so the duplicated download
+  is cheap; correctness wins.
+- **Alternatives:** teach `torrent.Session` to run without metadata (it is
+  built around the piece count everywhere); keep the fetch connections and
+  hand them to the session (saves a reconnect, much more coupling).
+- **Why:** keeps the session unchanged and the magnet logic in two small
+  places (`metadata`, `engine/magnet.go`); the cost is one extra connection
+  per peer, once per magnet.
+
+### D39 — Extension protocol and serving metadata
+- **Decision:** BEP 10 handshake types live in `peer` (`ExtHandshake`;
+  lenient: odd values are skipped, only a non-dict fails). Denco asks peers
+  to send `ut_metadata` on ID 1 (`peer.ExtMetadataID`); Phase 10b adds
+  `ut_pex` the same way. Sessions (and the listener, so incoming peers see
+  it) set the extension bit; a session sends its extended handshake
+  (`m`, `metadata_size`, `v`, `p`, `reqq`) right after its bitfield to peers
+  that set the bit, and answers ut_metadata requests from its info dict
+  (reject for out-of-range pieces), also for private torrents (BEP 9
+  doesn't restrict it and the peer already knows the hash).
+- **Why:** without serving, magnet users can't get metadata from Denco
+  seeds — and Denco-to-Denco magnet tests would be impossible.
+
+### D40 — `.torrent` from HTTP(S) URLs is fetched by the CLI
+- **Decision:** `denco add <url>` downloads the file in the CLI (30s
+  timeout, 16 MiB cap, ≤ 10 redirects), validates it, and sends the bytes
+  like a local file. A redirect to a `magnet:` URL (common on torrent
+  sites) is caught and the magnet is added instead.
+- **Alternatives:** the daemon downloads URLs.
+- **Why:** the daemon API stays "bytes or magnet"; errors appear right in
+  the user's terminal; uses the user's own network environment (proxies set
+  in their shell apply).
+

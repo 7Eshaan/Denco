@@ -31,7 +31,7 @@ so older references stay valid.
 - [x] **Phase 8 — Daemon, IPC, CLI.** Multi-torrent engine, daemon process,
       JSON-over-HTTP IPC on localhost, `add/list/info/pause/resume/remove/
       status/peers/files/stop`, progress tables, duplicate detection.
-- [ ] **Phase 9 — Configuration.** Config file (flat `key: value`), defaults,
+- [x] **Phase 9 — Configuration.** Config file (flat `key: value`), defaults,
       flag overrides, `denco config get/set`, rate limiting (up/down),
       connection limits, max active downloads queue.
 - [ ] **Phase 10 — Magnets end-to-end.** Extension protocol (BEP 10),

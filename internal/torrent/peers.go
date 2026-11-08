@@ -34,6 +34,10 @@ type peerState struct {
 	uploaded int64               // payload bytes sent to them
 	upRate   rate                // our upload rate to them
 
+	// Extension protocol (extensions.go): the peer's message ID for
+	// ut_metadata, 0 if it doesn't support it (or hasn't said yet).
+	extMetadata int
+
 	connectedAt time.Time
 }
 
@@ -60,6 +64,7 @@ func (s *Session) addPeer(ctx context.Context, c *peer.Conn) {
 	if have := s.m.Have(); have.Count() > 0 {
 		s.sendTo(p, peer.BitfieldMsg(have.Bytes()))
 	}
+	s.sendExtHandshake(p)
 
 	s.startUploader(ctx, p)
 	// Forward this peer's messages into the loop.
@@ -166,8 +171,11 @@ func (s *Session) onMessage(p *peerState, m *peer.Message) {
 	case peer.MsgCancel:
 		s.onCancel(p, m)
 
+	case peer.MsgExtended:
+		s.onExtended(p, m)
+
 	default:
-		// Port, extended and unknown messages: ignored for now.
+		// Port and unknown messages: ignored.
 	}
 }
 

@@ -445,3 +445,34 @@ func TestSaverRun(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestStoreMagnetWithoutMetadata(t *testing.T) {
+	store, _ := OpenStore(t.TempDir())
+	f := newFixture(t, 3000)
+	hash := f.mi.InfoHash.String()
+	st := &State{InfoHash: hash, Name: "pending", Magnet: "magnet:?xt=urn:btih:" + hash}
+	if err := store.Save(st, nil); err != nil {
+		t.Fatalf("magnet state without .torrent: %v", err)
+	}
+	got, mi, err := store.Load(f.mi.InfoHash)
+	if err != nil || mi != nil || got.Magnet == "" || got.Name != "pending" {
+		t.Fatalf("load = %+v, %v, %v", got, mi, err)
+	}
+	entries, _ := store.List()
+	if len(entries) != 1 || entries[0].Err != nil || entries[0].Meta != nil {
+		t.Fatalf("list = %+v", entries)
+	}
+	// Metadata arrives: the .torrent is written and Magnet cleared.
+	st.Magnet = ""
+	st.Pieces = f.mi.Info.NumPieces()
+	if err := store.Save(st, f.mi.Raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, mi, err := store.Load(f.mi.InfoHash); err != nil || mi == nil || mi.InfoHash != f.mi.InfoHash {
+		t.Fatalf("after metadata: %v, %v", mi, err)
+	}
+	// A non-magnet state still needs the .torrent bytes.
+	if err := store.Save(&State{InfoHash: strings.Repeat("ab", 20)}, nil); err == nil {
+		t.Fatal("state without torrent or magnet accepted")
+	}
+}

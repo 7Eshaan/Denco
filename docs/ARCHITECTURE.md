@@ -29,12 +29,13 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 | `internal/magnet` | ✅ | Parse/print magnet URIs (xt hex+base32, dn, tr, x.pe). |
 | `internal/peerid` | ✅ | Generate our 20-byte peer ID (`-DN0001-…`); `ClientName` decodes other clients' IDs. |
 | `internal/tracker` | ✅ | `Client.Announce` (one announce, HTTP(S) or UDP) and `List` (BEP 12 tiers, concurrent, fallback + promote). `Client` dispatches by scheme: HTTP(S) in `http.go`, UDP (BEP 15 + BEP 41) in `udp.go`. |
-| `internal/peer` | ✅ | Peer wire protocol: `Handshake`, `Message` codec + typed constructors/parsers, `Conn` (Dial/Accept, reader + writer goroutines, keep-alive, idle timeout). |
+| `internal/peer` | ✅ | Peer wire protocol: `Handshake`, `Message` codec + typed constructors/parsers, `Conn` (Dial/Accept, reader + writer goroutines, keep-alive, idle timeout, optional read limiter), BEP 10 `ExtHandshake` (`extension.go`). |
+| `internal/metadata` | ✅ | BEP 9: `Message` encode/decode, `Piece`, `Assembler` (SHA-1 check, reset on mismatch), `Fetcher` (announce + up to 10 peers, each assembling its own full copy; bans a peer whose copy fails the hash; `Status`, `Peers`). |
 | `internal/bitfield` | ✅ | Fixed-size piece set in wire format (high bit = piece 0); validated `FromBytes`. |
 | `internal/storage` | ✅ | `Layout` (OS-safe paths, sanitising, collisions, containment) and `Storage` (ReadAt/WriteAt across files, handle LRU, no-overwrite, ReadOnly, safe DeleteFiles). |
 | `internal/pieces` | ✅ | `Check`/`VerifyPiece`/`Recheck` (parallel hashing) and `Manager` (rarest-first, random-first, endgame, memory budget, block ownership). |
 | `internal/torrent` | ✅ | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/IP bans, request pipelining, snub detection, hash+write workers, announce loop, uploading (validation, cancel, per-peer uploader), tit-for-tat choker + optimistic unchoke, seeding, pause uploads, Stats/Peers. `Listener`: one TCP port routing incoming peers by info hash. |
-| `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (open storage → restore/recheck → Session + Saver → final save), Add/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview. `commands.go`, `view.go`. |
+| `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (magnet: fetch metadata → open storage → restore/recheck → Session + Saver → final save), Add/AddMagnet/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview, `SetLimits`. `commands.go`, `view.go`, `magnet.go`. |
 | `internal/resume` | ✅ | `Store` (atomic save/load/list/delete of `<hash>.json` + `<hash>.torrent`), `Restore` (trust rules, partial recheck), `Saver` (periodic/no-op-skipping saves with lifetime totals). |
 | `internal/ipc` | ✅ | Daemon file (`Info`, atomic 0600 write), `NewHandler`/`Serve` (loopback HTTP API over an `*engine.Engine`, bearer-token auth, error→status mapping), `Client` (+ `Connect`, stale-file detection). |
 | `internal/config` | ✅ | `Config` + `Defaults(home)`, the settings table (`Settings`, `Lookup`, `Get`/`Set` with validation), `Load`/`Parse` (strict, line numbers), in-place `SetInFile`/`UnsetInFile`, `Init`, `KeysInFile`, rate syntax (`ParseRate`/`FormatRate`). |
@@ -44,7 +45,8 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 
 Dependency direction (lower never imports higher):
 `bencode → metainfo/magnet → tracker/peer → pieces/storage → torrent → engine → ipc → cli → cmd`;
-`ratelimit` (stdlib only) is used by `peer`, `torrent`, `engine`; `config` by `cli`.
+`ratelimit` (stdlib only) is used by `peer`, `torrent`, `engine`; `config` by `cli`;
+`metadata` (uses `peer`, `tracker`) by `torrent` (serving) and `engine` (fetching).
 
 ## Key data types (implemented)
 
@@ -109,9 +111,24 @@ Dependency direction (lower never imports higher):
   downloading, stalled, seeding, queued, paused, error), sizes, pieces,
   rates, ETA, lifetime totals, peer/seed/leecher counts, tracker info, times.
 - `ipc.Client` methods mirror the engine; `ipc.Connect(ctx, daemonFile)`.
+- `engine.AddMagnet(uri, AddOptions)`; `Torrent.HasMetadata`, `MetaHave/MetaTotal`;
+  `engine.ErrNoMetadata`; state `metadata`.
+- `peer.ExtHandshake{M, MetadataSize, Version, Port, ReqQ}`, `Encode`/`ParseExtHandshake`.
+- `metadata.NewFetcher(hash, tiers, peers, Config) → Run(ctx) ([]byte, error)`, `Status()`, `Peers()`.
 - `engine.Config.DownloadLimit/UploadLimit` (bytes/s) and `Engine.SetLimits(down, up)`;
   `peer.Options.ReadLimiter`, `torrent.Config.UploadLimiter` (`*ratelimit.Limiter`).
 - `config.Load(path, config.Defaults(home)) (Config, error)`; `cfg.Set(key, text)`.
+
+## Data flow for a magnet link (D38)
+
+```
+AddMagnet → state {magnet, fresh} saved (no .torrent) → run goroutine:
+  metadata.Fetcher: announce(left=1) + x.pe → dial ≤10 peers → BEP 10 handshake
+    → peer has metadata_size → request its 16 KiB pieces → that peer's Assembler → SHA-1 == info hash?
+       no  → ban that peer (others keep going)
+       yes → .torrent = {info, announce-list from magnet} → metainfo.Parse → save
+  → (same as a .torrent) prepare storage → Session (+ peers the fetcher found)
+```
 
 ## Data flow for a downloaded block
 
@@ -164,6 +181,7 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
 - **Resume data (D27):** `<state dir>/<infohash>.json` + `<infohash>.torrent`.
   Default state dir `os.UserConfigDir()/denco/resume`. JSON fields: `version`,
   `info_hash`, `name`, `download_dir`, `pieces`, `have` (base64 bitfield),
+  `magnet` (only while a magnet has no metadata; then there is no `.torrent`),
   `uploaded`, `downloaded`, `added_at`, `completed_at`, `saved_at`, `clean`,
   `files` ([{`size`, `mtime_ns`}] in torrent order), and for the daemon
   (all optional): `id`, `paused`, `fresh` (never started: files at its paths
@@ -195,9 +213,15 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   (68 bytes). Reserved bits we use: `[5]&0x10` extensions (BEP 10), `[7]&0x01` DHT.
 - **Peer messages:** `<uint32 BE length><uint8 id><payload>`; length 0 =
   keep-alive. IDs 0–9 (BEP 3), 20 extended (BEP 10). Max 2 MiB incoming.
+- **Extended messages (BEP 10):** `<20><ext id><body>`. ID 0 = handshake,
+  bencoded `{"m": {"ut_metadata": 1}, "metadata_size": N, "v": "Denco 0.0.1",
+  "p": port, "reqq": 256}`. Other IDs are the *receiver's* numbers from its `m`.
+- **ut_metadata (BEP 9):** body = bencoded `{"msg_type": 0|1|2, "piece": i}`
+  (+ `"total_size"` for data, followed directly by the piece bytes); pieces
+  are 16 KiB, the last shorter.
 - **Daemon API (D30):** HTTP/1.1 JSON on 127.0.0.1, header
   `Authorization: Bearer <token>`. `GET /v1/status`, `GET|POST /v1/torrents`
-  (POST body `{"torrent":"<base64 .torrent>","dir","existing","paused"}`),
+  (POST body `{"torrent":"<base64 .torrent>" | "magnet":"magnet:?…","dir","existing","paused"}`),
   `GET /v1/torrents/{ref}[/files|/peers]`, `POST /v1/torrents/{ref}/pause|resume`,
   `POST /v1/torrents/{ref}/remove {"delete_files":bool}` (→ torrent + `files_deleted`),
   `POST /v1/limits {"download":B/s,"upload":B/s}` (→ status), `POST /v1/shutdown`.

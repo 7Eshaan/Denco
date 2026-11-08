@@ -63,7 +63,7 @@ func (e *Engine) Add(raw []byte, opts AddOptions) (Torrent, error) {
 		if old.removing {
 			return Torrent{}, ErrBusy
 		}
-		return Torrent{}, &DuplicateError{ID: old.id, Name: old.mi.Info.Name}
+		return Torrent{}, &DuplicateError{ID: old.id, Name: old.name()}
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Torrent{}, fmt.Errorf("download directory: %w", err)
@@ -77,7 +77,7 @@ func (e *Engine) Add(raw []byte, opts AddOptions) (Torrent, error) {
 	}
 
 	t := &entry{
-		id: e.nextID, mi: mi, layout: layout, paused: opts.Paused,
+		id: e.nextID, hash: mi.InfoHash, mi: mi, layout: layout, paused: opts.Paused,
 		have: bitfield.New(mi.Info.NumPieces()),
 		state: resume.State{
 			ID:          e.nextID,
@@ -121,7 +121,7 @@ func (e *Engine) Pause(ref string) (Torrent, error) {
 		} else {
 			e.persistLocked(t)
 		}
-		e.log.Info("torrent paused", "id", t.id, "torrent", t.mi.Info.Name)
+		e.log.Info("torrent paused", "id", t.id, "torrent", t.name())
 	}
 	return e.viewLocked(t), nil
 }
@@ -140,7 +140,7 @@ func (e *Engine) Resume(ref string) (Torrent, error) {
 		if !t.running {
 			e.persistLocked(t)
 		}
-		e.log.Info("torrent resumed", "id", t.id, "torrent", t.mi.Info.Name)
+		e.log.Info("torrent resumed", "id", t.id, "torrent", t.name())
 	}
 	e.scheduleLocked()
 	return e.viewLocked(t), nil
@@ -180,15 +180,15 @@ func (e *Engine) Remove(ref string, deleteFiles bool) (Removed, error) {
 
 	e.mu.Lock()
 	delete(e.byID, t.id)
-	delete(e.byHash, t.mi.InfoHash)
+	delete(e.byHash, t.hash)
 	// A torrent that never started may not own anything at its paths.
-	ownsFiles := !t.state.Fresh || t.state.Existing
+	ownsFiles := t.layout != nil && (!t.state.Fresh || t.state.Existing)
 	e.scheduleLocked() // a download slot may have opened
 	e.mu.Unlock()
 
 	res := Removed{Torrent: view}
 	var errs []error
-	if err := e.store.Delete(t.mi.InfoHash); err != nil {
+	if err := e.store.Delete(t.hash); err != nil {
 		errs = append(errs, err)
 	}
 	if deleteFiles && ownsFiles {
@@ -198,7 +198,7 @@ func (e *Engine) Remove(ref string, deleteFiles bool) (Removed, error) {
 			res.FilesDeleted = true
 		}
 	}
-	e.log.Info("torrent removed", "id", t.id, "torrent", t.mi.Info.Name, "files_deleted", res.FilesDeleted)
+	e.log.Info("torrent removed", "id", t.id, "torrent", t.name(), "files_deleted", res.FilesDeleted)
 	return res, errors.Join(errs...)
 }
 

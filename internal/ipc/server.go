@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/7Eshaan/Denco/internal/engine"
+	"github.com/7Eshaan/Denco/internal/magnet"
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/storage"
 )
@@ -93,7 +94,17 @@ func (h *handler) add(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	t, err := h.e.Add(req.Torrent, engine.AddOptions{Dir: req.Dir, Existing: req.Existing, Paused: req.Paused})
+	opts := engine.AddOptions{Dir: req.Dir, Existing: req.Existing, Paused: req.Paused}
+	var t engine.Torrent
+	var err error
+	switch {
+	case req.Magnet != "" && len(req.Torrent) > 0:
+		err = fmt.Errorf("%w: give a torrent or a magnet link, not both", metainfo.ErrInvalid)
+	case req.Magnet != "":
+		t, err = h.e.AddMagnet(req.Magnet, opts)
+	default:
+		t, err = h.e.Add(req.Torrent, opts)
+	}
 	reply(w, t, err)
 }
 
@@ -195,10 +206,12 @@ func toError(err error) *Error {
 		e.Status, e.Code = http.StatusBadRequest, CodeAmbiguous
 	case errors.Is(err, storage.ErrExists):
 		e.Status, e.Code = http.StatusConflict, CodeExists
-	case errors.Is(err, metainfo.ErrInvalid):
+	case errors.Is(err, metainfo.ErrInvalid), errors.Is(err, magnet.ErrInvalid):
 		e.Status, e.Code = http.StatusBadRequest, CodeInvalid
 	case errors.Is(err, engine.ErrBusy):
 		e.Status, e.Code = http.StatusConflict, CodeBusy
+	case errors.Is(err, engine.ErrNoMetadata):
+		e.Status, e.Code = http.StatusConflict, CodeNoMeta
 	}
 	return e
 }

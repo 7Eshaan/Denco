@@ -74,25 +74,14 @@ func cmdAdd(e *env, args []string) int {
 		if i > 0 {
 			fmt.Fprintln(e.stdout)
 		}
-		if magnet.IsMagnet(arg) || isURL(arg) {
-			fmt.Fprintf(e.stderr, "denco: %s: magnet links and URLs need metadata download (Phase 10); use a .torrent file for now\n", short(arg, 60))
-			status = 1
-			continue
-		}
-		raw, err := os.ReadFile(arg)
+		req, err := addRequest(ctx, e, arg)
 		if err != nil {
-			fmt.Fprintf(e.stderr, "denco: %v\n", err)
+			fmt.Fprintf(e.stderr, "denco: %s: %v\n", short(arg, 60), err)
 			status = 1
 			continue
 		}
-		mi, err := metainfo.Parse(raw) // validate and show it before sending
-		if err != nil {
-			fmt.Fprintf(e.stderr, "denco: %s: %v\n", arg, err)
-			status = 1
-			continue
-		}
-		printSummary(e.stdout, mi)
-		t, err := c.Add(ctx, ipc.AddRequest{Torrent: raw, Dir: absDir, Existing: *existing, Paused: *paused})
+		req.Dir, req.Existing, req.Paused = absDir, *existing, *paused
+		t, err := c.Add(ctx, req)
 		if err != nil {
 			fmt.Fprintf(e.stdout, "  ✗ %v\n", err)
 			status = 1
@@ -101,6 +90,59 @@ func cmdAdd(e *env, args []string) int {
 		fmt.Fprintf(e.stdout, "  Added as #%d → %s (%s)\n", t.ID, t.Dir, stateLabel(t.State))
 	}
 	return status
+}
+
+// addRequest turns one `denco add` argument — a .torrent path, an
+// HTTP(S) URL of one, or a magnet link — into a request, printing what it
+// is first (the spec: show metadata before starting).
+func addRequest(ctx context.Context, e *env, arg string) (ipc.AddRequest, error) {
+	var raw []byte
+	switch {
+	case magnet.IsMagnet(arg):
+		return magnetRequest(e, arg)
+	case isURL(arg):
+		data, magnetURI, err := fetchTorrentURL(ctx, arg)
+		if err != nil {
+			return ipc.AddRequest{}, err
+		}
+		if magnetURI != "" {
+			fmt.Fprintln(e.stdout, "(the link points to a magnet link)")
+			return magnetRequest(e, magnetURI)
+		}
+		raw = data
+	default:
+		data, err := os.ReadFile(arg)
+		if err != nil {
+			return ipc.AddRequest{}, err
+		}
+		raw = data
+	}
+	mi, err := metainfo.Parse(raw) // validate and show it before sending
+	if err != nil {
+		return ipc.AddRequest{}, err
+	}
+	printSummary(e.stdout, mi)
+	return ipc.AddRequest{Torrent: raw}, nil
+}
+
+func magnetRequest(e *env, uri string) (ipc.AddRequest, error) {
+	m, err := magnet.Parse(uri)
+	if err != nil {
+		return ipc.AddRequest{}, err
+	}
+	name := m.Name
+	if name == "" {
+		name = "(no name in the link)"
+	}
+	fmt.Fprintf(e.stdout, "%s\n  magnet link · %s · %d tracker%s", name, m.InfoHash, len(m.Trackers), plural(len(m.Trackers)))
+	if len(m.Peers) > 0 {
+		fmt.Fprintf(e.stdout, " · %d peer%s", len(m.Peers), plural(len(m.Peers)))
+	}
+	fmt.Fprintln(e.stdout, "\n  files and size are known once the metadata arrives from peers")
+	if len(m.Trackers) == 0 && len(m.Peers) == 0 {
+		fmt.Fprintln(e.stdout, "  warning: no trackers or peers in this link; it can't start until DHT (Phase 11)")
+	}
+	return ipc.AddRequest{Magnet: m.String()}, nil
 }
 
 func isURL(s string) bool {

@@ -40,7 +40,9 @@ type node struct {
 
 func startNode(t *testing.T, mi *metainfo.MetaInfo, dir string, have *bitfield.Bitfield, cfg Config) *node {
 	t.Helper()
-	ln, err := Listen("127.0.0.1:0", peer.Options{PeerID: cfg.PeerID}, nil)
+	opts := cfg.PeerOpts // same options (extensions…) for incoming peers
+	opts.PeerID = cfg.PeerID
+	ln, err := Listen("127.0.0.1:0", opts, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

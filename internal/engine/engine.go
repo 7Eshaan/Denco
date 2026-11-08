@@ -10,6 +10,7 @@
 //	engine.go   – Engine, Open/Close, the queue and the per-torrent run goroutine
 //	commands.go – Add, Pause, Resume, Remove and torrent lookup
 //	view.go     – read-only views (Torrent, File, Peer, Overview) for the UI
+//	magnet.go   – magnet links: AddMagnet and fetching metadata before the first run
 //
 // Concurrency: one mutex guards the torrent table and every entry's fields.
 // Methods may be called from any goroutine (the IPC server calls them
@@ -24,11 +25,13 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/7Eshaan/Denco/internal/bitfield"
+	"github.com/7Eshaan/Denco/internal/metadata"
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/peerid"
@@ -78,12 +81,14 @@ type Engine struct {
 	closeOnce sync.Once
 }
 
-// entry is one torrent. All fields are guarded by Engine.mu; mi and layout
-// never change after creation.
+// entry is one torrent. All fields are guarded by Engine.mu. hash never
+// changes; mi and layout are set once — at creation, or for a magnet link
+// when its run goroutine receives the metadata — and never change after.
 type entry struct {
 	id     int
-	mi     *metainfo.MetaInfo
-	layout *storage.Layout
+	hash   metainfo.Hash
+	mi     *metainfo.MetaInfo // nil: magnet link without metadata yet
+	layout *storage.Layout    // nil with mi
 
 	state resume.State       // last persisted state (while running: as of start)
 	have  *bitfield.Bitfield // pieces believed good while not running
@@ -98,6 +103,10 @@ type entry struct {
 	cancel   context.CancelFunc
 	done     chan struct{} // closed when the run goroutine has exited
 	sess     *torrent.Session
+	fetcher  *metadata.Fetcher // set while fetching a magnet's metadata
+	// bootstrap: peers the metadata fetcher found, handed to the first
+	// session (a magnet's x.pe peers are known nowhere else).
+	bootstrap []netip.AddrPort
 }
 
 // ErrClosed is returned by methods called after Close.
@@ -135,7 +144,7 @@ func Open(cfg Config) (*Engine, error) {
 		id = peerid.New()
 	}
 	down, up := ratelimit.New(cfg.DownloadLimit), ratelimit.New(cfg.UploadLimit)
-	ln, err := listen(cfg.ListenAddr, peer.Options{PeerID: id, ReadLimiter: down}, log)
+	ln, err := listen(cfg.ListenAddr, peer.Options{PeerID: id, ReadLimiter: down, Extensions: true}, log)
 	if err != nil {
 		return nil, fmt.Errorf("engine: peer port: %w", err)
 	}
@@ -178,14 +187,12 @@ func (e *Engine) load() error {
 			e.log.Warn("skipping unreadable resume entry", "err", en.Err)
 			continue
 		}
-		layout, err := storage.NewLayout(en.State.DownloadDir, &en.Meta.Info)
+		t, err := e.restoreEntry(en)
 		if err != nil {
-			e.log.Warn("skipping torrent with unusable layout", "name", en.State.Name, "err", err)
+			e.log.Warn("skipping saved torrent", "name", en.State.Name, "err", err)
 			continue
 		}
-		t := &entry{mi: en.Meta, layout: layout, state: *en.State, paused: en.State.Paused}
-		t.have = savedHave(&t.state, &en.Meta.Info)
-		e.byHash[en.Meta.InfoHash] = t
+		e.byHash[t.hash] = t
 		if id := en.State.ID; id > 0 && e.byID[id] == nil {
 			t.id = id
 			e.byID[id] = t
@@ -200,11 +207,37 @@ func (e *Engine) load() error {
 		e.nextID++
 		e.byID[t.id] = t
 		t.state.ID = t.id
-		if err := e.store.Save(&t.state, t.mi.Raw); err != nil {
+		if err := e.store.Save(&t.state, t.raw()); err != nil {
 			e.log.Warn("saving torrent ID", "name", t.state.Name, "err", err)
 		}
 	}
 	return nil
+}
+
+// restoreEntry rebuilds a torrent from its saved state (and .torrent, if
+// it has metadata).
+func (e *Engine) restoreEntry(en resume.Entry) (*entry, error) {
+	t := &entry{state: *en.State, paused: en.State.Paused}
+	if en.Meta == nil { // magnet link still waiting for metadata
+		h, err := hashFromHex(en.State.InfoHash)
+		t.hash = h
+		return t, err
+	}
+	layout, err := storage.NewLayout(en.State.DownloadDir, &en.Meta.Info)
+	if err != nil {
+		return nil, err
+	}
+	t.hash, t.mi, t.layout = en.Meta.InfoHash, en.Meta, layout
+	t.have = savedHave(&t.state, &en.Meta.Info)
+	return t, nil
+}
+
+// peerOpts are the connection options for sessions, the listener and
+// metadata fetchers.
+func (e *Engine) peerOpts() peer.Options {
+	o := e.cfg.Session.PeerOpts
+	o.PeerID, o.Extensions, o.ReadLimiter = e.peerID, true, e.down
+	return o
 }
 
 // savedHave decodes a state's bitfield; a broken one counts as nothing.
@@ -281,7 +314,7 @@ func (t *entry) completeLocked() bool {
 			return false
 		}
 	}
-	return t.have.Full()
+	return t.mi != nil && t.have.Full()
 }
 
 func (e *Engine) sortedLocked() []*entry {
@@ -324,6 +357,13 @@ type runResult struct {
 // on start, periodically, on completion, and finally (clean) after the
 // session has stopped.
 func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResult {
+	// Only this goroutine ever sets t.mi, so reading it here needs no lock.
+	if t.mi == nil {
+		var err error
+		if state, err = e.fetchMetadata(ctx, t, state); err != nil {
+			return runResult{err: err}
+		}
+	}
 	st, have, err := e.prepare(ctx, t, state)
 	if err != nil {
 		return runResult{err: err}
@@ -332,8 +372,12 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 
 	cfg := e.cfg.Session
 	cfg.PeerID, cfg.Port, cfg.Logger, cfg.NoSeed = e.peerID, e.ln.Port(), e.log, false
-	cfg.PeerOpts.ReadLimiter, cfg.UploadLimiter = e.down, e.up
+	cfg.PeerOpts, cfg.UploadLimiter = e.peerOpts(), e.up
 	sess := torrent.New(t.mi, st, have, cfg)
+	e.mu.Lock()
+	sess.AddPeers(t.bootstrap)
+	t.bootstrap = nil
+	e.mu.Unlock()
 
 	prev := state
 	prev.Fresh, prev.Existing, prev.Paused = false, false, false // from now on the files are ours
@@ -441,7 +485,7 @@ func (e *Engine) finish(ctx context.Context, t *entry, r runResult) {
 	e.finished.down += r.down
 	if r.err != nil && ctx.Err() == nil {
 		t.err = r.err
-		e.log.Error("torrent stopped", "torrent", t.mi.Info.Name, "err", r.err)
+		e.log.Error("torrent stopped", "torrent", t.name(), "err", r.err)
 	}
 	// Paused (or resumed) before the session started: nothing saved it yet.
 	if t.state.Paused != t.paused && !t.removing {
@@ -454,7 +498,7 @@ func (e *Engine) finish(ctx context.Context, t *entry, r runResult) {
 // torrents that aren't running (a running one's Saver does this).
 func (e *Engine) persistLocked(t *entry) {
 	t.state.Paused = t.paused
-	if err := e.store.Save(&t.state, t.mi.Raw); err != nil {
-		e.log.Warn("saving torrent state", "torrent", t.mi.Info.Name, "err", err)
+	if err := e.store.Save(&t.state, t.raw()); err != nil {
+		e.log.Warn("saving torrent state", "torrent", t.name(), "err", err)
 	}
 }

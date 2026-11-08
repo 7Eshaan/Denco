@@ -102,6 +102,23 @@ func TestAPIRoundTrip(t *testing.T) {
 		t.Fatalf("pause = %v, %v", p.State, err)
 	}
 
+	// A magnet link (nobody serves it here, so it waits for metadata).
+	hash := strings.Repeat("ab", 20)
+	m, err := c.Add(ctx, AddRequest{Magnet: "magnet:?xt=urn:btih:" + hash + "&dn=mag", Paused: true})
+	if err != nil || m.Name != "mag" || m.HasMetadata || m.InfoHash != hash {
+		t.Fatalf("magnet add = %+v, %v", m, err)
+	}
+	if _, err := c.Files(ctx, hash[:8]); !errors.As(err, &apiErr) || apiErr.Code != CodeNoMeta {
+		t.Fatalf("files of bare magnet: %#v", err)
+	}
+	if _, err := c.Add(ctx, AddRequest{Magnet: "magnet:?dn=x"}); !errors.As(err, &apiErr) || apiErr.Code != CodeInvalid {
+		t.Fatalf("bad magnet: %#v", err)
+	}
+	if _, err := c.Add(ctx, AddRequest{Magnet: "magnet:?xt=urn:btih:" + hash, Torrent: testTorrent(t, "x")}); !errors.As(err, &apiErr) || apiErr.Code != CodeInvalid {
+		t.Fatalf("both: %#v", err)
+	}
+	c.Remove(ctx, hash[:8], false)
+
 	st, err := c.Status(ctx)
 	if err != nil || st.Torrents != 1 || st.PID != os.Getpid() || st.ListenPort == 0 {
 		t.Fatalf("status = %+v, %v", st, err)
