@@ -28,7 +28,7 @@ type Options struct {
 	KeepAliveInterval time.Duration // send keep-alive when idle this long; default 90s
 	WriteTimeout      time.Duration // one flush must finish within this; default 60s
 
-	QueueSize int // buffered messages in each direction; default 64
+	QueueSize int // buffered messages in each direction; default 256
 }
 
 func (o *Options) withDefaults() Options {
@@ -44,7 +44,7 @@ func (o *Options) withDefaults() Options {
 	def(&c.KeepAliveInterval, 90*time.Second)
 	def(&c.WriteTimeout, 60*time.Second)
 	if c.QueueSize <= 0 {
-		c.QueueSize = 64
+		c.QueueSize = 256
 	}
 	return c
 }
@@ -210,6 +210,23 @@ func (c *Conn) Send(m *Message) error {
 		return nil
 	case <-c.done:
 		return ErrClosed
+	}
+}
+
+// TrySend queues m without blocking. It returns false if the queue is full
+// or the connection is closed. The torrent session uses this so one slow
+// peer can never stall it; a peer whose queue is full gets disconnected.
+func (c *Conn) TrySend(m *Message) bool {
+	select {
+	case <-c.done:
+		return false
+	default:
+	}
+	select {
+	case c.out <- m:
+		return true
+	default:
+		return false
 	}
 }
 

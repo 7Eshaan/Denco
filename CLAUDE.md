@@ -41,7 +41,10 @@ go build ./...                      # build everything
 go test ./...                       # all tests
 go test -race ./...                 # race detector (run before finishing a phase)
 go vet ./...                        # static checks
-gofmt -l .                          # must print nothing
+test -z "$(gofmt -l .)" || { gofmt -l .; false; }   # fails if anything is unformatted
+go test -race -count=5 -cpu=1,2,8 ./internal/torrent/ ./internal/peer/
+                                    # timing-sensitive packages: different CPU
+                                    # counts expose races a single run misses
 GOOS=linux   go build ./...         # cross-compile checks
 GOOS=windows go build ./...
 go run ./cmd/denco <command>        # run the CLI

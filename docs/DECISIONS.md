@@ -198,3 +198,33 @@ One short entry per decision. Newest at the bottom. Format:
   contributor list is what Phase 5 needs to ban peers that send bad data.
 - **Known cost:** picking scans all pieces (O(n)) — fine up to ~10⁵ pieces;
   revisit with a bucketed structure if profiling says so.
+
+### D23 — Torrent session = one event loop + helper goroutines
+- **Decision:** `torrent.Session` has one loop goroutine that owns *all* mutable
+  state (pieces.Manager, peers, swarm, tracker info). Helpers only send events
+  on one channel: a forwarder per peer conn (messages, close), dial attempts,
+  the announcer, and hash+write workers (bounded by a process-wide semaphore of
+  NumCPU). The loop never blocks on I/O: it uses `peer.Conn.TrySend` and drops
+  peers whose 256-message queue is full. Stats are published as an immutable
+  snapshot (every tick and on completion) behind a mutex for other goroutines.
+  `Run` returns only after every helper has exited (WaitGroup + draining).
+- **Alternatives:** mutex around shared state touched by per-peer goroutines.
+- **Why:** no lock ordering to get wrong, easy to reason about and to test;
+  one slow peer can't stall the torrent.
+
+### D24 — Session policies (Phase 5)
+- **Decision:**
+  - requests: 32 outstanding blocks per peer (16 KiB → 512 KiB in flight);
+  - snubbing: a peer with outstanding requests that delivers nothing for 60s
+    is disconnected (its blocks go back to the pool);
+  - reconnects: failed dials back off 30s·2ⁿ (cap 30 min); a peer that gave
+    us data is retried after 30s with its failure count reset;
+  - bad data: a peer that alone supplied a piece failing its hash is banned
+    immediately; shared blame bans after 3 strikes; banned peers are never
+    redialed;
+  - tracker: one interval for all tiers (the shortest any working tracker
+    asked for); all-fail retries back off 1m·2ⁿ; `completed` is sent even if
+    the user stops right after finishing; `stopped` on shutdown (5s timeout);
+  - after completion: stop dialing (seeding behaviour is Phase 6).
+- **Why:** conventional values from mainstream clients; each rule is covered by
+  an end-to-end test in `internal/torrent/session_test.go`.

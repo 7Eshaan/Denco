@@ -13,7 +13,7 @@ so older references stay valid.
       reasons, interval), tracker tests against `httptest`.
 - [x] **Phase 3 — Peer wire protocol.** Handshake, message framing/codec,
       bitfield type, per-connection read/write loops, keep-alives, timeouts.
-- [ ] **Phase 4 — Storage & pieces.** Multi-file piece↔file mapping, safe path
+- [x] **Phase 4 — Storage & pieces.** Multi-file piece↔file mapping, safe path
       resolution (incl. Windows name sanitising), no-overwrite policy, piece
       hashing/verification, rarest-first picker, block requests.
 - [ ] **Phase 5 — Single-torrent engine.** Torrent session: tracker loop, peer

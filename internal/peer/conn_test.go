@@ -328,3 +328,28 @@ func TestNoGoroutineLeak(t *testing.T) {
 	}
 	t.Fatalf("goroutines: before=%d after=%d", before, runtime.NumGoroutine())
 }
+
+func TestTrySend(t *testing.T) {
+	d, _ := pair(t, Options{PeerID: peerid.New(), QueueSize: 2}, Options{PeerID: peerid.New()})
+	// With a live writer the "queue full" case is timing-dependent, so here we
+	// only check open → true and closed → false (full queue: next test).
+	if !d.TrySend(Interested()) {
+		t.Fatal("TrySend on open conn failed")
+	}
+	d.Close()
+	<-d.Done()
+	if d.TrySend(Interested()) {
+		t.Fatal("TrySend after close succeeded")
+	}
+}
+
+func TestTrySendFullQueue(t *testing.T) {
+	// A Conn whose writer goroutine never runs: build it by hand.
+	c := &Conn{out: make(chan *Message, 1), done: make(chan struct{})}
+	if !c.TrySend(Choke()) {
+		t.Fatal("first send should fit")
+	}
+	if c.TrySend(Choke()) {
+		t.Fatal("second send should report full queue")
+	}
+}

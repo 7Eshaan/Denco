@@ -19,7 +19,7 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 
 | Package | Status | Responsibility |
 |---|---|---|
-| `cmd/denco` | ✅ (dev) | Entry point. One file per command: `inspect.go` (inspect, magnet), `announce.go` (+ shared `loadTarget`/`announceStarted`), `probe.go`, `verify.go`. Replaced by `internal/cli` in Phase 8. |
+| `cmd/denco` | ✅ (dev) | Entry point. One file per command: `inspect.go` (inspect, magnet), `announce.go` (+ shared `loadTarget`/`announceStarted`), `probe.go`, `verify.go`, `download.go` (foreground single-torrent download). Replaced by `internal/cli` in Phase 8. |
 | `internal/bencode` | ✅ | Bencode decode/encode; raw byte spans of dict values (for info hash). |
 | `internal/metainfo` | ✅ | Parse + validate `.torrent`; info hash; file list with offsets; tracker tiers. |
 | `internal/format` | ✅ | Human-readable sizes, speeds, durations for CLI output. |
@@ -30,7 +30,7 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 | `internal/bitfield` | ✅ | Fixed-size piece set in wire format (high bit = piece 0); validated `FromBytes`. |
 | `internal/storage` | ✅ | `Layout` (OS-safe paths, sanitising, collisions, containment) and `Storage` (ReadAt/WriteAt across files, handle LRU, no-overwrite, ReadOnly, safe DeleteFiles). |
 | `internal/pieces` | ✅ | `Check`/`VerifyPiece`/`Recheck` (parallel hashing) and `Manager` (rarest-first, random-first, endgame, memory budget, block ownership). |
-| `internal/torrent` | ⏳ | One torrent session: ties tracker + peers + pieces + storage. |
+| `internal/torrent` | ✅ (download side) | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/bans, request pipelining, snub detection, hash+write workers, announce loop, Stats/Peers snapshots. Upload/seeding: Phase 6. |
 | `internal/engine` | ⏳ | Many sessions, limits, queueing, duplicate detection. |
 | `internal/resume` | ⏳ | Persist/restore per-torrent state atomically. |
 | `internal/ipc` | ⏳ | Daemon HTTP API server + client. |
@@ -78,7 +78,12 @@ Dependency direction (lower never imports higher):
   Data, Contributors}`, `PieceVerified(i, ok)`, `PeerRequestsDropped(peer)`.
   Piece lifecycle: missing → active → pending (hashing) → have / back to missing.
 
-## Data flow for a downloaded block (wired up in Phase 5)
+- `torrent.New(mi, storage, have, Config) *Session`; `Run(ctx) error` (blocks
+  until ctx is cancelled or a fatal `ErrStorage`); `Completed() <-chan struct{}`;
+  `AddPeers([]netip.AddrPort)`; `Stats() Stats` (state, sizes, rates, ETA,
+  peers/seeds/leechers, tracker counts/errors); `Peers() []PeerInfo`.
+
+## Data flow for a downloaded block
 
 ```
 peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
@@ -98,6 +103,11 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   10s and by the caller's context.
 - **tracker.List.AnnounceAll**: one goroutine per tier, joined before return.
 - **storage.Storage**: safe for concurrent use; one mutex per torrent (D21).
+- **torrent.Session** (D23): one loop goroutine owns all state. Helpers →
+  `events` channel: per-peer forwarder (+ the Conn's own 2 goroutines), dialers
+  (≤ DialParallel), announcer (1), hash/write workers (process-wide limit
+  NumCPU). Loop sends only via `TrySend`. `Stats()`/`Peers()` read a snapshot
+  under a mutex. `Run` waits for every helper before returning.
 - **pieces.Manager**: not thread-safe; owned by the session goroutine.
   `pieces.Recheck` uses up to 4 worker goroutines internally.
 
