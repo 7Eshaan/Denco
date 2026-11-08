@@ -1,27 +1,28 @@
 # Progress
 
-**Current phase:** 10b — PEX · ✅ done, waiting for the user's commit
+**Current phase:** 11 — DHT · ✅ done, waiting for the user's commit
 
-**Next action:** once the user has committed Phase 10b, tick it in
-`docs/ROADMAP.md` and start **Phase 11 — DHT** (BEP 5): plan it first
-(KRPC over UDP, routing table, get_peers/announce_peer, bootstrap nodes,
-persisted node cache, `enable_dht` plumbing, magnet without trackers) and
-show the user the plan before writing code. Compact peer encoding now
-exists in `tracker` and `peer/pex.go`; DHT will need it too (consider one
-shared helper then).
+**Next action:** once the user has committed Phase 11, tick it in
+`docs/ROADMAP.md`, then plan **Phase 12 — Daily-driver polish** with the
+user before coding: file selection (skip files), stop-seeding / pause-
+uploads controls, ratio display, UPnP/NAT-PMP, snub timeout vs low limits
+(D36), real-world interoperability testing (incl. the public DHT — so far
+the DHT is only tested against Denco nodes on loopback), README/usage docs.
 
 ## Known issues
-- A magnet link with no trackers and no `x.pe` peers can't find anyone until
-  DHT (Phase 11); it waits in "Fetching metadata" and says why.
 - Fetching metadata uses its own connections; the download then reconnects
   to the same peers (D38) — one extra handshake per peer, once per magnet.
 - Low download/upload limits shared by many peers can trip the 60s snub
   timeout and cause peer churn (D36). Phase 12 candidate.
 - No NAT traversal (UPnP/NAT-PMP): incoming peers need a forwarded port.
   Planned for Phase 12.
-- DHT is a config key only so far (Phase 11).
-- `denco download` (standalone tool) doesn't use extensions: no PEX or
-  metadata serving there; the daemon does both.
+- DHT: tested only against Denco nodes on loopback, not yet the public
+  network (no test may use it; a manual check is a Phase 12 item). IPv4
+  only (no BEP 32); no BEP 42 secure node IDs.
+- Behind NAT without a forwarded port, other DHT nodes can't reach us, so
+  we answer few queries and the table fills slowly (UPnP: Phase 12).
+- `denco download` (standalone tool) doesn't use extensions or DHT: no
+  PEX, metadata serving or DHT there; the daemon does all three.
 - Resume: a file edited externally *during* a run that then crashed isn't
   detected (D27); `denco verify` checks manually.
 - Daemon runs in the foreground and logs to its terminal; no log file or
@@ -35,34 +36,33 @@ shared helper then).
   confirmed). Auto-start from `denco add` is possible later.
 - UPnP/NAT-PMP in Phase 12, MSE encryption out of scope — OK?
 
-## Last test run (2026-11-08, end of Phase 10b)
-- `go test -race -count=1 ./...` — all 18 packages pass
-- `-race -count=10 -cpu=1,2,8` on `torrent`, `metadata`, `engine` (30 runs
-  each) and `-count=5 -cpu=1,2,8` on `peer`, `cli`, `ipc` — pass; the PEX
-  tests alone again at `-count=10 -cpu=1,2,8` after the last test was added — pass
-- found while writing tests: (1) the fetcher hung up on a peer without
-  metadata before its PEX message arrived; (2) one global PEX round per
-  minute meant short-lived magnet peers never heard anything → per-peer
-  timing, first message right after the extension handshake (D41)
-- mutation checks — each makes a test fail: no self-exclusion, PEX for
-  private torrents, no receive throttle, no 50 cap, received peers ignored,
-  no dropped list, incoming peers advertised at their source port, timer
-  advanced when nothing was sent, no interval between messages, fetcher
-  dropping PEX-only peers, engine not passing `PEX` to the fetcher, seed
-  not skipping seeds, malformed message not dropping the peer
-- smoke test, three real daemons (separate homes, `enable_pex: true`): A
-  seeds; B gets a magnet naming only A (download limited to 100K so it
-  stays connected); C gets a magnet naming only B. C's log: "peers from
-  PEX … peer=:46882 added=1" → connected to A (:46881) → complete in a few
-  seconds. B and C byte-identical to A; `denco status` shows
-  "Peer exchange: on"; all three stopped cleanly
-- real config dir (`~/Library/Application Support/denco`) untouched
-- after switching `enable_pex` to default on: full `-race` run passes again;
-  config test checks the default and that `enable_pex: off` still disables
-  it; the daemon test sees "Peer exchange: on" with no setting in its file
+## Last test run (2026-11-08, end of Phase 11)
+- `go test -race -count=1 ./...` — all 20 packages pass (new: `dht`, `compact`)
+- `-race -count=10 -cpu=1,2,8` on `dht`, `torrent`, `metadata`, `engine`
+  (30 runs each) and `-count=5 -cpu=1,2,8` on `peer`, `cli`, `ipc`,
+  `config`, `compact`, `tracker` — pass
+- **found by the stress run:** `TestMagnetThroughDHT` failed 3 of 30 — the
+  test assumed the session's first DHT lookup returns before the download
+  finishes, but the download can finish on the peers the metadata fetcher
+  handed over. Test bug, not a product bug: it now waits for the lookup;
+  then 60/60 and the full stress run above pass
+- mutation checks — each makes a test fail: tokens always valid, responses
+  accepted from any address, querying nodes added unverified, no query cap,
+  lookups ignoring returned nodes, no announce, state not saved, routers
+  unreachable; session: no quick retry, DHT for private torrents, PORT
+  ignored, no announce port; engine: sessions/fetcher without DHT, DHT not
+  closed (state not saved)
+- smoke test, three real daemons, loopback only (A `dht_bootstrap: none`,
+  B and C bootstrap from A): C added a magnet with only the info hash, found
+  A through B's stored announce, had the metadata and all data in ~5 s,
+  byte-identical to A's; every node saved `dht.json`; all stopped cleanly
+- real config dir (`~/Library/Application Support/denco`) untouched; no
+  test contacts the public DHT (`config.DefaultDHTBootstrap` cleared in the
+  CLI's TestMain; other packages use loopback nodes or fakes)
 - `go vet` (darwin, linux, windows) clean · gofmt clean
 - cross-compile linux/windows/darwin × amd64/arm64 — all build
-- coverage: peer 95%, torrent 92%, metadata 91%, engine 88%
+- coverage: dht 91%, compact 100%, torrent 92%, metadata 91%, engine 87%,
+  config 92%, cli 82%
 - external deps: none
 
 ## History
@@ -143,3 +143,10 @@ shared helper then).
   peers); `enable_pex` plumbed daemon → engine → session/fetcher;
   "Peer exchange" row in `denco status`; `enable_pex` defaults to true
   (user's choice). D41.
+- **Phase 11 (2026-11-08):** `dht` package (KRPC, routing table with
+  verify-before-add, tokens, peer store, iterative lookups, announce,
+  maintenance, `dht.json`); `compact` package shared with tracker and PEX;
+  sessions look up + announce (retry backoff, never for private torrents)
+  and exchange PORT messages; the magnet fetcher looks up via DHT;
+  engine runs one node on the peer port's number; `enable_dht` works,
+  new `dht_bootstrap`; DHT rows in `denco status`/`info`. D42–D43.

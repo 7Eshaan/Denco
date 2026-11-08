@@ -41,7 +41,7 @@ func cmdAnnounce(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if len(t.tiers) == 0 {
-		fmt.Fprintln(stderr, "denco: no trackers in this torrent (DHT support comes in Phase 11)")
+		fmt.Fprintln(stderr, "denco: no trackers in this torrent (the daemon can still find peers through DHT: denco add)")
 		return 1
 	}
 

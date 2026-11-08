@@ -12,7 +12,7 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
                                                                                   ├─ N torrents (run goroutine → Session + Saver)
                                                                                   ├─ TCP listener (incoming peers, shared)
                                                                                   ├─ resume store ($DENCO_HOME/resume)
-                                                                                  └─ DHT node (UDP, Phase 11)
+                                                                                  └─ DHT node (UDP, same port number; state in resume/dht.json)
 ```
 
 `$DENCO_HOME` defaults to `os.UserConfigDir()/denco`. Standalone commands
@@ -40,12 +40,16 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 | `internal/ipc` | ✅ | Daemon file (`Info`, atomic 0600 write), `NewHandler`/`Serve` (loopback HTTP API over an `*engine.Engine`, bearer-token auth, error→status mapping), `Client` (+ `Connect`, stale-file detection). |
 | `internal/config` | ✅ | `Config` + `Defaults(home)`, the settings table (`Settings`, `Lookup`, `Get`/`Set` with validation), `Load`/`Parse` (strict, line numbers), in-place `SetInFile`/`UnsetInFile`, `Init`, `KeysInFile`, rate syntax (`ParseRate`/`FormatRate`). |
 | `internal/ratelimit` | ✅ | `Limiter`: token bucket shared by many goroutines; `WaitN(ctx, n)`, live `SetRate`; nil/0 = unlimited. |
-| `internal/dht` | ⏳ | BEP 5 DHT node. |
+| `internal/dht` | ✅ | BEP 5 DHT node (D42): `Server` (UDP socket, reader goroutine answering ping/find_node/get_peers/announce_peer, queries matched by tid **and** source address, per-second query cap, verify-before-adding), iterative `lookup` (α=4, K=8), `GetPeers(ctx, hash, port)` (+ announce), routing table (160 k-buckets, replace bad/failing nodes), tokens (rotating secret), peer store (30-min TTL, caps), `dht.json` state (ID + ≤ 200 good nodes). IPv4 only. |
+| `internal/compact` | ✅ | Compact peer addresses (6/18 bytes) shared by `tracker`, `peer` (PEX) and `dht`. |
 | `internal/cli` | ✅ | Every command. `cli.go` (dispatch, usage, `$DENCO_HOME`), `daemon.go` (daemon, stop), `client.go` (add/list/info/files/peers/pause/resume/remove/status), `render.go` (tables/detail views), plus standalone `inspect.go` (inspect, magnet), `announce.go`, `probe.go`, `verify.go`, `download.go`. |
 
 Dependency direction (lower never imports higher):
 `bencode → metainfo/magnet → tracker/peer → pieces/storage → torrent → engine → ipc → cli → cmd`;
 `ratelimit` (stdlib only) is used by `peer`, `torrent`, `engine`; `config` by `cli`;
+`compact` by `tracker`, `peer`, `dht`; `dht` (uses `bencode`, `compact`, `metainfo`) by `engine` and
+`config` (default routers) — sessions and fetchers see it only through small interfaces
+(`torrent.PeerFinder`, `metadata.PeerFinder`);
 `metadata` (uses `peer`, `tracker`) by `torrent` (serving) and `engine` (fetching).
 
 ## Key data types (implemented)
@@ -118,6 +122,11 @@ Dependency direction (lower never imports higher):
 - `engine.Config.DownloadLimit/UploadLimit` (bytes/s) and `Engine.SetLimits(down, up)`;
   `peer.Options.ReadLimiter`, `torrent.Config.UploadLimiter` (`*ratelimit.Limiter`).
 - `config.Load(path, config.Defaults(home)) (Config, error)`; `cfg.Set(key, text)`.
+- `dht.Open(Config{Addr, Bootstrap, StateFile, …}) *Server`; `GetPeers(ctx, hash, port)`,
+  `AddNode(addr)`, `Port()`, `Stats()`, `Close()` (saves state). `engine.Config.EnableDHT/
+  DHTBootstrap`; `torrent.Config.DHT/DHTInterval/DHTRetry`; `metadata.Config.DHT`;
+  `engine.Overview.DHT/DHTPort/DHTNodes/DHTGood`, `Torrent.DHTPeers`;
+  `config.Config.DHTBootstrap` (`dht_bootstrap`), `config.DefaultDHTBootstrap`.
 - `peer.PEX{Added, AddedFlags, Dropped}`, `Encode`/`ParsePEX`, flags `PEXSeed`,
   `PEXReachable`…, `MaxPEXPeers` (50). `torrent.Config.PEX`/`PEXInterval`,
   `metadata.Config.PEX`, `engine.Overview.PEX` (`enable_pex` → daemon →
@@ -190,6 +199,9 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   `files` ([{`size`, `mtime_ns`}] in torrent order), and for the daemon
   (all optional): `id`, `paused`, `fresh` (never started: files at its paths
   aren't ours, D32), `existing` (reuse data, recheck on first start).
+- **DHT state (D42):** `<state dir>/dht.json` = `{"id": "<40 hex>", "nodes":
+  [{"id": "<40 hex>", "addr": "ip:port"}, …]}` (≤ 200 good nodes), written
+  atomically every 15 min and on close. Missing/corrupt = fresh ID, no nodes.
 - **Daemon file:** `$DENCO_HOME/daemon.json` (0600):
   `{"addr":"127.0.0.1:<port>","token":"<64 hex>","pid":N}`. Written after the
   API is listening, removed after a clean shutdown (only if still ours).
@@ -229,6 +241,17 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   encryption, 0x02 seed, 0x04 uTP, 0x08 holepunch, 0x10 reachable. Denco
   sends ≤ 50 added + ≤ 50 dropped per message, first message right after
   the peer's extension handshake, then ≤ 1 per minute.
+- **DHT / KRPC (BEP 5):** one bencoded dict per UDP datagram (IPv4).
+  Query `{"t": tid(2 bytes), "y": "q", "q": method, "a": {"id": 20 bytes, …}}`,
+  response `{"t", "y": "r", "r": {"id", …}}`, error `{"t", "y": "e", "e": [code, msg]}`
+  (201 generic, 202 server, 203 protocol, 204 unknown method). Methods:
+  `ping`; `find_node{target}` → `nodes`; `get_peers{info_hash}` → `token`
+  + `values` (list of 6-byte peers, ≤ 50) and/or `nodes`;
+  `announce_peer{info_hash, port, token, implied_port}`. Compact node info =
+  20-byte ID + 6-byte IPv4 address. Tokens: SHA-1(secret ‖ IP)[:8], secret
+  rotated every 5 min, previous one accepted.
+- **Peer wire PORT (BEP 5):** id 9, 2-byte DHT port; sent after the
+  bitfield/extension handshake to peers that set the DHT reserved bit.
 - **Daemon API (D30):** HTTP/1.1 JSON on 127.0.0.1, header
   `Authorization: Bearer <token>`. `GET /v1/status`, `GET|POST /v1/torrents`
   (POST body `{"torrent":"<base64 .torrent>" | "magnet":"magnet:?…","dir","existing","paused"}`),

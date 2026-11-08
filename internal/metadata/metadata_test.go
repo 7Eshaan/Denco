@@ -318,3 +318,39 @@ func TestFetchFindsPeersThroughPEX(t *testing.T) {
 		t.Errorf("Peers() = %v; the PEX peer should be handed to the download", f.Peers())
 	}
 }
+
+type fakeDHT struct {
+	peers []netip.AddrPort
+	calls atomic.Int64
+	port  atomic.Int64 // last announce port asked for
+}
+
+func (d *fakeDHT) GetPeers(ctx context.Context, hash metainfo.Hash, port uint16) ([]netip.AddrPort, error) {
+	d.calls.Add(1)
+	d.port.Store(int64(port))
+	return d.peers, nil
+}
+
+// A magnet with only an info hash: the DHT is the only way to find peers.
+func TestFetchFindsPeersThroughDHT(t *testing.T) {
+	meta, hash := infoDict(t, "hash only", 50)
+	d := &fakeDHT{peers: []netip.AddrPort{fakePeer(t, hash, &fakeOpts{meta: meta})}}
+	cfg := testConfig()
+	cfg.DHT = d
+	f := NewFetcher(hash, nil, nil, cfg)
+	if st := f.Status(); st.TrackerError != "" {
+		t.Errorf("with DHT there is a way to find peers; status says %q", st.TrackerError)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got, err := f.Run(ctx)
+	if err != nil || !bytes.Equal(got, meta) {
+		t.Fatalf("err=%v", err)
+	}
+	if d.calls.Load() == 0 || d.port.Load() != 0 {
+		t.Fatalf("lookups=%d, announce port=%d; want lookups without announcing", d.calls.Load(), d.port.Load())
+	}
+	if st := NewFetcher(hash, nil, nil, testConfig()).Status(); st.TrackerError == "" {
+		t.Error("no trackers, peers or DHT: status should say so")
+	}
+}

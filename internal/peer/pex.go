@@ -1,11 +1,11 @@
 package peer
 
 import (
-	"encoding/binary"
 	"fmt"
 	"net/netip"
 
 	"github.com/7Eshaan/Denco/internal/bencode"
+	"github.com/7Eshaan/Denco/internal/compact"
 )
 
 // BEP 11 peer exchange (ut_pex). About once a minute, peers tell each other
@@ -59,17 +59,17 @@ func (m PEX) Encode() []byte {
 	for i, a := range m.Added {
 		a = unmapped(a)
 		if a.Addr().Is4() {
-			a4, f4 = appendCompact(a4, a), append(f4, m.Flags(i))
+			a4, f4 = compact.Append(a4, a), append(f4, m.Flags(i))
 		} else {
-			a6, f6 = appendCompact(a6, a), append(f6, m.Flags(i))
+			a6, f6 = compact.Append(a6, a), append(f6, m.Flags(i))
 		}
 	}
 	for _, a := range m.Dropped {
 		a = unmapped(a)
 		if a.Addr().Is4() {
-			d4 = appendCompact(d4, a)
+			d4 = compact.Append(d4, a)
 		} else {
-			d6 = appendCompact(d6, a)
+			d6 = compact.Append(d6, a)
 		}
 	}
 	// BEP 11 clients expect all three IPv4 keys even when empty.
@@ -106,9 +106,9 @@ func ParsePEX(b []byte) (PEX, error) {
 		ipLen                 int
 	}{{"added", "added.f", "dropped", 4}, {"added6", "added6.f", "dropped6", 16}} {
 		flags := get(fam.flags)
-		for i, a := range parseCompact(get(fam.added), fam.ipLen) {
-			if !a.IsValid() {
-				continue
+		for i, a := range compact.Parse(get(fam.added), fam.ipLen) {
+			if !compact.Usable(a) {
+				continue // its flag (index i) is skipped with it
 			}
 			var f byte
 			if i < len(flags) {
@@ -117,8 +117,8 @@ func ParsePEX(b []byte) (PEX, error) {
 			m.Added = append(m.Added, a)
 			m.AddedFlags = append(m.AddedFlags, f)
 		}
-		for _, a := range parseCompact(get(fam.dropped), fam.ipLen) {
-			if a.IsValid() {
+		for _, a := range compact.Parse(get(fam.dropped), fam.ipLen) {
+			if compact.Usable(a) {
 				m.Dropped = append(m.Dropped, a)
 			}
 		}
@@ -128,26 +128,4 @@ func ParsePEX(b []byte) (PEX, error) {
 
 func unmapped(a netip.AddrPort) netip.AddrPort {
 	return netip.AddrPortFrom(a.Addr().Unmap(), a.Port())
-}
-
-func appendCompact(b []byte, a netip.AddrPort) []byte {
-	b = append(b, a.Addr().AsSlice()...)
-	return binary.BigEndian.AppendUint16(b, a.Port())
-}
-
-// parseCompact decodes packed (ip, port) entries. Entries keep their index
-// (so flags stay aligned); unusable ones (port 0) are returned invalid.
-func parseCompact(s string, ipLen int) []netip.AddrPort {
-	entry := ipLen + 2
-	out := make([]netip.AddrPort, 0, len(s)/entry)
-	for i := 0; i+entry <= len(s); i += entry {
-		ip, _ := netip.AddrFromSlice([]byte(s[i : i+ipLen]))
-		port := binary.BigEndian.Uint16([]byte(s[i+ipLen : i+entry]))
-		if port == 0 || ip.IsUnspecified() || ip.IsMulticast() {
-			out = append(out, netip.AddrPort{})
-			continue
-		}
-		out = append(out, netip.AddrPortFrom(ip.Unmap(), port))
-	}
-	return out
 }

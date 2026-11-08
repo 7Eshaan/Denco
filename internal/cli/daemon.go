@@ -74,6 +74,8 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 		DownloadLimit: cfg.DownloadLimit,
 		UploadLimit:   cfg.UploadLimit,
 		Session:       torrent.Config{MaxPeers: cfg.MaxConnectionsPerTorrent, PEX: cfg.EnablePEX},
+		EnableDHT:     cfg.EnableDHT,
+		DHTBootstrap:  cfg.DHTRouters(),
 		Logger:        log,
 	})
 	if err != nil {
@@ -95,7 +97,11 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 	}
 
 	ov := eng.Overview()
-	fmt.Fprintf(e.stdout, "Denco daemon running (pid %d). %d torrents, peer port %d.\n", os.Getpid(), ov.Torrents, ov.ListenPort)
+	dhtNote := "DHT off"
+	if ov.DHT {
+		dhtNote = fmt.Sprintf("DHT on UDP port %d", ov.DHTPort)
+	}
+	fmt.Fprintf(e.stdout, "Denco daemon running (pid %d). %d torrents, peer port %d, %s.\n", os.Getpid(), ov.Torrents, ov.ListenPort, dhtNote)
 	fmt.Fprintf(e.stdout, "Downloads go to %s by default. Limits: ↓ %s  ↑ %s.\n",
 		cfg.DownloadDir, config.DescribeRate(cfg.DownloadLimit), config.DescribeRate(cfg.UploadLimit))
 	for _, note := range daemonNotes(e, cfg) {
@@ -183,9 +189,6 @@ func daemonFlags(e *env, cfg config.Config, args []string) (config.Config, bool,
 // daemonNotes explains settings that are on but can't do anything yet.
 func daemonNotes(e *env, cfg config.Config) []string {
 	var notes []string
-	if cfg.EnableDHT {
-		notes = append(notes, "Note: enable_dht is on, but DHT isn't available yet (Phase 11); trackers only.")
-	}
 	if !cfg.ResumeEnabled {
 		notes = append(notes, "Note: resume_enabled is off: torrents are forgotten when the daemon stops.")
 	}

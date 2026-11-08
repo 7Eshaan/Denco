@@ -16,10 +16,13 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/7Eshaan/Denco/internal/dht"
 )
 
 // FileName is the config file's name inside the denco home directory.
@@ -33,12 +36,17 @@ type Config struct {
 	MaxConnectionsPerTorrent int
 	DownloadLimit            int64
 	UploadLimit              int64
-	EnableDHT                bool // accepted; DHT arrives in Phase 11
-	EnablePEX                bool // peer exchange (BEP 11); never for private torrents
+	EnableDHT                bool   // BEP 5 DHT; never for private torrents
+	DHTBootstrap             string // comma-separated host:port routers; "" = none
+	EnablePEX                bool   // peer exchange (BEP 11); never for private torrents
 	ListenPort               int
 	ResumeEnabled            bool
 	ResumeDir                string
 }
+
+// DefaultDHTBootstrap is the default dht_bootstrap. A variable so tests can
+// clear it: no test may contact the public routers.
+var DefaultDHTBootstrap = strings.Join(dht.DefaultBootstrap, ",")
 
 // Defaults returns the settings used when the file doesn't set them.
 // home is the denco home directory (resume data lives under it).
@@ -52,6 +60,7 @@ func Defaults(home string) Config {
 		MaxActiveDownloads:       5,
 		MaxConnectionsPerTorrent: 50,
 		EnableDHT:                true,
+		DHTBootstrap:             DefaultDHTBootstrap,
 		EnablePEX:                true, // like mainstream clients; private torrents never use it
 		ListenPort:               6881,
 		ResumeEnabled:            true,
@@ -86,9 +95,17 @@ var settings = []Setting{
 	{Name: "upload_limit", Help: "total upload speed limit, same format; 0 = unlimited", Live: true,
 		get: func(c *Config) string { return FormatRate(c.UploadLimit) },
 		set: func(c *Config, v string) error { return setRate(&c.UploadLimit, v) }},
-	{Name: "enable_dht", Help: "find peers without trackers (DHT; not available until Phase 11)",
+	{Name: "enable_dht", Help: "find peers without trackers (DHT); never used for private torrents",
 		get: func(c *Config) string { return strconv.FormatBool(c.EnableDHT) },
 		set: func(c *Config, v string) error { return setBool(&c.EnableDHT, v) }},
+	{Name: "dht_bootstrap", Help: "DHT routers used to join (host:port, comma-separated); none = only remembered nodes",
+		get: func(c *Config) string {
+			if c.DHTBootstrap == "" {
+				return "none"
+			}
+			return c.DHTBootstrap
+		},
+		set: func(c *Config, v string) error { return setHostPorts(&c.DHTBootstrap, v) }},
 	{Name: "enable_pex", Help: "exchange peer lists with other peers (PEX); never used for private torrents",
 		get: func(c *Config) string { return strconv.FormatBool(c.EnablePEX) },
 		set: func(c *Config, v string) error { return setBool(&c.EnablePEX, v) }},
@@ -164,6 +181,34 @@ func setBool(dst *bool, v string) error {
 		return fmt.Errorf("%q is not true or false", v)
 	}
 	return nil
+}
+
+// setHostPorts accepts "none" or a comma-separated list of host:port.
+func setHostPorts(dst *string, v string) error {
+	if strings.EqualFold(v, "none") {
+		*dst = ""
+		return nil
+	}
+	var out []string
+	for _, hp := range strings.Split(v, ",") {
+		hp = strings.TrimSpace(hp)
+		host, port, err := net.SplitHostPort(hp)
+		n, perr := strconv.Atoi(port)
+		if err != nil || host == "" || perr != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("%q is not host:port (use 'none' for no routers)", hp)
+		}
+		out = append(out, hp)
+	}
+	*dst = strings.Join(out, ",")
+	return nil
+}
+
+// DHTRouters returns DHTBootstrap as a list.
+func (c *Config) DHTRouters() []string {
+	if c.DHTBootstrap == "" {
+		return nil
+	}
+	return strings.Split(c.DHTBootstrap, ",")
 }
 
 func setRate(dst *int64, v string) error {

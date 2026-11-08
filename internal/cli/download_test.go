@@ -20,6 +20,7 @@ import (
 
 	"github.com/7Eshaan/Denco/internal/bencode"
 	"github.com/7Eshaan/Denco/internal/bitfield"
+	"github.com/7Eshaan/Denco/internal/config"
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/peerid"
@@ -38,6 +39,9 @@ func TestMain(m *testing.M) {
 	for _, k := range []string{"HOME", "XDG_CONFIG_HOME", "AppData", "DENCO_HOME"} {
 		os.Setenv(k, tmp)
 	}
+	// No test may contact the public DHT routers: daemons here start with
+	// DHT on (the default) but no routers, so they stay silent.
+	config.DefaultDHTBootstrap = ""
 	code := m.Run()
 	os.RemoveAll(tmp)
 	os.Exit(code)

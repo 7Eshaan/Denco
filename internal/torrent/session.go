@@ -20,6 +20,7 @@
 //	listener.go – one TCP listener routing incoming peers to sessions
 //	swarm.go    – known addresses, dialing, backoff, bans
 //	announce.go – tracker announce loop
+//	dht.go      – DHT lookups and announces, PORT messages
 //	stats.go    – Stats/PeerInfo snapshots and the speed meter
 package torrent
 
@@ -64,6 +65,9 @@ type Config struct {
 	// PEX enables peer exchange (BEP 11) with peers that support it. It is
 	// never used for private torrents, whatever this says.
 	PEX bool
+	// DHT, if set, is asked for peers and told about us (BEP 5); never for
+	// private torrents. PeerOpts.DHT should be set with it.
+	DHT PeerFinder
 
 	// UploadLimiter, if set, caps upload speed (shared by all sessions for
 	// a global limit). The download limit lives in PeerOpts.ReadLimiter.
@@ -82,6 +86,8 @@ type Config struct {
 	ChokeInterval   time.Duration // re-evaluate who is unchoked; default 10s
 	OptimisticEvery time.Duration // rotate the optimistic unchoke; default 30s
 	PEXInterval     time.Duration // how often PEX messages are sent; default 60s
+	DHTInterval     time.Duration // DHT lookup + announce; default 15m
+	DHTRetry        time.Duration // first retry after a lookup found no one; default 1m
 
 	banExactAddr bool // tests only: ban address:port, not the whole IP (see swarm)
 }
@@ -108,6 +114,8 @@ func (c Config) withDefaults() Config {
 	defD(&c.ChokeInterval, 10*time.Second)
 	defD(&c.OptimisticEvery, 30*time.Second)
 	defD(&c.PEXInterval, time.Minute)
+	defD(&c.DHTInterval, 15*time.Minute)
+	defD(&c.DHTRetry, time.Minute)
 	if c.Announcer == nil {
 		c.Announcer = &tracker.Client{}
 	}
@@ -152,6 +160,7 @@ type Session struct {
 	downRate rate
 	upRate   rate
 	tracker  trackerInfo
+	dhtPeers int // peers the last DHT lookup found
 	choke    chokeState
 
 	snapMu sync.Mutex
@@ -274,6 +283,9 @@ func (s *Session) Run(ctx context.Context) error {
 	s.extraMu.Unlock()
 
 	s.goHelper(func() { s.announceLoop(ctx) })
+	if s.dhtEnabled() {
+		s.goHelper(func() { s.dhtLoop(ctx) })
+	}
 
 	err := s.loop(ctx)
 
@@ -337,6 +349,7 @@ type (
 		conn *peer.Conn
 		err  error
 	}
+	dhtEvent     struct{ peers []netip.AddrPort }
 	trackerEvent struct {
 		peers             []netip.AddrPort
 		seeders, leechers int
@@ -412,6 +425,10 @@ func (s *Session) handle(ctx context.Context, ev any) error {
 		s.onDialResult(ctx, e)
 	case trackerEvent:
 		s.onTracker(e)
+		s.maintain(ctx)
+	case dhtEvent:
+		s.dhtPeers = len(e.peers)
+		s.swarm.add(e.peers)
 		s.maintain(ctx)
 	case wakeEvent:
 		s.drainExtra(ctx)

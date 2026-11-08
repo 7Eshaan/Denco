@@ -140,7 +140,7 @@ func magnetRequest(e *env, uri string) (ipc.AddRequest, error) {
 	}
 	fmt.Fprintln(e.stdout, "\n  files and size are known once the metadata arrives from peers")
 	if len(m.Trackers) == 0 && len(m.Peers) == 0 {
-		fmt.Fprintln(e.stdout, "  warning: no trackers or peers in this link; it can't start until DHT (Phase 11)")
+		fmt.Fprintln(e.stdout, "  no trackers or peers in this link: peers must come from the DHT (enable_dht)")
 	}
 	return ipc.AddRequest{Magnet: m.String()}, nil
 }

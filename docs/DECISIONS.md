@@ -540,3 +540,57 @@ One short entry per decision. Newest at the bottom. Format:
   minute) while making the first message useful; caps keep a hostile peer
   from flooding the swarm with fake addresses.
 
+### D42 — DHT (BEP 5)
+- **Decision:** a new `dht` package; the engine runs one node for all
+  torrents when `enable_dht` is on (default), on UDP with the same port
+  number as the peer port (random if taken).
+  - **Node:** random 160-bit ID, kept across restarts in
+    `<state dir>/dht.json` with up to 200 good nodes (so restarts rarely need
+    the routers). IPv4 only; BEP 32 (IPv6), BEP 42 (secure IDs), BEP 43
+    (read-only nodes) and BEP 44 (mutable items) are out of scope.
+  - **Routing table:** 160 fixed buckets by shared-prefix length, K = 8 —
+    a simplification of Kademlia's split buckets that keeps at most K nodes
+    per distance band. Good = answered in the last 15 min; bad = 2 failures
+    in a row (removed at 5). A full bucket only takes a newcomer in place of
+    a bad node or a stale one that has failed; questionable nodes are
+    pinged every minute, so this happens naturally. Old nodes are favoured
+    (they're the most reliable, per Kademlia).
+  - **Trust:** a response counts only if its transaction ID *and* source
+    address match the query (no forged answers). A node that queries us
+    joins the table only after answering our ping (≤ 16 such pings at once),
+    so NATed or spoofed nodes don't pollute it. Bootstrap routers are asked
+    for nodes but never put in the table (libtorrent does the same).
+    Incoming queries capped at 500/s; announced peers stored 30 min,
+    ≤ 500 per hash, ≤ 5000 hashes; ≤ 50 values per answer.
+  - **Lookups:** iterative, α = 4 queries in flight, stop when the K closest
+    known nodes have all answered; ≤ 200 queries and ≤ 1000 candidates per
+    lookup. When the table has < K nodes the routers are asked too, so a
+    lookup works from a cold start.
+  - **Sessions:** look up (and announce our TCP port to the K closest that
+    gave tokens) at start and every 15 min; a lookup that finds no one is
+    retried after 1 min, doubling up to 15 (at daemon start the table is
+    often empty). PORT messages both ways: we tell DHT-capable peers our
+    port; a peer's PORT is pinged and added if it answers. **Private
+    torrents never use the DHT** (BEP 27).
+  - **Magnets:** the metadata fetcher looks up peers every minute but
+    doesn't announce (nothing to offer yet). It is the only way a magnet
+    with nothing but the hash can start.
+  - **Config:** `enable_dht` (default true), new `dht_bootstrap`
+    (comma-separated host:port, `none` = only remembered nodes; default the
+    four well-known routers). `config.DefaultDHTBootstrap` is a variable so
+    the CLI's `TestMain` clears it — daemon tests run with DHT on but can
+    never contact the public routers. Engine/torrent/metadata tests use
+    loopback nodes or fakes.
+- **Alternatives:** an external DHT library (dependency rule); a DHT per
+  torrent (wasteful, and against how the network expects nodes to behave);
+  adding querying nodes directly (pollution, the BEP 5 "good node" rule).
+- **Why:** BEP 5 as mainstream clients implement it, kept small; every
+  rule above has a test that fails without it.
+
+### D43 — Shared `compact` package
+- **Decision:** the 6/18-byte address format lives in `internal/compact`
+  (`Append`, `Parse`, `Usable`), used by trackers, PEX and the DHT, instead
+  of three copies. `Parse` returns every entry unfiltered (so PEX flags stay
+  aligned); callers drop what `Usable` rejects. Trackers now also skip
+  unspecified/multicast addresses, not only port 0.
+

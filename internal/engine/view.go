@@ -62,6 +62,7 @@ type Torrent struct {
 	TrackerSeeders  int    `json:"tracker_seeders"` // -1 if unknown
 	TrackerLeechers int    `json:"tracker_leechers"`
 	TrackerError    string `json:"tracker_error,omitempty"`
+	DHTPeers        int    `json:"dht_peers"` // found by the last DHT lookup
 
 	AddedAt     time.Time `json:"added_at"`
 	CompletedAt time.Time `json:"completed_at,omitempty"`
@@ -103,6 +104,10 @@ type Overview struct {
 	DownLimit   int64         `json:"download_limit"` // bytes/s, 0 = unlimited
 	UpLimit     int64         `json:"upload_limit"`
 	PEX         bool          `json:"pex"` // peer exchange on (never used for private torrents)
+	DHT         bool          `json:"dht"` // DHT node running
+	DHTPort     uint16        `json:"dht_port,omitempty"`
+	DHTNodes    int           `json:"dht_nodes"`      // in its routing table
+	DHTGood     int           `json:"dht_good_nodes"` // of which answered recently
 	Torrents    int           `json:"torrents"`
 	ByState     map[State]int `json:"by_state"`
 	Complete    int           `json:"complete"`
@@ -193,6 +198,10 @@ func (e *Engine) Overview() Overview {
 		ByState:    map[State]int{},
 		Downloaded: e.finished.down, Uploaded: e.finished.up,
 	}
+	if e.dht != nil {
+		ds := e.dht.Stats()
+		o.DHT, o.DHTPort, o.DHTNodes, o.DHTGood = true, e.dht.Port(), ds.Nodes, ds.GoodNodes
+	}
 	for _, t := range e.byID {
 		if t.removing {
 			continue
@@ -262,6 +271,7 @@ func (e *Engine) viewLocked(t *entry) Torrent {
 		v.Peers, v.Seeds, v.Leechers = st.Peers, st.Seeds, st.Leechers
 		v.TrackerSeeders, v.TrackerLeechers = st.TrackerSeeders, st.TrackerLeechers
 		v.TrackerError = st.TrackerError
+		v.DHTPeers = st.DHTPeers
 	} else {
 		v.PiecesHave = t.have.Count()
 		v.DoneBytes = doneBytes(info, t.have)

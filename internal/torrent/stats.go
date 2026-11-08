@@ -40,6 +40,7 @@ type Stats struct {
 	TrackerSeeders  int // -1 if unknown
 	TrackerLeechers int
 	TrackerError    string // last error when no tracker is working
+	DHTPeers        int    // peers the last DHT lookup found (0 without DHT)
 }
 
 // ETA estimates time to completion; negative means unknown.
@@ -116,6 +117,7 @@ func (s *Session) publish() {
 		Known:           len(s.swarm.addrs),
 		TrackerSeeders:  s.tracker.seeders,
 		TrackerLeechers: s.tracker.leechers,
+		DHTPeers:        s.dhtPeers,
 	}
 	if !s.tracker.working {
 		st.TrackerError = s.tracker.lastErr

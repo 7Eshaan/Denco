@@ -46,10 +46,10 @@ func TestAddFromURLsAndMagnets(t *testing.T) {
 		}
 	}
 
-	// A magnet with nothing to find peers with: added, with a warning.
+	// A magnet with only a hash: added; peers can only come from the DHT.
 	const lonely = "magnet:?xt=urn:btih:2222222222222222222222222222222222222222&dn=Lonely+One"
 	out = h.mustCmd("add", lonely)
-	for _, want := range []string{"Lonely One", "magnet link", "0 trackers", "warning: no trackers or peers", "Added as #3", "Fetching metadata"} {
+	for _, want := range []string{"Lonely One", "magnet link", "0 trackers", "peers must come from the DHT", "Added as #3", "Fetching metadata"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("add magnet missing %q:\n%s", want, out)
 		}
@@ -63,7 +63,7 @@ func TestAddFromURLsAndMagnets(t *testing.T) {
 		t.Errorf("list:\n%s", list)
 	}
 	info := h.mustCmd("info", "3")
-	for _, want := range []string{"Fetching metadata", "Metadata:", "unknown until the metadata arrives", "DHT"} {
+	for _, want := range []string{"Fetching metadata", "Metadata:", "unknown until the metadata arrives"} {
 		if !strings.Contains(info, want) {
 			t.Errorf("info missing %q:\n%s", want, info)
 		}

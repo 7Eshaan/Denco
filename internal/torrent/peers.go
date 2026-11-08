@@ -74,6 +74,7 @@ func (s *Session) addPeer(ctx context.Context, c *peer.Conn) {
 		s.sendTo(p, peer.BitfieldMsg(have.Bytes()))
 	}
 	s.sendExtHandshake(p)
+	s.sendDHTPort(p)
 
 	s.startUploader(ctx, p)
 	// Forward this peer's messages into the loop.
@@ -183,8 +184,11 @@ func (s *Session) onMessage(p *peerState, m *peer.Message) {
 	case peer.MsgExtended:
 		s.onExtended(p, m)
 
+	case peer.MsgPort:
+		s.onDHTPort(p, m)
+
 	default:
-		// Port and unknown messages: ignored.
+		// Unknown messages: ignored.
 	}
 }
 

@@ -89,14 +89,18 @@ func (e *Engine) fetchMetadata(ctx context.Context, t *entry, state resume.State
 		return state, err
 	}
 	tiers := tracker.TiersFromMagnet(m)
-	f := metadata.NewFetcher(m.InfoHash, tiers, m.Peers, metadata.Config{
+	fcfg := metadata.Config{
 		PeerOpts:  e.peerOpts(),
 		Announcer: e.cfg.Session.Announcer,
 		Port:      e.ln.Port(),
 		PEX:       e.cfg.Session.PEX,
 		Retry:     e.cfg.Session.AnnounceRetry, // 0 = the fetcher's default
 		Logger:    e.log,
-	})
+	}
+	if e.dht != nil {
+		fcfg.DHT = e.dht
+	}
+	f := metadata.NewFetcher(m.InfoHash, tiers, m.Peers, fcfg)
 	e.mu.Lock()
 	t.fetcher = f
 	e.mu.Unlock()

@@ -26,11 +26,14 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/7Eshaan/Denco/internal/bitfield"
+	"github.com/7Eshaan/Denco/internal/dht"
 	"github.com/7Eshaan/Denco/internal/metadata"
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/peer"
@@ -52,6 +55,11 @@ type Config struct {
 	// Total speed limits in bytes/s for all torrents together; 0 = unlimited.
 	// Changeable later with SetLimits.
 	DownloadLimit, UploadLimit int64
+	// EnableDHT runs a DHT node (UDP, on the peer port's number if free)
+	// shared by all torrents; DHTBootstrap are its routers. Its state is
+	// kept in StateDir/dht.json.
+	EnableDHT    bool
+	DHTBootstrap []string
 	// Session is the template for every torrent session (timeouts, peer
 	// limits, announcer). PeerID, Port, Logger, NoSeed and the rate
 	// limiters are set by the engine.
@@ -69,6 +77,7 @@ type Engine struct {
 	started time.Time
 	down    *ratelimit.Limiter // shared by every connection
 	up      *ratelimit.Limiter
+	dht     *dht.Server // nil when DHT is off
 
 	mu       sync.Mutex
 	byID     map[int]*entry
@@ -144,7 +153,7 @@ func Open(cfg Config) (*Engine, error) {
 		id = peerid.New()
 	}
 	down, up := ratelimit.New(cfg.DownloadLimit), ratelimit.New(cfg.UploadLimit)
-	ln, err := listen(cfg.ListenAddr, peer.Options{PeerID: id, ReadLimiter: down, Extensions: true}, log)
+	ln, err := listen(cfg.ListenAddr, peer.Options{PeerID: id, ReadLimiter: down, Extensions: true, DHT: cfg.EnableDHT}, log)
 	if err != nil {
 		return nil, fmt.Errorf("engine: peer port: %w", err)
 	}
@@ -152,8 +161,14 @@ func Open(cfg Config) (*Engine, error) {
 		cfg: cfg, log: log, store: store, ln: ln, peerID: id, started: time.Now(), down: down, up: up,
 		byID: map[int]*entry{}, byHash: map[metainfo.Hash]*entry{}, nextID: 1,
 	}
+	if cfg.EnableDHT {
+		if e.dht, err = openDHT(cfg, ln.Port(), log); err != nil {
+			ln.Close()
+			return nil, err
+		}
+	}
 	if err := e.load(); err != nil {
-		ln.Close()
+		e.closeShared()
 		return nil, err
 	}
 	e.mu.Lock()
@@ -172,6 +187,36 @@ func listen(addr string, opts peer.Options, log *slog.Logger) (*torrent.Listener
 	}
 	log.Warn("peer port unavailable; using a random port", "addr", addr, "err", err)
 	return torrent.Listen(net.JoinHostPort(host, "0"), opts, log)
+}
+
+// openDHT starts the DHT node on UDP port `port` (the peer port's number,
+// as most clients do), or a random one if that's taken.
+func openDHT(cfg Config, port uint16, log *slog.Logger) (*dht.Server, error) {
+	host, _, _ := net.SplitHostPort(cfg.ListenAddr)
+	dcfg := dht.Config{
+		Addr:      net.JoinHostPort(host, strconv.Itoa(int(port))),
+		Bootstrap: cfg.DHTBootstrap,
+		StateFile: filepath.Join(cfg.StateDir, "dht.json"),
+		Logger:    log,
+	}
+	d, err := dht.Open(dcfg)
+	if err != nil {
+		log.Warn("DHT port unavailable; using a random port", "addr", dcfg.Addr, "err", err)
+		dcfg.Addr = net.JoinHostPort(host, "0")
+		d, err = dht.Open(dcfg)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("engine: %w", err)
+	}
+	return d, nil
+}
+
+// closeShared closes what all torrents share, once none is running.
+func (e *Engine) closeShared() {
+	if e.dht != nil {
+		e.dht.Close() // saves its routing table for the next start
+	}
+	e.ln.Close()
 }
 
 // load restores every torrent in the resume store. Broken entries are
@@ -236,7 +281,7 @@ func (e *Engine) restoreEntry(en resume.Entry) (*entry, error) {
 // metadata fetchers.
 func (e *Engine) peerOpts() peer.Options {
 	o := e.cfg.Session.PeerOpts
-	o.PeerID, o.Extensions, o.ReadLimiter = e.peerID, true, e.down
+	o.PeerID, o.Extensions, o.ReadLimiter, o.DHT = e.peerID, true, e.down, e.dht != nil
 	return o
 }
 
@@ -261,7 +306,7 @@ func (e *Engine) Close() error {
 		}
 		e.mu.Unlock()
 		e.wg.Wait()
-		e.ln.Close()
+		e.closeShared()
 	})
 	return nil
 }
@@ -373,6 +418,9 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 	cfg := e.cfg.Session
 	cfg.PeerID, cfg.Port, cfg.Logger, cfg.NoSeed = e.peerID, e.ln.Port(), e.log, false
 	cfg.PeerOpts, cfg.UploadLimiter = e.peerOpts(), e.up
+	if e.dht != nil { // only when set: a nil *dht.Server in the interface isn't nil
+		cfg.DHT = e.dht
+	}
 	sess := torrent.New(t.mi, st, have, cfg)
 	e.mu.Lock()
 	sess.AddPeers(t.bootstrap)

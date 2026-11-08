@@ -160,6 +160,9 @@ func renderInfo(w io.Writer, t engine.Torrent) {
 		row("Connected Peers", fmt.Sprint(t.Peers))
 		row("Connected Seeds", fmt.Sprint(t.Seeds))
 		row("Connected Leechers", fmt.Sprint(t.Leechers))
+		if t.DHTPeers > 0 {
+			row("DHT", fmt.Sprintf("%d peer%s in the last lookup", t.DHTPeers, plural(t.DHTPeers)))
+		}
 		if t.TrackerSeeders >= 0 {
 			row("Swarm (trackers)", fmt.Sprintf("%d seeds, %d leechers", t.TrackerSeeders, max(t.TrackerLeechers, 0)))
 		}
@@ -275,6 +278,11 @@ func renderStatus(w io.Writer, st ipc.Status) {
 		pex = "on (not for private torrents)"
 	}
 	row("Peer exchange", pex)
+	dht := "off (enable_dht)"
+	if st.DHT {
+		dht = fmt.Sprintf("on, UDP port %d, %d node%s (%d good)", st.DHTPort, st.DHTNodes, plural(st.DHTNodes), st.DHTGood)
+	}
+	row("DHT", dht)
 	row("Limits", fmt.Sprintf("↓ %s  ↑ %s", config.DescribeRate(st.DownLimit), config.DescribeRate(st.UpLimit)))
 	row("Speed", fmt.Sprintf("↓ %s  ↑ %s", format.Speed(st.DownloadRate), format.Speed(st.UploadRate)))
 	row("This session", fmt.Sprintf("↓ %s  ↑ %s", format.Bytes(st.Downloaded), format.Bytes(st.Uploaded)))

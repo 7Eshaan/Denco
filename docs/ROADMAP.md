@@ -37,7 +37,7 @@ so older references stay valid.
 - [x] **Phase 10 — Magnets end-to-end.** Extension protocol (BEP 10),
       `ut_metadata` (BEP 9), metadata validation against info hash, `.torrent`
       from HTTP(S) URL.
-- [ ] **Phase 10b — PEX.** Peer exchange (BEP 11, `ut_pex` over the BEP 10
+- [x] **Phase 10b — PEX.** Peer exchange (BEP 11, `ut_pex` over the BEP 10
       extension protocol from Phase 10): send/receive added/dropped peers,
       never for private torrents, behind `enable_pex`.
 - [ ] **Phase 11 — DHT.** Basic BEP 5 DHT (KRPC over UDP, routing table,

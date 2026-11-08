@@ -24,11 +24,19 @@ type Config struct {
 	// receive: nothing is sent, so nothing leaks if the torrent turns out
 	// to be private (unknowable before the metadata arrives).
 	PEX bool
+	// DHT, if set, is asked for peers every Retry. We don't announce: with
+	// no metadata we have nothing to offer yet.
+	DHT PeerFinder
 	// Retry is how often trackers are asked again and failed peers retried
 	// (default 60s); RequestTimeout drops a peer that stops answering (20s).
 	Retry          time.Duration
 	RequestTimeout time.Duration
 	Logger         *slog.Logger
+}
+
+// PeerFinder is the DHT as the fetcher sees it (*dht.Server implements it).
+type PeerFinder interface {
+	GetPeers(ctx context.Context, hash metainfo.Hash, port uint16) ([]netip.AddrPort, error)
 }
 
 // perPeerRequests is how many pieces we ask one peer for at a time.
@@ -105,8 +113,8 @@ func (f *Fetcher) Status() Status {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s := Status{Peers: f.peers, Have: f.bestHave, Total: f.bestTotal, TrackerError: f.trackErr}
-	if len(f.tiers) == 0 && len(f.seed) == 0 {
-		s.TrackerError = "the magnet link has no trackers or peers (DHT arrives in Phase 11)"
+	if len(f.tiers) == 0 && len(f.seed) == 0 && f.cfg.DHT == nil {
+		s.TrackerError = "the magnet link has no trackers or peers, and DHT is off"
 	}
 	return s
 }
@@ -139,6 +147,13 @@ func (f *Fetcher) Run(ctx context.Context) ([]byte, error) {
 		go func() {
 			defer wg.Done()
 			f.announceLoop(ctx, found)
+		}()
+	}
+	if f.cfg.DHT != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f.dhtLoop(ctx, found)
 		}()
 	}
 
@@ -228,6 +243,32 @@ func (f *Fetcher) announceLoop(ctx context.Context, found chan<- []netip.AddrPor
 		case found <- peers:
 		case <-ctx.Done():
 			return
+		}
+		t := time.NewTimer(f.cfg.Retry)
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			t.Stop()
+			return
+		}
+	}
+}
+
+// dhtLoop asks the DHT for peers now and every Retry.
+func (f *Fetcher) dhtLoop(ctx context.Context, found chan<- []netip.AddrPort) {
+	for {
+		lctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		peers, err := f.cfg.DHT.GetPeers(lctx, f.hash, 0)
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			f.log.Debug("dht lookup failed", "err", err)
+		}
+		if len(peers) > 0 {
+			select {
+			case found <- peers:
+			case <-ctx.Done():
+				return
+			}
 		}
 		t := time.NewTimer(f.cfg.Retry)
 		select {

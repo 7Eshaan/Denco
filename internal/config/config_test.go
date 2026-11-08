@@ -47,6 +47,7 @@ func TestParse(t *testing.T) {
 		"download_limit: 2M",
 		"upload_limit: 500 KB/s",
 		"enable_dht: no",
+		"dht_bootstrap: 10.0.0.1:6881, example.org:25401",
 		"enable_pex: off",
 		"listen_port: 51413",
 		"resume_enabled: off\r", // Windows line ending
@@ -64,6 +65,7 @@ func TestParse(t *testing.T) {
 		DownloadLimit:            2_000_000,
 		UploadLimit:              500_000,
 		EnableDHT:                false,
+		DHTBootstrap:             "10.0.0.1:6881,example.org:25401",
 		EnablePEX:                false,
 		ListenPort:               51413,
 		ResumeEnabled:            false,
@@ -92,6 +94,9 @@ func TestParseErrors(t *testing.T) {
 		`download_dir: "/x`:                       "unterminated quote",
 		`download_dir: "/x" junk`:                 "unexpected text",
 		"# fine\nupload_limit: 1M\nenable_pex: 2": "line 3",
+		"dht_bootstrap: example.org":              "not host:port",
+		"dht_bootstrap: a.org:1,:6881":            "not host:port",
+		"dht_bootstrap: a.org:99999":              "not host:port",
 	}
 	for text, want := range cases {
 		_, err := Parse(text, base)
@@ -241,5 +246,19 @@ func TestGetAndLookup(t *testing.T) {
 	}
 	if s, _ := Lookup("listen_port"); s.Live {
 		t.Error("listen_port can't be applied live")
+	}
+}
+
+func TestDHTBootstrapNone(t *testing.T) {
+	c, err := Parse("dht_bootstrap: none", Defaults(t.TempDir()))
+	if err != nil || c.DHTBootstrap != "" || c.DHTRouters() != nil {
+		t.Fatalf("none: %+v %v", c, err)
+	}
+	if v, _ := c.Get("dht_bootstrap"); v != "none" {
+		t.Errorf("get = %q, want none", v)
+	}
+	d := Defaults(t.TempDir())
+	if r := d.DHTRouters(); len(r) != 4 || r[0] != "router.bittorrent.com:6881" {
+		t.Errorf("default routers = %v", r)
 	}
 }

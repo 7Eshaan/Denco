@@ -12,7 +12,6 @@ package tracker
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +23,7 @@ import (
 	"time"
 
 	"github.com/7Eshaan/Denco/internal/bencode"
+	"github.com/7Eshaan/Denco/internal/compact"
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/peerid"
 )
@@ -257,21 +257,14 @@ func parseResponse(body []byte) (*Response, error) {
 	return r, nil
 }
 
-// parseCompact decodes packed (ip, port) entries: 6 bytes for IPv4, 18 for IPv6.
-// A trailing partial entry is ignored.
+// parseCompact decodes packed peers (6 bytes each for IPv4, 18 for IPv6),
+// skipping unusable entries such as port 0.
 func parseCompact(s string, ipLen int) []netip.AddrPort {
-	entry := ipLen + 2
-	out := make([]netip.AddrPort, 0, len(s)/entry)
-	for i := 0; i+entry <= len(s); i += entry {
-		ip, ok := netip.AddrFromSlice([]byte(s[i : i+ipLen]))
-		if !ok {
-			continue
+	var out []netip.AddrPort
+	for _, a := range compact.Parse(s, ipLen) {
+		if compact.Usable(a) {
+			out = append(out, a)
 		}
-		port := binary.BigEndian.Uint16([]byte(s[i+ipLen : i+entry]))
-		if port == 0 {
-			continue
-		}
-		out = append(out, netip.AddrPortFrom(ip.Unmap(), port))
 	}
 	return out
 }
