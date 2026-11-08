@@ -86,3 +86,25 @@ func TestCloneIndependent(t *testing.T) {
 		t.Fatal("Bytes aliased internal storage")
 	}
 }
+
+func TestCovers(t *testing.T) {
+	b := New(10)
+	b.Set(1)
+	b.Set(9)
+	sub := New(10)
+	sub.Set(9)
+	if !b.Covers(sub) || !b.Covers(New(10)) {
+		t.Error("b should cover its subset and the empty set")
+	}
+	sub.Set(2)
+	if b.Covers(sub) {
+		t.Error("b covers a set with a bit it lacks")
+	}
+	if b.Covers(nil) {
+		t.Error("nil means every bit; b isn't full")
+	}
+	b.SetAll()
+	if !b.Covers(nil) || b.Covers(New(11)) {
+		t.Error("full b must cover nil; different lengths never cover")
+	}
+}

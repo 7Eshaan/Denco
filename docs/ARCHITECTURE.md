@@ -33,16 +33,16 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 | `internal/metadata` | ✅ | BEP 9: `Message` encode/decode, `Piece`, `Assembler` (SHA-1 check, reset on mismatch), `Fetcher` (announce + up to 10 peers, each assembling its own full copy; bans a peer whose copy fails the hash; with `PEX`, also learns peers from one ut_pex message per peer — receive only; `Status`, `Peers`). |
 | `internal/bitfield` | ✅ | Fixed-size piece set in wire format (high bit = piece 0); validated `FromBytes`. |
 | `internal/storage` | ✅ | `Layout` (OS-safe paths, sanitising, collisions, containment) and `Storage` (ReadAt/WriteAt across files, handle LRU, no-overwrite, ReadOnly, safe DeleteFiles). |
-| `internal/pieces` | ✅ | `Check`/`VerifyPiece`/`Recheck` (parallel hashing) and `Manager` (rarest-first, random-first, endgame, memory budget, block ownership). |
-| `internal/torrent` | ✅ | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/IP bans, request pipelining, snub detection, hash+write workers, announce loop, uploading (validation, cancel, per-peer uploader), tit-for-tat choker + optimistic unchoke, seeding, pause uploads, peer exchange (`pex.go`, D41), Stats/Peers. `Listener`: one TCP port routing incoming peers by info hash. |
-| `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (magnet: fetch metadata → open storage → restore/recheck → Session + Saver → final save), Add/AddMagnet/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview, `SetLimits`. `commands.go`, `view.go`, `magnet.go`. |
+| `internal/pieces` | ✅ | `Check`/`VerifyPiece`/`Recheck` (parallel hashing), `Manager` (rarest-first, random-first, endgame, memory budget, block ownership, wanted-pieces mask), `Wanted`/`SkipSet` (file selection → pieces, D44). |
+| `internal/torrent` | ✅ | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/IP bans, request pipelining, snub detection, hash+write workers, announce loop, uploading (validation, cancel, per-peer uploader), tit-for-tat choker + optimistic unchoke, seeding, pause uploads, peer exchange (`pex.go`, D41), file selection (`SetWanted`, partial seeds, D44), Stats/Peers. `Listener`: one TCP port routing incoming peers by info hash. |
+| `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (magnet: fetch metadata → open storage → restore/recheck → Session + Saver → final save), Add/AddMagnet/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview, `SetLimits`, `SetFilesWanted` (D44). `commands.go`, `view.go`, `magnet.go`. |
 | `internal/resume` | ✅ | `Store` (atomic save/load/list/delete of `<hash>.json` + `<hash>.torrent`), `Restore` (trust rules, partial recheck), `Saver` (periodic/no-op-skipping saves with lifetime totals). |
 | `internal/ipc` | ✅ | Daemon file (`Info`, atomic 0600 write), `NewHandler`/`Serve` (loopback HTTP API over an `*engine.Engine`, bearer-token auth, error→status mapping), `Client` (+ `Connect`, stale-file detection). |
 | `internal/config` | ✅ | `Config` + `Defaults(home)`, the settings table (`Settings`, `Lookup`, `Get`/`Set` with validation), `Load`/`Parse` (strict, line numbers), in-place `SetInFile`/`UnsetInFile`, `Init`, `KeysInFile`, rate syntax (`ParseRate`/`FormatRate`). |
 | `internal/ratelimit` | ✅ | `Limiter`: token bucket shared by many goroutines; `WaitN(ctx, n)`, live `SetRate`; nil/0 = unlimited. |
 | `internal/dht` | ✅ | BEP 5 DHT node (D42): `Server` (UDP socket, reader goroutine answering ping/find_node/get_peers/announce_peer, queries matched by tid **and** source address, per-second query cap, verify-before-adding), iterative `lookup` (α=4, K=8), `GetPeers(ctx, hash, port)` (+ announce), routing table (160 k-buckets, replace bad/failing nodes), tokens (rotating secret), peer store (30-min TTL, caps), `dht.json` state (ID + ≤ 200 good nodes). IPv4 only. |
 | `internal/compact` | ✅ | Compact peer addresses (6/18 bytes) shared by `tracker`, `peer` (PEX) and `dht`. |
-| `internal/cli` | ✅ | Every command. `cli.go` (dispatch, usage, `$DENCO_HOME`), `daemon.go` (daemon, stop), `client.go` (add/list/info/files/peers/pause/resume/remove/status), `render.go` (tables/detail views), plus standalone `inspect.go` (inspect, magnet), `announce.go`, `probe.go`, `verify.go`, `download.go`. |
+| `internal/cli` | ✅ | Every command. `cli.go` (dispatch, usage, `$DENCO_HOME`), `daemon.go` (daemon, stop), `client.go` (add/list/info/files/peers/pause/resume/remove/status), `render.go` (tables/detail views), `files.go` (`files` + skip/want, file-number lists), plus standalone `inspect.go` (inspect, magnet), `announce.go`, `probe.go`, `verify.go`, `download.go`. |
 
 Dependency direction (lower never imports higher):
 `bencode → metainfo/magnet → tracker/peer → pieces/storage → torrent → engine → ipc → cli → cmd`;
@@ -83,7 +83,11 @@ Dependency direction (lower never imports higher):
 - `storage.NewLayout(dir, *Info) → *Layout{Root, Files []File{Path, Rel, Length, Offset, Renamed}}`;
   `storage.Open(layout, Options{AllowExisting, ReadOnly, MaxOpenFiles}) → *Storage`
   (`io.ReaderAt`/`io.WriterAt` over torrent offsets, `Sync`, `Close`, `DeleteFiles`).
-- `pieces.Manager` (owned by one goroutine): `PeerBitfield/PeerGoneBitfield/PeerHave`
+- `pieces.Wanted(info, skip []bool) *Bitfield` (nil = all) — pieces overlapping a
+  wanted file; `pieces.SkipSet(indexes, n)`. `Bitfield.Covers(other)` (nil = all).
+- `pieces.Manager` (owned by one goroutine): `SetWanted(want) (abandoned)`,
+  `Complete()` (all wanted verified) vs `HaveAll()`, `BytesLeft()` (wanted) /
+  `MissingBytes()` (all, for trackers) / `WantedBytes()`, `PeerBitfield/PeerGoneBitfield/PeerHave`
   (availability), `Interesting`, `NextRequests(peer, peerHas, n) []peer.Block`,
   `BlockReceived(peer, index, begin, data) Received{Accepted, Cancel, Complete,
   Data, Contributors}`, `PieceVerified(i, ok)`, `PeerRequestsDropped(peer)`.
@@ -99,6 +103,12 @@ Dependency direction (lower never imports higher):
 - `torrent.Listen(addr, peer.Options, log) *Listener`; `Add/Remove(*Session)`,
   `Port()`, `Addr()`, `Close()`.
 - `Session.Have()` — copy of verified pieces (all already written to storage).
+- `torrent.Config.Wanted`, `Session.SetWanted(want)` (any goroutine); `Completed()` closes
+  when the selection is done; trackers get `completed` only for a full seed;
+  `Stats.WantedBytes`.
+- `engine.AddOptions.Skip []int`, `Engine.SetFilesWanted(ref, files, wanted) ([]File, error)`
+  (`ErrBadFile`); `Torrent.WantedBytes/SkippedFiles`, `File.Skipped`;
+  `resume.Saver.SetSkip`; `storage.Options.Skipped`.
 - `resume.OpenStore(dir)`; `Store.Save(*State, torrentBytes)`, `Load(hash)
   (*State, *MetaInfo, error)`, `List() []Entry`, `Delete(hash)`;
   `resume.Restore(ctx, state, mi, layout, readerAt) (*Bitfield, Report, error)`;
@@ -190,7 +200,9 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
 ## On-disk formats
 
 - **Downloaded data:** `<download dir>/<name>[/<path…>]`, names sanitised per
-  D20. Files grow sparsely as pieces arrive (no preallocation).
+  D20. Files grow sparsely as pieces arrive (no preallocation). A skipped
+  file can still appear, holding only the bytes of a border piece shared
+  with a wanted file (D44).
 - **Resume data (D27):** `<state dir>/<infohash>.json` + `<infohash>.torrent`.
   Default state dir `os.UserConfigDir()/denco/resume`. JSON fields: `version`,
   `info_hash`, `name`, `download_dir`, `pieces`, `have` (base64 bitfield),
@@ -198,7 +210,8 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   `uploaded`, `downloaded`, `added_at`, `completed_at`, `saved_at`, `clean`,
   `files` ([{`size`, `mtime_ns`}] in torrent order), and for the daemon
   (all optional): `id`, `paused`, `fresh` (never started: files at its paths
-  aren't ours, D32), `existing` (reuse data, recheck on first start).
+  aren't ours, D32), `existing` (reuse data, recheck on first start), `skip`
+  (indexes of files not to download, D44).
 - **DHT state (D42):** `<state dir>/dht.json` = `{"id": "<40 hex>", "nodes":
   [{"id": "<40 hex>", "addr": "ip:port"}, …]}` (≤ 200 good nodes), written
   atomically every 15 min and on close. Missing/corrupt = fresh ID, no nodes.
@@ -254,8 +267,9 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   bitfield/extension handshake to peers that set the DHT reserved bit.
 - **Daemon API (D30):** HTTP/1.1 JSON on 127.0.0.1, header
   `Authorization: Bearer <token>`. `GET /v1/status`, `GET|POST /v1/torrents`
-  (POST body `{"torrent":"<base64 .torrent>" | "magnet":"magnet:?…","dir","existing","paused"}`),
-  `GET /v1/torrents/{ref}[/files|/peers]`, `POST /v1/torrents/{ref}/pause|resume`,
+  (POST body `{"torrent":"<base64 .torrent>" | "magnet":"magnet:?…","dir","existing","paused","skip":[i…]}`),
+  `GET /v1/torrents/{ref}[/files|/peers]`, `POST /v1/torrents/{ref}/files {"files":[i…],"wanted":bool}`
+  (→ files), `POST /v1/torrents/{ref}/pause|resume`,
   `POST /v1/torrents/{ref}/remove {"delete_files":bool}` (→ torrent + `files_deleted`),
   `POST /v1/limits {"download":B/s,"upload":B/s}` (→ status), `POST /v1/shutdown`.
   Status now includes `max_peers`, `download_limit`, `upload_limit`.

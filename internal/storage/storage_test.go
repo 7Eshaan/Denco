@@ -251,3 +251,14 @@ func TestReadOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestSkippedEmptyFileNotCreated(t *testing.T) {
+	root := t.TempDir()
+	openLayout(t, root, Options{Skipped: []bool{true, false}}, "skipped.txt", 0, "kept.txt", 0, "x", 1)
+	if _, err := os.Stat(filepath.Join(root, "t", "skipped.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("skipped empty file was created (err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "t", "kept.txt")); err != nil {
+		t.Errorf("wanted empty file missing: %v", err)
+	}
+}

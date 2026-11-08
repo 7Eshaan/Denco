@@ -34,6 +34,9 @@ func (e *Engine) AddMagnet(uri string, opts AddOptions) (Torrent, error) {
 	if err != nil {
 		return Torrent{}, err
 	}
+	if len(opts.Skip) > 0 {
+		return Torrent{}, fmt.Errorf("%w: a magnet link has no file list yet; skip files once its metadata has arrived", ErrBadFile)
+	}
 	dir := opts.Dir
 	if dir == "" {
 		dir = e.cfg.DownloadDir

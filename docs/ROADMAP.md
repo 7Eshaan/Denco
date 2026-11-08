@@ -40,11 +40,22 @@ so older references stay valid.
 - [x] **Phase 10b — PEX.** Peer exchange (BEP 11, `ut_pex` over the BEP 10
       extension protocol from Phase 10): send/receive added/dropped peers,
       never for private torrents, behind `enable_pex`.
-- [ ] **Phase 11 — DHT.** Basic BEP 5 DHT (KRPC over UDP, routing table,
+- [x] **Phase 11 — DHT.** Basic BEP 5 DHT (KRPC over UDP, routing table,
       get_peers / announce_peer, bootstrap, persisted node cache).
-- [ ] **Phase 12 — Daily-driver polish.** File selection (skip files),
-      stop-seeding / pause-uploads controls, ratio display, error states &
-      retry, real-world interoperability testing, README/usage docs.
+- [ ] **Phase 12 — Daily-driver polish**, split into lettered sub-phases
+      (user-approved 2026-11-09), each ending green with its own commit:
+  - [ ] **12a — File selection.** Skip / re-want files (`add -skip/-only`,
+        `denco files <id> skip|want`), only wanted pieces downloaded,
+        partial-seed completion, persisted in resume data.
+  - [ ] **12b — Seeding controls.** Per-torrent pause uploads / stop
+        seeding, ratio display, optional `seed_ratio` / `seed_time` limits.
+  - [ ] **12c — Robustness.** Snub timeout scaled to speed limits (D36),
+        automatic retry of failed torrents with backoff, optional daemon
+        log file.
+  - [ ] **12d — NAT traversal.** UPnP / NAT-PMP port mapping (stdlib only),
+        if the user confirms it is in scope.
+  - [ ] **12e — Docs & real-world testing.** README/usage docs; a full
+        real download (user-approved, public network).
 
 Out of scope for now (may revisit): uTP, encryption (MSE),
 web seeds, BitTorrent v2, TUI/GUI.

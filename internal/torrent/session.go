@@ -61,6 +61,9 @@ type Config struct {
 	NoSeed bool
 	// UploadsPaused starts the session with uploads paused (see SetUploadsPaused).
 	UploadsPaused bool
+	// Wanted is the set of pieces to download (the user's file selection,
+	// see pieces.Wanted); nil means every piece. Change it with SetWanted.
+	Wanted *bitfield.Bitfield
 
 	// PEX enables peer exchange (BEP 11) with peers that support it. It is
 	// never used for private torrents, whatever this says.
@@ -139,12 +142,17 @@ type Session struct {
 	tiers [][]string
 
 	events    chan any      // everything the loop reacts to
-	completed chan struct{} // closed once all pieces are verified
+	completed chan struct{} // closed once all wanted pieces are verified
 	compOnce  sync.Once
-	// startedComplete is fixed in New, so the announcer goroutine can read it
+	// full is closed once every piece is verified (a full seed). It differs
+	// from completed only when files are skipped; trackers hear "completed"
+	// only for this (D44).
+	full     chan struct{}
+	fullOnce sync.Once
+	// startedFull is fixed in New, so the announcer goroutine can read it
 	// without touching loop-owned state.
-	startedComplete bool
-	wg              sync.WaitGroup // all helper goroutines
+	startedFull bool
+	wg          sync.WaitGroup // all helper goroutines
 
 	// Counters read by the announcer goroutine (payload bytes).
 	downloaded atomic.Int64
@@ -170,6 +178,8 @@ type Session struct {
 	extra    []netip.AddrPort // queued by AddPeers
 	incoming []*peer.Conn     // queued by addIncoming (Listener)
 	running  bool             // Run is active; when false, incoming conns are refused
+	newWant  *bitfield.Bitfield
+	wantSet  bool // newWant is waiting to be applied by the loop
 
 	uploadsPaused atomic.Bool
 }
@@ -187,17 +197,22 @@ func New(mi *metainfo.MetaInfo, st *storage.Storage, have *bitfield.Bitfield, cf
 		tiers:     tracker.TiersFromMetaInfo(mi),
 		events:    make(chan any, 256),
 		completed: make(chan struct{}),
+		full:      make(chan struct{}),
 		m:         pieces.NewManager(&mi.Info, have, cfg.Pieces),
 		peers:     make(map[netip.AddrPort]*peerState),
 		swarm:     newSwarm(cfg.RetryBase),
 		tracker:   trackerInfo{seeders: -1, leechers: -1},
 	}
-	s.left.Store(s.m.BytesLeft())
+	s.m.SetWanted(cfg.Wanted)
+	s.left.Store(s.m.MissingBytes())
 	s.uploadsPaused.Store(cfg.UploadsPaused)
 	s.swarm.exact = cfg.banExactAddr
 	if s.m.Complete() {
-		s.startedComplete = true
 		s.markComplete()
+	}
+	if s.m.HaveAll() {
+		s.startedFull = true
+		s.markFull()
 	}
 	s.publish()
 	return s
@@ -208,6 +223,23 @@ func (s *Session) Completed() <-chan struct{} { return s.completed }
 
 // InfoHash identifies the torrent.
 func (s *Session) InfoHash() metainfo.Hash { return s.mi.InfoHash }
+
+// SetWanted changes which pieces to download (nil = all), e.g. after the
+// user skipped or re-wanted files. Safe to call from any goroutine; the
+// loop applies it within a tick. Partial pieces that are no longer wanted
+// are abandoned. Skipping the rest of what's missing completes the
+// download. Wanting more after completion makes the session download
+// again, but Completed() stays closed — the engine restarts the torrent
+// instead, so its queue and trackers see a fresh download.
+func (s *Session) SetWanted(want *bitfield.Bitfield) {
+	if want != nil {
+		want = want.Clone()
+	}
+	s.extraMu.Lock()
+	s.newWant, s.wantSet = want, true
+	s.extraMu.Unlock()
+	s.wake()
+}
 
 // SetUploadsPaused chokes every peer (and keeps them choked) while paused.
 // Downloading continues. Safe to call from any goroutine.
@@ -251,11 +283,36 @@ func (s *Session) drainExtra(ctx context.Context) {
 	s.extraMu.Lock()
 	addrs, conns := s.extra, s.incoming
 	s.extra, s.incoming = nil, nil
+	want, wantSet := s.newWant, s.wantSet
+	s.newWant, s.wantSet = nil, false
 	s.extraMu.Unlock()
+	if wantSet {
+		s.applyWanted(want)
+	}
 	s.swarm.add(addrs)
 	for _, c := range conns {
 		s.onIncoming(ctx, c)
 	}
+}
+
+// applyWanted switches to a new piece selection (loop goroutine only).
+func (s *Session) applyWanted(want *bitfield.Bitfield) {
+	dropped := map[uint32]bool{}
+	for _, idx := range s.m.SetWanted(want) {
+		dropped[uint32(idx)] = true
+	}
+	for _, p := range s.peers {
+		for b := range p.pending {
+			if dropped[b.Index] {
+				delete(p.pending, b)
+				s.sendTo(p, peer.Cancel(b))
+			}
+		}
+		s.updateInterest(p)
+	}
+	s.left.Store(s.m.MissingBytes())
+	s.checkComplete()
+	s.publish()
 }
 
 // onIncoming accepts a peer that connected to us, if there's room.
@@ -482,7 +539,7 @@ func (s *Session) onHashResult(r hashResult) error {
 		}
 		return nil
 	}
-	s.left.Store(s.m.BytesLeft())
+	s.left.Store(s.m.MissingBytes())
 	have := peer.Have(uint32(r.index))
 	for _, p := range s.peers {
 		if !p.has.Has(r.index) { // no point telling a peer about what it has
@@ -490,7 +547,14 @@ func (s *Session) onHashResult(r hashResult) error {
 		}
 		s.updateInterest(p)
 	}
-	if s.m.Complete() {
+	s.checkComplete()
+	return nil
+}
+
+// checkComplete signals completion once every wanted piece is verified
+// (and full completion once every piece is). Loop goroutine only.
+func (s *Session) checkComplete() {
+	if s.m.Complete() && !isClosed(s.completed) {
 		s.log.Info("download complete")
 		s.onComplete()
 		// Publish before signalling, so anyone woken by Completed() sees
@@ -498,11 +562,17 @@ func (s *Session) onHashResult(r hashResult) error {
 		s.publish()
 		s.markComplete()
 	}
-	return nil
+	if s.m.HaveAll() {
+		s.markFull()
+	}
 }
 
 func (s *Session) markComplete() {
 	s.compOnce.Do(func() { close(s.completed) })
+}
+
+func (s *Session) markFull() {
+	s.fullOnce.Do(func() { close(s.full) })
 }
 
 // blame records a hash failure against every peer that contributed. A peer

@@ -560,8 +560,15 @@ func TestFileDone(t *testing.T) {
 			t.Errorf("fileDone(%+v) = %d, want %d", c.f, got, c.want)
 		}
 	}
-	if got := doneBytes(info, have); got != 12 {
-		t.Errorf("doneBytes = %d, want 12", got)
+	layout := &storage.Layout{Files: []storage.File{
+		{Offset: 0, Length: 15}, {Offset: 15, Length: 0}, {Offset: 15, Length: 17},
+	}}
+	if w, d, s := selection(info, layout, have, nil); w != 32 || d != 12 || s != 0 {
+		t.Errorf("selection(all) = %d, %d, %d; want 32, 12, 0", w, d, s)
+	}
+	// Skipping file 0: piece 1's bytes inside it (10..15) no longer count.
+	if w, d, s := selection(info, layout, have, []bool{true}); w != 17 || d != 7 || s != 1 {
+		t.Errorf("selection(skip 0) = %d, %d, %d; want 17, 7, 1", w, d, s)
 	}
 }
 

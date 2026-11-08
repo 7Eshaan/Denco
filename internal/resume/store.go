@@ -74,6 +74,9 @@ type State struct {
 	// yet. Such a state has no .torrent file (and Pieces/Have are empty);
 	// once the metadata arrives the .torrent is written and Magnet cleared.
 	Magnet string `json:"magnet,omitempty"`
+	// Skip lists the indexes (torrent order, from 0) of files the user
+	// chose not to download (D44). Empty = every file wanted.
+	Skip []int `json:"skip,omitempty"`
 }
 
 // FileStamp is a file's size and mtime when the state was saved.

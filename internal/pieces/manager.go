@@ -35,6 +35,7 @@ type Config struct {
 type Manager struct {
 	info *metainfo.Info
 	have *bitfield.Bitfield
+	want *bitfield.Bitfield // pieces of the files the user wants; nil = all (D44)
 
 	avail   []int           // number of connected peers having each piece
 	active  map[int]*active // pieces being downloaded
@@ -93,18 +94,58 @@ func (m *Manager) Have() *bitfield.Bitfield { return m.have.Clone() }
 // HasPiece reports whether piece i is verified.
 func (m *Manager) HasPiece(i int) bool { return m.have.Has(i) }
 
-// Complete reports whether every piece is verified.
-func (m *Manager) Complete() bool { return m.have.Full() }
+// Complete reports whether every *wanted* piece is verified: the download
+// is finished, though with skipped files we are only a partial seed.
+func (m *Manager) Complete() bool { return m.have.Covers(m.want) }
 
-// BytesLeft is the size of all pieces not yet verified.
+// HaveAll reports whether every piece of the torrent is verified (a full seed).
+func (m *Manager) HaveAll() bool { return m.have.Full() }
+
+// BytesLeft is the size of the wanted pieces not yet verified.
 func (m *Manager) BytesLeft() int64 {
-	left := m.info.TotalLength
+	return m.sizeOf(func(i int) bool { return m.isWanted(i) && !m.have.Has(i) })
+}
+
+// MissingBytes is the size of every piece not yet verified, wanted or not
+// (what trackers are told is "left", so they never count a partial seed
+// as a seed).
+func (m *Manager) MissingBytes() int64 { return m.sizeOf(func(i int) bool { return !m.have.Has(i) }) }
+
+// WantedBytes is the size of all wanted pieces.
+func (m *Manager) WantedBytes() int64 { return m.sizeOf(m.isWanted) }
+
+func (m *Manager) sizeOf(include func(int) bool) int64 {
+	var n int64
 	for i := 0; i < m.info.NumPieces(); i++ {
-		if m.have.Has(i) {
-			left -= m.info.PieceSize(i)
+		if include(i) {
+			n += m.info.PieceSize(i)
 		}
 	}
-	return left
+	return n
+}
+
+// isWanted: piece i belongs to a file the user wants.
+func (m *Manager) isWanted(i int) bool { return m.want == nil || m.want.Has(i) }
+
+// SetWanted changes which pieces are wanted (nil = all). Active pieces that
+// are no longer wanted are abandoned — their partial data is dropped — and
+// returned, so the caller can cancel its outstanding requests for them.
+// Pieces already verified stay verified.
+func (m *Manager) SetWanted(want *bitfield.Bitfield) (abandoned []int) {
+	if want != nil && want.Len() != m.info.NumPieces() {
+		return nil // programming error; keep the old selection
+	}
+	if want != nil {
+		want = want.Clone()
+	}
+	m.want = want
+	for _, idx := range m.activeIndexes() {
+		if !m.isWanted(idx) {
+			delete(m.active, idx)
+			abandoned = append(abandoned, idx)
+		}
+	}
+	return abandoned
 }
 
 // ActivePieces is the number of pieces being downloaded (for stats/tests).
@@ -113,9 +154,10 @@ func (m *Manager) ActivePieces() int { return len(m.active) }
 // Availability returns how many connected peers have piece i.
 func (m *Manager) Availability(i int) int { return m.avail[i] }
 
-// wanted: we still need piece i and nobody is already finishing it.
+// wanted: we still need piece i — the user wants it, it isn't verified,
+// and nobody is already finishing it.
 func (m *Manager) wanted(i int) bool {
-	return !m.have.Has(i) && !m.pending[i]
+	return m.isWanted(i) && !m.have.Has(i) && !m.pending[i]
 }
 
 // Interesting reports whether a peer with peerHas has anything we want.

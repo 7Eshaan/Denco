@@ -98,12 +98,16 @@ func runDownload(ctx context.Context, e *env, args []string) int {
 	}
 	defer ln.Close()
 
-	s := torrent.New(mi, op.st, op.have, torrent.Config{
+	scfg := torrent.Config{
 		PeerID: id,
 		Port:   ln.Port(),
 		NoSeed: !o.seed,
 		Logger: logger,
-	})
+	}
+	if op.prev != nil { // keep a file selection made in the daemon
+		scfg.Wanted = pieces.Wanted(&mi.Info, pieces.SkipSet(op.prev.Skip, len(mi.Info.Files)))
+	}
+	s := torrent.New(mi, op.st, op.have, scfg)
 	ln.Add(s)
 	defer ln.Remove(s)
 
@@ -125,8 +129,9 @@ func runDownload(ctx context.Context, e *env, args []string) int {
 	go func() { runErr <- s.Run(ctx) }()
 
 	completed := s.Completed()
-	if op.have != nil && op.have.Full() {
-		completed = nil // nothing to announce: already complete at start
+	doneAtStart := isDone(completed)
+	if doneAtStart {
+		completed = nil // nothing to report: already complete at start
 	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -156,10 +161,10 @@ func runDownload(ctx context.Context, e *env, args []string) int {
 			switch {
 			case st.BytesLeft > 0:
 				fmt.Fprintf(stdout, "\nStopped at %s. Run the same command again to resume.\n",
-					format.Percent(st.TotalBytes-st.BytesLeft, st.TotalBytes))
+					format.Percent(st.WantedBytes-st.BytesLeft, st.WantedBytes))
 			case o.seed:
 				fmt.Fprintf(stdout, "\nStopped seeding. Uploaded %s this session.\n", format.Bytes(st.Uploaded))
-			case op.have != nil && op.have.Full():
+			case doneAtStart:
 				fmt.Fprintf(stdout, "Already complete: %s\n", op.layout.Root)
 			}
 			return 0
@@ -283,8 +288,6 @@ func openForDownload(ctx context.Context, mi *metainfo.MetaInfo, store *resume.S
 	return op, nil
 }
 
-// listen opens the peer port, falling back to a random free port if the
-// requested one is taken (e.g. another client is running).
 // daemonRunning reports whether a daemon answers for this home directory.
 func daemonRunning(ctx context.Context, e *env) bool {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -293,6 +296,8 @@ func daemonRunning(ctx context.Context, e *env) bool {
 	return err == nil
 }
 
+// listen opens the peer port, falling back to a random free port if the
+// requested one is taken (e.g. another client is running).
 func listen(port uint16, id peerid.ID, log *slog.Logger, stderr io.Writer) (*torrent.Listener, error) {
 	opts := peer.Options{PeerID: id}
 	ln, err := torrent.Listen(fmt.Sprintf(":%d", port), opts, log)
@@ -303,8 +308,18 @@ func listen(port uint16, id peerid.ID, log *slog.Logger, stderr io.Writer) (*tor
 	return torrent.Listen(":0", opts, log)
 }
 
+// isDone reports whether ch is closed.
+func isDone(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
 func progressLine(st torrent.Stats) string {
-	done := st.TotalBytes - st.BytesLeft
+	done := st.WantedBytes - st.BytesLeft
 	seeds := ""
 	if st.TrackerSeeders >= 0 {
 		seeds = fmt.Sprintf(" (swarm: %d seeds, %d leechers)", st.TrackerSeeders, max(st.TrackerLeechers, 0))
@@ -314,7 +329,7 @@ func progressLine(st torrent.Stats) string {
 		eta = "up " + format.Bytes(st.Uploaded)
 	}
 	line := fmt.Sprintf("%-11s %6s  %9s / %-9s  ↓ %-11s ↑ %-11s %-12s peers %d (%d seeds)%s",
-		st.State, format.Percent(done, st.TotalBytes), format.Bytes(done), format.Bytes(st.TotalBytes),
+		st.State, format.Percent(done, st.WantedBytes), format.Bytes(done), format.Bytes(st.WantedBytes),
 		format.Speed(st.DownloadRate), format.Speed(st.UploadRate), eta, st.Peers, st.Seeds, seeds)
 	if st.TrackerError != "" && st.Peers == 0 {
 		line += "\n  trackers failing: " + firstLine(st.TrackerError)

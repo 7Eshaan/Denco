@@ -604,3 +604,54 @@ One short entry per decision. Newest at the bottom. Format:
   aligned); callers drop what `Usable` rejects. Trackers now also skip
   unspecified/multicast addresses, not only port 0.
 
+
+### D44 — File selection (skip files), Phase 12a
+- **Decision:** users skip or re-want files; the download works in pieces.
+  - **Wanted pieces:** a piece is wanted if it overlaps at least one
+    wanted file (`pieces.Wanted`). A *border piece* shared with a skipped
+    file is downloaded whole (its hash covers both files) and written
+    whole, so the skipped neighbour is created (sparse) holding just those
+    bytes — as Transmission does. Empty skipped files aren't created.
+  - **Manager:** `want` mask (nil = all). `wanted()` (what to pick/request,
+    endgame, interest) honours it; `Complete()` = every *wanted* piece
+    verified; `HaveAll()` = full seed. `SetWanted` abandons active pieces
+    no longer wanted (their partial data is dropped; the session cancels
+    the outstanding requests).
+  - **Session:** `Config.Wanted` + thread-safe `SetWanted` (applied by the
+    loop). `Completed()` closes when the selection is done (state
+    `seeding`: a *partial seed* that uploads what it has). Trackers are
+    told the truth: `left` = *all* missing bytes and `completed` is only
+    sent for a full seed, so a partial seed is never counted as a seed.
+  - **Engine:** selection stored as `resume.State.Skip` (file indexes, from
+    0; omitted when empty, so old state files load unchanged).
+    `SetFilesWanted(ref, files, wanted)` applies it at once: live via
+    `Session.SetWanted` (skipping the rest of a download finishes it), but
+    wanting more of a torrent that had *finished* restarts its run — it
+    then re-enters the queue (`max_active_downloads`) and re-announces as a
+    download, which a channel that's already closed couldn't express. The
+    session and saver are created under the engine lock from the current
+    selection, so a change made while the torrent is being checked isn't
+    lost. Skipping every file with data is refused ("pause or remove it").
+    Magnets can't be added with `-skip` (no file list yet); use
+    `denco files <id> skip` once the metadata has arrived.
+  - **Safety unchanged:** `add` still refuses if *any* target file exists,
+    skipped ones included — a border piece would write into it.
+  - **Display:** `Torrent.WantedBytes`/`DoneBytes` count *files* (a border
+    piece's bytes in a skipped file don't count); `list` shows the
+    selected size and its progress, `info` "X selected of Y (N files
+    skipped)", `files` a WANT column. Files are numbered from 1 in the CLI
+    (`files`, `inspect`, `add` summary); the API uses indexes from 0.
+  - **CLI:** `denco add -skip LIST | -only LIST` (one torrent per command),
+    `denco files <id> skip|want LIST`; LIST = `3`, `2-5`, `1,4,7-9`, `all`.
+  - `denco download` (standalone) honours a selection saved by the daemon
+    but has no flags for it.
+- **Alternatives:** a separate "parts file" for border pieces (libtorrent /
+  qBittorrent) — keeps skipped files from appearing, but is a second
+  storage format to write, serve from and clean up; per-file priorities
+  (high/normal) — not needed for "skip what I don't want"; keeping the
+  session running when re-wanting a finished torrent — it would bypass the
+  download queue and never re-announce.
+- **Why:** smallest correct design on top of the existing piece machinery;
+  every rule above has a test that fails without it (mutation-checked),
+  except the refresh of the selection at session start, which only matters
+  if it changes during the brief checking phase.

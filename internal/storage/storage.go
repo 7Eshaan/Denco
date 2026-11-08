@@ -33,6 +33,11 @@ type Options struct {
 	// ReadOnly opens files read-only, creates nothing, and makes WriteAt
 	// fail. Used to verify existing data without touching it.
 	ReadOnly bool
+	// Skipped marks files the user doesn't want (by index). Open doesn't
+	// create them when empty; other files are only ever created by writes,
+	// and pieces of skipped files aren't downloaded (except where a piece
+	// also covers a wanted file, D44).
+	Skipped []bool
 }
 
 // Storage reads and writes torrent byte ranges across the layout's files.
@@ -69,8 +74,8 @@ func Open(layout *Layout, opts Options) (*Storage, error) {
 	if s.maxOpen <= 0 {
 		s.maxOpen = 32
 	}
-	for _, f := range layout.Files {
-		if f.Length == 0 && !opts.ReadOnly {
+	for i, f := range layout.Files {
+		if f.Length == 0 && !opts.ReadOnly && !(i < len(opts.Skipped) && opts.Skipped[i]) {
 			if err := createEmpty(f.Path); err != nil {
 				return nil, err
 			}

@@ -36,14 +36,14 @@ func sizeText(t engine.Torrent) string {
 	if !t.HasMetadata {
 		return "?"
 	}
-	return format.Bytes(t.TotalBytes)
+	return format.Bytes(t.WantedBytes) // skipped files don't count
 }
 
 func progressText(t engine.Torrent) string {
 	if !t.HasMetadata {
 		return "-"
 	}
-	return format.Percent(t.DoneBytes, t.TotalBytes)
+	return format.Percent(t.DoneBytes, t.WantedBytes)
 }
 
 // short cuts s to n runes, marking the cut with "…".
@@ -144,9 +144,9 @@ func renderInfo(w io.Writer, t engine.Torrent) {
 		tw.Flush()
 		return
 	}
-	row("Size", format.Bytes(t.TotalBytes))
+	row("Size", selectedSize(t.WantedBytes, t.TotalBytes, t.SkippedFiles))
 	row("Downloaded", format.Bytes(t.DoneBytes))
-	row("Progress", format.Percent(t.DoneBytes, t.TotalBytes))
+	row("Progress", progressText(t))
 	row("Pieces", fmt.Sprintf("%d / %d  (%s each)", t.PiecesHave, t.PiecesTotal, format.Bytes(t.PieceLength)))
 	row("Files", fmt.Sprint(t.Files))
 	blank()
@@ -191,21 +191,32 @@ func formatTime(t time.Time) string {
 }
 
 func renderFiles(w io.Writer, t engine.Torrent, files []engine.File) {
-	fmt.Fprintf(w, "#%d %s — %d file%s in %s\n\n", t.ID, t.Name, len(files), plural(len(files)), t.Dir)
+	fmt.Fprintf(w, "#%d %s — %d file%s in %s\n", t.ID, t.Name, len(files), plural(len(files)), t.Dir)
+	if t.SkippedFiles > 0 {
+		fmt.Fprintf(w, "Downloading %s\n", selectedSize(t.WantedBytes, t.TotalBytes, t.SkippedFiles))
+	}
+	fmt.Fprintln(w)
 	tw := newTable(w)
-	fmt.Fprintln(tw, "#\tSIZE\tDONE\tPATH")
+	fmt.Fprintln(tw, "#\tWANT\tSIZE\tDONE\tPATH")
 	for _, f := range files {
 		done := format.Percent(f.Done, f.Size)
 		if f.Size == 0 {
 			done = "100%"
 		}
+		want := "yes"
+		if f.Skipped {
+			want = "skip"
+		}
 		note := ""
 		if f.Renamed {
 			note = "  (renamed for this OS)"
 		}
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s%s\n", f.Index, format.Bytes(f.Size), done, f.Path, note)
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s%s\n", f.Index+1, want, format.Bytes(f.Size), done, f.Path, note)
 	}
 	tw.Flush()
+	if t.SkippedFiles == 0 && len(files) > 1 {
+		fmt.Fprintf(w, "\nSkip files with: denco files %d skip <numbers>\n", t.ID)
+	}
 }
 
 func renderPeers(w io.Writer, t engine.Torrent, peers []engine.Peer) {

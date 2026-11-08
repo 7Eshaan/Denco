@@ -211,3 +211,32 @@ func TestServeIsLoopbackOnly(t *testing.T) {
 		t.Fatalf("addr = %s", addr)
 	}
 }
+
+func TestAPIFileSelection(t *testing.T) {
+	c, _, _ := setup(t)
+	ctx := context.Background()
+	data := []byte(strings.Repeat("x", 20000))
+	h1, h2 := sha1.Sum(data[:16384]), sha1.Sum(data[16384:])
+	raw, _ := bencode.Encode(map[string]any{"info": map[string]any{
+		"name": "two", "piece length": 16384, "pieces": string(h1[:]) + string(h2[:]),
+		"files": []any{
+			map[string]any{"length": 16384, "path": []any{"a"}},
+			map[string]any{"length": 20000 - 16384, "path": []any{"b"}},
+		},
+	}})
+	added, err := c.Add(ctx, AddRequest{Torrent: raw, Paused: true, Skip: []int{1}})
+	if err != nil || added.SkippedFiles != 1 || added.WantedBytes != 16384 {
+		t.Fatalf("add = %+v, %v", added, err)
+	}
+	files, err := c.SetFiles(ctx, "1", []int{1}, true)
+	if err != nil || len(files) != 2 || files[1].Skipped {
+		t.Fatalf("SetFiles = %+v, %v", files, err)
+	}
+	var apiErr *Error
+	if _, err := c.SetFiles(ctx, "1", []int{0, 1}, false); !errors.As(err, &apiErr) || apiErr.Code != CodeInvalid || apiErr.Status != 400 {
+		t.Errorf("skipping every file: %v", err)
+	}
+	if _, err := c.SetFiles(ctx, "9", []int{0}, false); !errors.As(err, &apiErr) || apiErr.Code != CodeNotFound {
+		t.Errorf("unknown torrent: %v", err)
+	}
+}

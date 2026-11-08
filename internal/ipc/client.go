@@ -81,6 +81,13 @@ func (c *Client) Files(ctx context.Context, ref string) ([]engine.File, error) {
 	return out, c.do(ctx, http.MethodGet, torrentPath(ref, "/files"), nil, &out)
 }
 
+// SetFiles marks files (indexes from 0) as wanted or skipped and returns
+// the updated file list.
+func (c *Client) SetFiles(ctx context.Context, ref string, files []int, wanted bool) ([]engine.File, error) {
+	var out []engine.File
+	return out, c.do(ctx, http.MethodPost, torrentPath(ref, "/files"), FilesRequest{Files: files, Wanted: wanted}, &out)
+}
+
 // Peers lists a torrent's connected peers.
 func (c *Client) Peers(ctx context.Context, ref string) ([]engine.Peer, error) {
 	var out []engine.Peer

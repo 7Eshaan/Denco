@@ -4,14 +4,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/7Eshaan/Denco/internal/bitfield"
 	"github.com/7Eshaan/Denco/internal/metainfo"
+	"github.com/7Eshaan/Denco/internal/pieces"
 	"github.com/7Eshaan/Denco/internal/resume"
 	"github.com/7Eshaan/Denco/internal/storage"
+	"github.com/7Eshaan/Denco/internal/torrent"
 )
 
 var (
@@ -21,6 +24,9 @@ var (
 	ErrAmbiguous = errors.New("ambiguous torrent reference")
 	// ErrBusy: the torrent is being removed; try again in a moment.
 	ErrBusy = errors.New("torrent is being removed")
+	// ErrBadFile: a file index doesn't exist, or the selection would leave
+	// nothing to download.
+	ErrBadFile = errors.New("bad file selection")
 )
 
 // DuplicateError is returned by Add for a torrent that is already added
@@ -39,6 +45,7 @@ type AddOptions struct {
 	Dir      string // download directory; "" means Config.DownloadDir. Created if missing.
 	Existing bool   // reuse data already at the target paths (hash-checked first)
 	Paused   bool   // add without starting
+	Skip     []int  // indexes of files not to download (torrent order, from 0); needs metadata
 }
 
 // Add validates a .torrent file's bytes and adds it. It refuses duplicates
@@ -72,6 +79,12 @@ func (e *Engine) Add(raw []byte, opts AddOptions) (Torrent, error) {
 	if err != nil {
 		return Torrent{}, err
 	}
+	skip, err := normalizeSkip(&mi.Info, opts.Skip)
+	if err != nil {
+		return Torrent{}, err
+	}
+	// Every file is checked, skipped ones too: a piece on a border writes
+	// into its neighbour, so a user's file there could be damaged (D44).
 	if ex := layout.Existing(); len(ex) > 0 && !opts.Existing {
 		return Torrent{}, fmt.Errorf("%w: %s (add with -existing to hash-check and reuse it)", storage.ErrExists, ex[0])
 	}
@@ -90,6 +103,7 @@ func (e *Engine) Add(raw []byte, opts AddOptions) (Torrent, error) {
 			Paused:      opts.Paused,
 			Fresh:       true,
 			Existing:    opts.Existing,
+			Skip:        skip,
 		},
 	}
 	// Persist first: if this fails nothing has changed, and once it succeeds
@@ -200,6 +214,114 @@ func (e *Engine) Remove(ref string, deleteFiles bool) (Removed, error) {
 	}
 	e.log.Info("torrent removed", "id", t.id, "torrent", t.name(), "files_deleted", res.FilesDeleted)
 	return res, errors.Join(errs...)
+}
+
+// SetFilesWanted marks files (indexes in torrent order, from 0) as wanted
+// or skipped. It takes effect at once: a running download stops fetching
+// pieces only skipped files need (and finishes if nothing else is
+// missing); wanting more of a torrent that had already finished restarts
+// it, so it queues and downloads like any other. Returns the new file list.
+func (e *Engine) SetFilesWanted(ref string, files []int, wanted bool) ([]File, error) {
+	e.mu.Lock()
+	t, err := e.resolveLocked(ref)
+	if err != nil {
+		e.mu.Unlock()
+		return nil, err
+	}
+	if t.mi == nil {
+		e.mu.Unlock()
+		return nil, fmt.Errorf("%s: %w", t.name(), ErrNoMetadata)
+	}
+	info := &t.mi.Info
+	skip := pieces.SkipSet(t.state.Skip, len(info.Files))
+	if skip == nil {
+		skip = make([]bool, len(info.Files))
+	}
+	for _, i := range files {
+		if i < 0 || i >= len(info.Files) {
+			e.mu.Unlock()
+			return nil, fmt.Errorf("%w: no file with index %d (the torrent has %d)", ErrBadFile, i, len(info.Files))
+		}
+		skip[i] = !wanted
+	}
+	list, err := normalizeSkip(info, skipIndexes(skip))
+	if err != nil {
+		e.mu.Unlock()
+		return nil, err
+	}
+	var saver *resume.Saver
+	var sess *torrent.Session
+	if !slices.Equal(list, t.state.Skip) {
+		t.state.Skip = list
+		want := t.wantLocked()
+		switch {
+		case t.sess != nil:
+			t.saver.SetSkip(list)
+			if isClosed(t.sess.Completed()) && !t.sess.Have().Covers(want) {
+				// It had finished and now wants more: restart it. finish()
+				// reschedules it; the final save records the selection.
+				t.cancel()
+			} else {
+				t.sess.SetWanted(want)
+				saver, sess = t.saver, t.sess
+			}
+		default:
+			// Not running, or still checking its data: run() reads the
+			// selection when it creates the session.
+			e.persistLocked(t)
+			e.scheduleLocked() // it may have become complete, or incomplete
+		}
+		e.log.Info("file selection changed", "id", t.id, "torrent", t.name(), "skipped", len(list))
+	}
+	out := e.filesLocked(t)
+	e.mu.Unlock()
+
+	if saver != nil { // persist now rather than at the next periodic save
+		st := sess.Stats()
+		if err := saver.Save(resume.Snapshot{Have: sess.Have(), Uploaded: st.Uploaded, Downloaded: st.Downloaded}, false); err != nil {
+			e.log.Warn("saving resume data", "torrent", t.name(), "err", err)
+		}
+	}
+	return out, nil
+}
+
+// normalizeSkip validates skipped file indexes and returns them sorted and
+// without duplicates (nil when nothing is skipped). Skipping every file
+// with data is refused: there would be nothing to download.
+func normalizeSkip(info *metainfo.Info, skip []int) ([]int, error) {
+	if len(skip) == 0 {
+		return nil, nil
+	}
+	flags := make([]bool, len(info.Files))
+	for _, i := range skip {
+		if i < 0 || i >= len(info.Files) {
+			return nil, fmt.Errorf("%w: no file with index %d (the torrent has %d)", ErrBadFile, i, len(info.Files))
+		}
+		flags[i] = true
+	}
+	if want := pieces.Wanted(info, flags); want != nil && want.Count() == 0 {
+		return nil, fmt.Errorf("%w: that would skip every file (pause or remove the torrent instead)", ErrBadFile)
+	}
+	return skipIndexes(flags), nil
+}
+
+func skipIndexes(flags []bool) []int {
+	var out []int
+	for i, s := range flags {
+		if s {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 func deleteData(layout *storage.Layout) error {

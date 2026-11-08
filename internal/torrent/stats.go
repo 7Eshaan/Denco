@@ -15,7 +15,7 @@ type State string
 const (
 	StateDownloading State = "downloading"
 	StateStalled     State = "stalled"  // incomplete and no connected peers
-	StateSeeding     State = "seeding"  // complete and still uploading
+	StateSeeding     State = "seeding"  // every wanted piece verified and still uploading
 	StateComplete    State = "complete" // complete and Run has returned / NoSeed
 )
 
@@ -23,8 +23,9 @@ const (
 type Stats struct {
 	State        State
 	Name         string
-	TotalBytes   int64
-	BytesLeft    int64
+	TotalBytes   int64 // the whole torrent
+	WantedBytes  int64 // pieces of the wanted files (= TotalBytes when nothing is skipped)
+	BytesLeft    int64 // of WantedBytes
 	Downloaded   int64 // payload bytes downloaded this session
 	Uploaded     int64
 	DownloadRate int64 // bytes/second, averaged over the last few seconds
@@ -106,6 +107,7 @@ func (s *Session) publish() {
 	st := Stats{
 		Name:            s.info.Name,
 		TotalBytes:      s.info.TotalLength,
+		WantedBytes:     s.m.WantedBytes(),
 		BytesLeft:       s.m.BytesLeft(),
 		Downloaded:      s.downloaded.Load(),
 		Uploaded:        s.uploaded.Load(),

@@ -61,8 +61,8 @@ func printMetaInfo(w io.Writer, mi *metainfo.MetaInfo) {
 	tw.Flush()
 
 	fmt.Fprintln(w, "\nFiles:")
-	for _, f := range info.Files {
-		fmt.Fprintf(w, "  %10s  %s\n", format.Bytes(f.Length), f.DisplayPath(info))
+	for i, f := range info.Files { // numbered for 'denco add -skip/-only'
+		fmt.Fprintf(w, "  %3d  %10s  %s\n", i+1, format.Bytes(f.Length), f.DisplayPath(info))
 	}
 }
 

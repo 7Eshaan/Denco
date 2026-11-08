@@ -112,6 +112,7 @@ type entry struct {
 	cancel   context.CancelFunc
 	done     chan struct{} // closed when the run goroutine has exited
 	sess     *torrent.Session
+	saver    *resume.Saver     // set with sess
 	fetcher  *metadata.Fetcher // set while fetching a magnet's metadata
 	// bootstrap: peers the metadata fetcher found, handed to the first
 	// session (a magnet's x.pe peers are known nowhere else).
@@ -359,7 +360,23 @@ func (t *entry) completeLocked() bool {
 			return false
 		}
 	}
-	return t.mi != nil && t.have.Full()
+	return t.mi != nil && t.have.Covers(t.wantLocked())
+}
+
+// skipLocked is the per-file skip flags (nil = every file wanted).
+func (t *entry) skipLocked() []bool {
+	if t.mi == nil {
+		return nil
+	}
+	return pieces.SkipSet(t.state.Skip, len(t.mi.Info.Files))
+}
+
+// wantLocked is the set of pieces of the wanted files (nil = all).
+func (t *entry) wantLocked() *bitfield.Bitfield {
+	if t.mi == nil {
+		return nil
+	}
+	return pieces.Wanted(&t.mi.Info, t.skipLocked())
 }
 
 func (e *Engine) sortedLocked() []*entry {
@@ -421,15 +438,22 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 	if e.dht != nil { // only when set: a nil *dht.Server in the interface isn't nil
 		cfg.DHT = e.dht
 	}
-	sess := torrent.New(t.mi, st, have, cfg)
-	e.mu.Lock()
-	sess.AddPeers(t.bootstrap)
-	t.bootstrap = nil
-	e.mu.Unlock()
-
 	prev := state
 	prev.Fresh, prev.Existing, prev.Paused = false, false, false // from now on the files are ours
+
+	// Session and saver are created and registered in one step under the
+	// lock, with the file selection as it is *now*: SetFilesWanted may have
+	// changed it while the data was being checked.
+	e.mu.Lock()
+	prev.Skip = append([]int(nil), t.state.Skip...)
+	cfg.Wanted = t.wantLocked()
+	sess := torrent.New(t.mi, st, have, cfg)
+	sess.AddPeers(t.bootstrap)
+	t.bootstrap = nil
 	saver := resume.NewSaver(e.store, t.mi, t.layout, st, &prev)
+	t.sess, t.saver, t.checking = sess, saver, false
+	e.mu.Unlock()
+
 	snapshot := func() resume.Snapshot {
 		s := sess.Stats()
 		return resume.Snapshot{Have: sess.Have(), Uploaded: s.Uploaded, Downloaded: s.Downloaded}
@@ -438,10 +462,6 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 	if err := saver.Save(snapshot(), false); err != nil {
 		logErr(err)
 	}
-
-	e.mu.Lock()
-	t.sess, t.checking = sess, false
-	e.mu.Unlock()
 	e.ln.Add(sess)
 	defer e.ln.Remove(sess)
 
@@ -487,7 +507,10 @@ func (e *Engine) prepare(ctx context.Context, t *entry, state resume.State) (*st
 	// A torrent that never ran must not adopt files it didn't create,
 	// unless the user said the data there is theirs to reuse.
 	allow := !state.Fresh || state.Existing
-	st, err := storage.Open(t.layout, storage.Options{AllowExisting: allow})
+	e.mu.Lock()
+	skip := t.skipLocked()
+	e.mu.Unlock()
+	st, err := storage.Open(t.layout, storage.Options{AllowExisting: allow, Skipped: skip})
 	if errors.Is(err, storage.ErrExists) {
 		return nil, nil, fmt.Errorf("%w (remove the torrent and add it again with -existing to reuse that data)", err)
 	}
@@ -522,9 +545,11 @@ func (e *Engine) prepare(ctx context.Context, t *entry, state resume.State) (*st
 func (e *Engine) finish(ctx context.Context, t *entry, r runResult) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	t.running, t.checking, t.sess, t.cancel = false, false, nil, nil
+	t.running, t.checking, t.sess, t.saver, t.cancel = false, false, nil, nil, nil
 	if r.state.InfoHash != "" {
+		skip := t.state.Skip // the live selection wins, even if the last save failed
 		t.state = r.state
+		t.state.Skip = skip
 	}
 	if r.have != nil {
 		t.have = r.have

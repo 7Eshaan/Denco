@@ -39,9 +39,12 @@ Settings ($DENCO_HOME/config.yaml; no daemon needed):
 Managing torrents (needs a running daemon):
   denco add [-dir DIR] [-existing] [-paused] <torrent>...   add torrents: .torrent files,
                                                magnet links or http(s) URLs of .torrent files
+            [-skip FILES | -only FILES]        choose files by number (see 'denco inspect'),
+                                               e.g. -skip 2,4-6
   denco list                                   list torrents (downloading, then completed)
   denco info <id>                              details of one torrent
   denco files <id>                             files of a torrent with progress
+  denco files <id> skip|want <files>           stop / start downloading some files
   denco peers <id>                             connected peers
   denco pause <id>... | all                    pause torrents
   denco resume <id>... | all                   resume paused (or failed) torrents

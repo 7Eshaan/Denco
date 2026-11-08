@@ -193,6 +193,7 @@ type fakeTracker struct {
 	srv      *httptest.Server
 	mu       sync.Mutex
 	events   []string
+	lefts    []string // "left" of each announce
 	peers    []netip.AddrPort
 	seeders  int
 	leechers int
@@ -204,6 +205,7 @@ func newTracker(t *testing.T, peers ...netip.AddrPort) *fakeTracker {
 		q, _ := url.ParseQuery(r.URL.RawQuery)
 		ft.mu.Lock()
 		ft.events = append(ft.events, q.Get("event"))
+		ft.lefts = append(ft.lefts, q.Get("left"))
 		var compact []byte
 		for _, p := range ft.peers {
 			ip := p.Addr().As4()
@@ -218,6 +220,12 @@ func newTracker(t *testing.T, peers ...netip.AddrPort) *fakeTracker {
 	}))
 	t.Cleanup(ft.srv.Close)
 	return ft
+}
+
+func (ft *fakeTracker) leftLog() []string {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	return append([]string(nil), ft.lefts...)
 }
 
 func (ft *fakeTracker) eventLog() []string {

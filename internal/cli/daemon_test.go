@@ -280,10 +280,10 @@ func TestDaemonWorkflow(t *testing.T) {
 func TestRenderList(t *testing.T) {
 	var b bytes.Buffer
 	renderList(&b, []engine.Torrent{
-		{ID: 1, Name: "ubuntu.iso", State: engine.StateDownloading, HasMetadata: true, TotalBytes: 5_200_000_000, DoneBytes: 3_400_800_000,
+		{ID: 1, Name: "ubuntu.iso", State: engine.StateDownloading, HasMetadata: true, TotalBytes: 5_200_000_000, WantedBytes: 5_200_000_000, DoneBytes: 3_400_800_000,
 			DownloadRate: 4_200_000, UploadRate: 120_000, ETA: 7*time.Minute + 42*time.Second, Peers: 18},
-		{ID: 2, Name: "sample.zip", State: engine.StateSeeding, Complete: true, HasMetadata: true, TotalBytes: 850_000_000, DoneBytes: 850_000_000},
-		{ID: 3, Name: strings.Repeat("long name ", 10), State: engine.StateError, Error: "disk full", HasMetadata: true, TotalBytes: 1},
+		{ID: 2, Name: "sample.zip", State: engine.StateSeeding, Complete: true, HasMetadata: true, TotalBytes: 850_000_000, WantedBytes: 850_000_000, DoneBytes: 850_000_000},
+		{ID: 3, Name: strings.Repeat("long name ", 10), State: engine.StateError, Error: "disk full", HasMetadata: true, TotalBytes: 1, WantedBytes: 1},
 		{ID: 4, Name: "from a magnet", State: engine.StateMetadata, Peers: 3},
 	})
 	out := b.String()

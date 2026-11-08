@@ -48,6 +48,7 @@ func NewHandler(e *engine.Engine, token string, shutdown func(), log *slog.Logge
 	mux.HandleFunc("POST /v1/torrents", h.add)
 	mux.HandleFunc("GET /v1/torrents/{ref}", h.get)
 	mux.HandleFunc("GET /v1/torrents/{ref}/files", h.files)
+	mux.HandleFunc("POST /v1/torrents/{ref}/files", h.setFiles)
 	mux.HandleFunc("GET /v1/torrents/{ref}/peers", h.peers)
 	mux.HandleFunc("POST /v1/torrents/{ref}/pause", h.pause)
 	mux.HandleFunc("POST /v1/torrents/{ref}/resume", h.resume)
@@ -94,7 +95,7 @@ func (h *handler) add(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	opts := engine.AddOptions{Dir: req.Dir, Existing: req.Existing, Paused: req.Paused}
+	opts := engine.AddOptions{Dir: req.Dir, Existing: req.Existing, Paused: req.Paused, Skip: req.Skip}
 	var t engine.Torrent
 	var err error
 	switch {
@@ -115,6 +116,15 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) files(w http.ResponseWriter, r *http.Request) {
 	f, err := h.e.Files(r.PathValue("ref"))
+	reply(w, f, err)
+}
+
+func (h *handler) setFiles(w http.ResponseWriter, r *http.Request) {
+	var req FilesRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	f, err := h.e.SetFilesWanted(r.PathValue("ref"), req.Files, req.Wanted)
 	reply(w, f, err)
 }
 
@@ -206,7 +216,7 @@ func toError(err error) *Error {
 		e.Status, e.Code = http.StatusBadRequest, CodeAmbiguous
 	case errors.Is(err, storage.ErrExists):
 		e.Status, e.Code = http.StatusConflict, CodeExists
-	case errors.Is(err, metainfo.ErrInvalid), errors.Is(err, magnet.ErrInvalid):
+	case errors.Is(err, metainfo.ErrInvalid), errors.Is(err, magnet.ErrInvalid), errors.Is(err, engine.ErrBadFile):
 		e.Status, e.Code = http.StatusBadRequest, CodeInvalid
 	case errors.Is(err, engine.ErrBusy):
 		e.Status, e.Code = http.StatusConflict, CodeBusy

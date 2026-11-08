@@ -85,6 +85,23 @@ func (b *Bitfield) Count() int {
 // Full reports whether every bit is set.
 func (b *Bitfield) Full() bool { return b.Count() == b.n }
 
+// Covers reports whether every bit set in other is also set in b (b ⊇
+// other). Both must have the same length; a nil other counts as "all bits".
+func (b *Bitfield) Covers(other *Bitfield) bool {
+	if other == nil {
+		return b.Full()
+	}
+	if other.n != b.n {
+		return false
+	}
+	for i, x := range other.bits {
+		if x&^b.bits[i] != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // Bytes returns a copy in wire format.
 func (b *Bitfield) Bytes() []byte { return append([]byte(nil), b.bits...) }
 

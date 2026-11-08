@@ -45,10 +45,12 @@ type Torrent struct {
 	MetaHave    int  `json:"meta_have,omitempty"`
 	MetaTotal   int  `json:"meta_total,omitempty"`
 
-	TotalBytes  int64 `json:"total_bytes"`
-	DoneBytes   int64 `json:"done_bytes"` // verified
-	PiecesHave  int   `json:"pieces_have"`
-	PiecesTotal int   `json:"pieces_total"`
+	TotalBytes   int64 `json:"total_bytes"`             // the whole torrent
+	WantedBytes  int64 `json:"wanted_bytes"`            // the files not skipped (= TotalBytes if none are)
+	DoneBytes    int64 `json:"done_bytes"`              // of WantedBytes, covered by verified pieces
+	SkippedFiles int   `json:"skipped_files,omitempty"` // files the user chose not to download
+	PiecesHave   int   `json:"pieces_have"`
+	PiecesTotal  int   `json:"pieces_total"`
 
 	DownloadRate int64         `json:"download_rate"` // bytes/s
 	UploadRate   int64         `json:"upload_rate"`
@@ -74,6 +76,7 @@ type File struct {
 	Path    string `json:"path"` // relative to the download directory, slash-separated
 	Size    int64  `json:"size"`
 	Done    int64  `json:"done"` // bytes covered by verified pieces
+	Skipped bool   `json:"skipped,omitempty"`
 	Renamed bool   `json:"renamed,omitempty"`
 }
 
@@ -154,12 +157,18 @@ func (e *Engine) Files(ref string) ([]File, error) {
 	if t.mi == nil {
 		return nil, fmt.Errorf("%s: %w", t.name(), ErrNoMetadata)
 	}
+	return e.filesLocked(t), nil
+}
+
+func (e *Engine) filesLocked(t *entry) []File {
 	have := t.haveLocked()
+	skip := t.skipLocked()
 	out := make([]File, len(t.layout.Files))
 	for i, f := range t.layout.Files {
-		out[i] = File{Index: i, Path: f.Rel, Size: f.Length, Done: fileDone(&t.mi.Info, have, f), Renamed: f.Renamed}
+		out[i] = File{Index: i, Path: f.Rel, Size: f.Length, Done: fileDone(&t.mi.Info, have, f),
+			Skipped: i < len(skip) && skip[i], Renamed: f.Renamed}
 	}
-	return out, nil
+	return out
 }
 
 // Peers lists a running torrent's connected peers, fastest first.
@@ -260,10 +269,11 @@ func (e *Engine) viewLocked(t *entry) Torrent {
 	v.HasMetadata, v.Dir = true, t.layout.Root
 	v.Private, v.Files, v.PieceLength = info.Private, len(info.Files), info.PieceLength
 	v.TotalBytes, v.PiecesTotal = info.TotalLength, info.NumPieces()
+	have := t.haveLocked()
+	v.WantedBytes, v.DoneBytes, v.SkippedFiles = selection(info, t.layout, have, t.skipLocked())
+	v.PiecesHave = have.Count()
 	if t.sess != nil {
 		st := t.sess.Stats()
-		v.DoneBytes = st.TotalBytes - st.BytesLeft
-		v.PiecesHave = st.PiecesHave
 		v.DownloadRate, v.UploadRate = st.DownloadRate, st.UploadRate
 		v.Downloaded += st.Downloaded // lifetime = saved totals + this run
 		v.Uploaded += st.Uploaded
@@ -272,11 +282,8 @@ func (e *Engine) viewLocked(t *entry) Torrent {
 		v.TrackerSeeders, v.TrackerLeechers = st.TrackerSeeders, st.TrackerLeechers
 		v.TrackerError = st.TrackerError
 		v.DHTPeers = st.DHTPeers
-	} else {
-		v.PiecesHave = t.have.Count()
-		v.DoneBytes = doneBytes(info, t.have)
 	}
-	v.Complete = v.PiecesHave == v.PiecesTotal
+	v.Complete = have.Covers(t.wantLocked())
 	if v.Complete {
 		v.ETA = 0
 	}
@@ -309,14 +316,19 @@ func sessionState(s torrent.State) State {
 	}
 }
 
-func doneBytes(info *metainfo.Info, have *bitfield.Bitfield) int64 {
-	var n int64
-	for i := 0; i < info.NumPieces(); i++ {
-		if have.Has(i) {
-			n += info.PieceSize(i)
+// selection sums the wanted files: their size, how much of it verified
+// pieces cover, and how many files are skipped. Counting by file (not by
+// piece) keeps a border piece's bytes in a skipped file out of the totals.
+func selection(info *metainfo.Info, layout *storage.Layout, have *bitfield.Bitfield, skip []bool) (wanted, done int64, skipped int) {
+	for i, f := range layout.Files {
+		if i < len(skip) && skip[i] {
+			skipped++
+			continue
 		}
+		wanted += f.Length
+		done += fileDone(info, have, f)
 	}
-	return n
+	return wanted, done, skipped
 }
 
 // fileDone counts the bytes of f covered by verified pieces.

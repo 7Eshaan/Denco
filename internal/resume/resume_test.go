@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -474,5 +475,44 @@ func TestStoreMagnetWithoutMetadata(t *testing.T) {
 	// A non-magnet state still needs the .torrent bytes.
 	if err := store.Save(&State{InfoHash: strings.Repeat("ab", 20)}, nil); err == nil {
 		t.Fatal("state without torrent or magnet accepted")
+	}
+}
+
+func TestSaverSkipAndPartialCompletion(t *testing.T) {
+	f := newFixture(t, 2*pl, 2*pl) // file a = pieces 0-1, file b = pieces 2-3
+	store, _ := OpenStore(t.TempDir())
+	prev := f.state(true)
+	prev.Skip = []int{1}
+	sv := NewSaver(store, f.mi, f.layout, f.st, prev)
+
+	have := bitfield.New(4)
+	have.Set(0)
+	if err := sv.Save(Snapshot{Have: have}, false); err != nil {
+		t.Fatal(err)
+	}
+	if st := sv.State(); !st.CompletedAt.IsZero() || !slices.Equal(st.Skip, []int{1}) {
+		t.Fatalf("after 1 of 2 wanted pieces: %+v", st)
+	}
+	have.Set(1) // every piece of file a: the selection is complete
+	sv.Save(Snapshot{Have: have}, false)
+	if sv.State().CompletedAt.IsZero() {
+		t.Fatal("CompletedAt must be set once every wanted file is done")
+	}
+
+	sv.SetSkip(nil) // same snapshot, new selection: must be written
+	if err := sv.Save(Snapshot{Have: have}, false); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := store.Load(f.mi.InfoHash)
+	if err != nil || got.Skip != nil {
+		t.Fatalf("saved skip = %v (err %v), want none", got.Skip, err)
+	}
+	if !got.CompletedAt.IsZero() {
+		t.Error("wanting file b again makes it incomplete: CompletedAt must be cleared")
+	}
+	have.SetAll()
+	sv.Save(Snapshot{Have: have}, false)
+	if sv.State().CompletedAt.IsZero() {
+		t.Error("CompletedAt must be set again once everything is done")
 	}
 }

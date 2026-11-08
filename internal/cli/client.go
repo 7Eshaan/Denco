@@ -47,11 +47,18 @@ func cmdAdd(e *env, args []string) int {
 	dir := fs.String("dir", "", "download directory (default: the daemon's)")
 	existing := fs.Bool("existing", false, "reuse data already in the directory (hash-checked first)")
 	paused := fs.Bool("paused", false, "add without starting")
+	skip := fs.String("skip", "", "don't download these files (numbers as in 'denco inspect', e.g. 2,4-6)")
+	only := fs.String("only", "", "download only these files")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() == 0 {
-		fmt.Fprintln(e.stderr, "usage: denco add [-dir DIR] [-existing] [-paused] <file.torrent|magnet|url>...")
+		fmt.Fprintln(e.stderr, "usage: denco add [-dir DIR] [-existing] [-paused] [-skip FILES | -only FILES] <file.torrent|magnet|url>...")
+		return 2
+	}
+	selecting := *skip != "" || *only != ""
+	if selecting && fs.NArg() != 1 {
+		fmt.Fprintln(e.stderr, "denco: -skip and -only apply to one torrent at a time")
 		return 2
 	}
 	absDir := ""
@@ -74,7 +81,14 @@ func cmdAdd(e *env, args []string) int {
 		if i > 0 {
 			fmt.Fprintln(e.stdout)
 		}
-		req, err := addRequest(ctx, e, arg)
+		req, nfiles, err := addRequest(ctx, e, arg)
+		if err == nil && selecting {
+			if nfiles == 0 {
+				err = fmt.Errorf("a magnet link has no file list yet; once its metadata arrives use: denco files <id> skip <files>")
+			} else {
+				req.Skip, err = skipFromFlags(*skip, *only, nfiles)
+			}
+		}
 		if err != nil {
 			fmt.Fprintf(e.stderr, "denco: %s: %v\n", short(arg, 60), err)
 			status = 1
@@ -88,41 +102,47 @@ func cmdAdd(e *env, args []string) int {
 			continue
 		}
 		fmt.Fprintf(e.stdout, "  Added as #%d → %s (%s)\n", t.ID, t.Dir, stateLabel(t.State))
+		if t.SkippedFiles > 0 {
+			fmt.Fprintf(e.stdout, "  Downloading %s\n", selectedSize(t.WantedBytes, t.TotalBytes, t.SkippedFiles))
+		}
 	}
 	return status
 }
 
 // addRequest turns one `denco add` argument — a .torrent path, an
 // HTTP(S) URL of one, or a magnet link — into a request, printing what it
-// is first (the spec: show metadata before starting).
-func addRequest(ctx context.Context, e *env, arg string) (ipc.AddRequest, error) {
+// is first (the spec: show metadata before starting). nfiles is the
+// torrent's file count, 0 for a magnet link (not known yet).
+func addRequest(ctx context.Context, e *env, arg string) (req ipc.AddRequest, nfiles int, err error) {
 	var raw []byte
 	switch {
 	case magnet.IsMagnet(arg):
-		return magnetRequest(e, arg)
+		req, err = magnetRequest(e, arg)
+		return req, 0, err
 	case isURL(arg):
 		data, magnetURI, err := fetchTorrentURL(ctx, arg)
 		if err != nil {
-			return ipc.AddRequest{}, err
+			return req, 0, err
 		}
 		if magnetURI != "" {
 			fmt.Fprintln(e.stdout, "(the link points to a magnet link)")
-			return magnetRequest(e, magnetURI)
+			req, err = magnetRequest(e, magnetURI)
+			return req, 0, err
 		}
 		raw = data
 	default:
 		data, err := os.ReadFile(arg)
 		if err != nil {
-			return ipc.AddRequest{}, err
+			return req, 0, err
 		}
 		raw = data
 	}
 	mi, err := metainfo.Parse(raw) // validate and show it before sending
 	if err != nil {
-		return ipc.AddRequest{}, err
+		return req, 0, err
 	}
 	printSummary(e.stdout, mi)
-	return ipc.AddRequest{Torrent: raw}, nil
+	return ipc.AddRequest{Torrent: raw}, len(mi.Info.Files), nil
 }
 
 func magnetRequest(e *env, uri string) (ipc.AddRequest, error) {
@@ -188,24 +208,6 @@ func cmdInfo(e *env, args []string) int {
 		t, err := c.Get(ctx, ref)
 		if err == nil {
 			renderInfo(e.stdout, t)
-		}
-		return err
-	})
-}
-
-func cmdFiles(e *env, args []string) int {
-	ref, ok := oneRef(e, "files", args)
-	if !ok {
-		return 2
-	}
-	return withClient(e, func(ctx context.Context, c *ipc.Client) error {
-		t, err := c.Get(ctx, ref)
-		if err != nil {
-			return err
-		}
-		files, err := c.Files(ctx, ref)
-		if err == nil {
-			renderFiles(e.stdout, t, files)
 		}
 		return err
 	})
@@ -347,7 +349,7 @@ func printSummary(w io.Writer, mi *metainfo.MetaInfo) {
 				fmt.Fprintf(w, "    … %d more (see 'denco files')\n", len(info.Files)-maxShown)
 				break
 			}
-			fmt.Fprintf(w, "    %10s  %s\n", format.Bytes(f.Length), f.DisplayPath(info))
+			fmt.Fprintf(w, "    %3d  %10s  %s\n", i+1, format.Bytes(f.Length), f.DisplayPath(info))
 		}
 	}
 }

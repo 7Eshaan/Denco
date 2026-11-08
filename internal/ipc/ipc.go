@@ -20,6 +20,7 @@
 //	POST /v1/torrents                AddRequest → engine.Torrent
 //	GET  /v1/torrents/{ref}          → engine.Torrent
 //	GET  /v1/torrents/{ref}/files    → []engine.File
+//	POST /v1/torrents/{ref}/files    FilesRequest → []engine.File
 //	GET  /v1/torrents/{ref}/peers    → []engine.Peer
 //	POST /v1/torrents/{ref}/pause    → engine.Torrent
 //	POST /v1/torrents/{ref}/resume   → engine.Torrent
@@ -121,6 +122,13 @@ type AddRequest struct {
 	Dir      string `json:"dir,omitempty"` // absolute; "" = daemon default
 	Existing bool   `json:"existing,omitempty"`
 	Paused   bool   `json:"paused,omitempty"`
+	Skip     []int  `json:"skip,omitempty"` // file indexes (from 0) not to download; .torrent only
+}
+
+// FilesRequest marks files (indexes from 0) as wanted or skipped.
+type FilesRequest struct {
+	Files  []int `json:"files"`
+	Wanted bool  `json:"wanted"`
 }
 
 // RemoveRequest removes a torrent.

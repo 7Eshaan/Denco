@@ -27,9 +27,11 @@ func (s *Session) announceLoop(ctx context.Context) {
 	}
 	key := rand.Uint32()
 	event := tracker.EventStarted
-	completedPending := !s.startedComplete // only report a completion we witnessed
-	completed := s.completed
-	if s.startedComplete {
+	// "completed" means a full seed: a partial one (skipped files) never
+	// sends it, and its "left" stays above zero (D44).
+	completedPending := !s.startedFull // only report a completion we witnessed
+	completed := s.full
+	if s.startedFull {
 		completed = nil // already closed: it would cut every first interval short
 	}
 	failures := 0
@@ -80,7 +82,7 @@ func (s *Session) announceLoop(ctx context.Context) {
 		defer cancel()
 		// If we finished but were stopped before reporting it, report it now:
 		// trackers count completions from this event.
-		if completedPending && !completedSent && isClosed(s.completed) {
+		if completedPending && !completedSent && isClosed(s.full) {
 			list.AnnounceAll(sctx, s.cfg.Announcer, s.announceRequest(key, tracker.EventCompleted))
 		}
 		list.AnnounceAll(sctx, s.cfg.Announcer, s.announceRequest(key, tracker.EventStopped))

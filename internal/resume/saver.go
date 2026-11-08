@@ -7,6 +7,7 @@ import (
 
 	"github.com/7Eshaan/Denco/internal/bitfield"
 	"github.com/7Eshaan/Denco/internal/metainfo"
+	"github.com/7Eshaan/Denco/internal/pieces"
 	"github.com/7Eshaan/Denco/internal/storage"
 )
 
@@ -25,8 +26,9 @@ type Saver struct {
 	st     *storage.Storage
 
 	mu       sync.Mutex
-	state    State // template: identity, AddedAt, CompletedAt, options
-	baseUp   int64 // lifetime totals from earlier sessions
+	state    State              // template: identity, AddedAt, CompletedAt, options
+	want     *bitfield.Bitfield // pieces of the wanted files (from state.Skip); nil = all
+	baseUp   int64              // lifetime totals from earlier sessions
 	baseDown int64
 	last     savedKey
 	hasLast  bool
@@ -54,6 +56,7 @@ func NewSaver(store *Store, mi *metainfo.MetaInfo, layout *storage.Layout, st *s
 	sv.state.Name = mi.Info.Name
 	sv.state.DownloadDir = layout.Root
 	sv.state.Pieces = mi.Info.NumPieces()
+	sv.want = pieces.Wanted(&mi.Info, pieces.SkipSet(sv.state.Skip, len(mi.Info.Files)))
 	return sv
 }
 
@@ -77,10 +80,15 @@ func (sv *Saver) Save(snap Snapshot, clean bool) error {
 	s.Uploaded = sv.baseUp + snap.Uploaded
 	s.Downloaded = sv.baseDown + snap.Downloaded
 	s.Clean = clean
-	if snap.Have.Full() && s.CompletedAt.IsZero() {
+	// CompletedAt is when the current selection finished; wanting more
+	// files (or losing data) makes it incomplete again, so it is cleared.
+	switch done := snap.Have.Covers(sv.want); {
+	case done && s.CompletedAt.IsZero():
 		s.CompletedAt = time.Now().UTC()
-		sv.state.CompletedAt = s.CompletedAt
+	case !done:
+		s.CompletedAt = time.Time{}
 	}
+	sv.state.CompletedAt = s.CompletedAt
 	s.Files = Stamp(sv.layout)
 	if err := sv.store.Save(&s, sv.mi.Raw); err != nil {
 		return err
@@ -98,6 +106,15 @@ func (sv *Saver) SetPaused(paused bool) {
 		sv.state.Paused = paused
 		sv.hasLast = false // force the next Save to write
 	}
+}
+
+// SetSkip changes the skipped files recorded by the following saves.
+func (sv *Saver) SetSkip(skip []int) {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	sv.state.Skip = append([]int(nil), skip...)
+	sv.want = pieces.Wanted(&sv.mi.Info, pieces.SkipSet(skip, len(sv.mi.Info.Files)))
+	sv.hasLast = false // force the next Save to write
 }
 
 // State returns the last state written successfully (zero before the first).

@@ -1,28 +1,34 @@
 # Progress
 
-**Current phase:** 11 — DHT · ✅ done, waiting for the user's commit
+**Current phase:** 12a — File selection · ✅ done, waiting for the user's commit
 
-**Next action:** once the user has committed Phase 11, tick it in
-`docs/ROADMAP.md`, then plan **Phase 12 — Daily-driver polish** with the
-user before coding: file selection (skip files), stop-seeding / pause-
-uploads controls, ratio display, UPnP/NAT-PMP, snub timeout vs low limits
-(D36), more real-world interoperability testing
-(full downloads, trackers), README/usage docs.
+**Next action:** once the user has committed 12a, tick it in
+`docs/ROADMAP.md`, then start **12b — Seeding controls** (per-torrent pause
+uploads / stop seeding, ratio display, optional `seed_ratio`/`seed_time`).
+Phase 12 is split into 12a–12e (ROADMAP, user-approved 2026-11-09).
 
 ## Known issues
+- Skipped files can appear on disk holding only the bytes of a *border
+  piece* shared with a wanted file (D44, Transmission-style). `add` still
+  refuses if any target file exists, skipped ones included.
+- The engine refreshes the file selection when a session starts (a change
+  made while the torrent is being checked); only that tiny race window has
+  no test that fails without the code (D44).
 - Fetching metadata uses its own connections; the download then reconnects
   to the same peers (D38) — one extra handshake per peer, once per magnet.
 - Low download/upload limits shared by many peers can trip the 60s snub
-  timeout and cause peer churn (D36). Phase 12 candidate.
+  timeout and cause peer churn (D36). Planned for 12c.
 - No NAT traversal (UPnP/NAT-PMP): incoming peers need a forwarded port.
-  Planned for Phase 12.
-- DHT: IPv4 only (no BEP 32); no BEP 42 secure node IDs.
-- Behind NAT without a forwarded port, other DHT nodes can't reach us, so
-  we answer few queries and the table fills slowly (UPnP: Phase 12).
-- `denco download` (standalone tool) doesn't use extensions or DHT: no
-  PEX, metadata serving or DHT there; the daemon does all three.
+  12d, if the user confirms it is in scope.
+- DHT: IPv4 only (no BEP 32); no BEP 42 secure node IDs. Behind NAT without
+  a forwarded port the routing table fills slowly. Two DHT nodes alone
+  (no tracker, no third node) take minutes to find each other.
+- `denco download` (standalone) doesn't use extensions or DHT, and has no
+  file-selection flags (it honours a selection saved by the daemon).
 - Resume: a file edited externally *during* a run that then crashed isn't
   detected (D27); `denco verify` checks manually.
+- Resume JSON writes `"completed_at": "0001-01-01T00:00:00Z"` for
+  incomplete torrents (`omitempty` doesn't apply to time.Time). Harmless.
 - Daemon runs in the foreground and logs to its terminal; no log file or
   auto-start yet (D30). Started with `&` from a script it ignores Ctrl-C.
 - Config changes other than speed limits need a daemon restart.
@@ -32,59 +38,37 @@ uploads controls, ratio display, UPnP/NAT-PMP, snub timeout vs low limits
 ## Open questions for the user
 - Daemon start: explicit `denco daemon` (my recommendation; not explicitly
   confirmed). Auto-start from `denco add` is possible later.
-- UPnP/NAT-PMP in Phase 12, MSE encryption out of scope — OK?
+- UPnP/NAT-PMP (12d) in scope? MSE encryption stays out of scope?
 
-## Last test run (2026-11-08, end of Phase 11)
-- `go test -race -count=1 ./...` — all 20 packages pass (new: `dht`, `compact`)
-- `-race -count=10 -cpu=1,2,8` on `dht`, `torrent`, `metadata`, `engine`
-  (30 runs each) and `-count=5 -cpu=1,2,8` on `peer`, `cli`, `ipc`,
-  `config`, `compact`, `tracker` — pass
-- **found by the stress run:** `TestMagnetThroughDHT` failed 3 of 30 — the
-  test assumed the session's first DHT lookup returns before the download
-  finishes, but the download can finish on the peers the metadata fetcher
-  handed over. Test bug, not a product bug: it now waits for the lookup;
-  then 60/60 and the full stress run above pass
-- mutation checks — each makes a test fail: tokens always valid, responses
-  accepted from any address, querying nodes added unverified, no query cap,
-  lookups ignoring returned nodes, no announce, state not saved, routers
-  unreachable; session: no quick retry, DHT for private torrents, PORT
-  ignored, no announce port; engine: sessions/fetcher without DHT, DHT not
-  closed (state not saved)
-- smoke test, three real daemons, loopback only (A `dht_bootstrap: none`,
-  B and C bootstrap from A): C added a magnet with only the info hash, found
-  A through B's stored announce, had the metadata and all data in ~5 s,
-  byte-identical to A's; every node saved `dht.json`; all stopped cleanly
-- **public DHT check (manual, user-approved, 2026-11-08):** one daemon in
-  a scratch home with the default routers joined the public DHT (10 good
-  nodes after 1 min, 19 at the end). A magnet with only the info hash of
-  Ubuntu's official `ubuntu-24.04.4-live-server-amd64.iso` torrent
-  (62a4d9e1…) got its metadata from real peers in 25 s; name, size and
-  12,991 pieces match the official .torrent. Connected peers were
-  qBittorrent 5.2.3 and 5.3.0. Paused at once (0 bytes of the ISO
-  downloaded), removed with -delete, daemon stopped; 19 nodes saved to
-  dht.json. Finding: slow table growth (~10 nodes after a minute)
-- **fix: targeted bucket lookups** (D42). Developing it, the stress runs
-  exposed two more real flaws, each now covered by a test:
-  (1) an attempt that reached nobody (routers busy at start) used up the
-  bucket's 15-min slot — attempts that reach no one no longer count;
-  (2) a lookup into a region nobody in our table knows dead-ended among our
-  own neighbours — routers are now asked when no known node shares more
-  leading bits with the target than we do (a first version comparing whole
-  distances still failed 1 in 60). `TestNewNodeFillsShallowBuckets` fails
-  10/10 without bucket filling; `TestLookupAsksRoutersForUnknownRegions`
-  fails 10/10 with the old rule and with the whole-distance rule; both pass
-  90/90 under `-race -cpu=1,2,8`; `dht` and `engine` stress (30 runs
-  each) and the full suite pass
-- **public re-check from a fresh home:** 11 nodes at 5 s, 40 at 15 s, 78 at
-  1 min, 112 (all good) at ~2.5 min, then growth stops as designed; 112
-  saved to dht.json; daemon stopped cleanly
-- real config dir (`~/Library/Application Support/denco`) untouched; no
-  automated test contacts the public DHT (`config.DefaultDHTBootstrap` cleared in the
-  CLI's TestMain; other packages use loopback nodes or fakes)
+## Last test run (2026-11-09, end of Phase 12a)
+- `go test -race -count=1 ./...` — all 20 packages pass
+- stress `-race -cpu=1,2,8`: `torrent`, `engine` ×10 (30 runs each);
+  `peer`, `pieces`, `cli`, `ipc`, `resume`, `storage` ×5 (15 each) — pass;
+  `resume`, `engine` again ×3 after the last change — pass
+- new tests: `TestCovers`; `TestWanted`, `TestSkipSet`,
+  `TestManagerOnlyRequestsWantedPieces`, `TestSetWantedAbandonsActivePieces`;
+  `TestSkippedFilesAreNotDownloaded`, `TestSetWantedCompletesAndReopens`
+  (real peer connections); `TestAddWithSkippedFile`,
+  `TestSkipWhileDownloadingAndPartialSeed` (engine ↔ engine);
+  `TestSaverSkipAndPartialCompletion`; `TestSkippedEmptyFileNotCreated`;
+  `TestAPIFileSelection`; `TestParseFileList`, `TestSkipFromFlags`,
+  `TestFileSelectionCommands` (daemon + CLI)
+- mutation checks — each makes a test fail: Manager ignoring the selection;
+  partial seed announcing `completed`; tracker `left` = wanted bytes only
+  (first survived: the fake tracker didn't record `left` — test extended);
+  no restart when re-wanting a finished torrent; live SetWanted never
+  applied; abandoned pieces kept active; SetSkip not forcing a save;
+  skipped empty file created; skipping every file allowed. **Survived:**
+  dropping the selection refresh at session start (race-window only, D44)
+- smoke test, two real daemons + a loopback tracker, scratch homes:
+  `add -skip 2` → tracks 1 and 3 byte-identical, track 2 only border bytes
+  (8.2%), state Seeding; `files 1 want 2` → restarted, all 3 files
+  byte-identical. Real config dir untouched; no public network used
+- found by the smoke test: `completed_at` from a partial completion stayed
+  set after re-wanting a file — now cleared while the selection is
+  incomplete (test added)
 - `go vet` (darwin, linux, windows) clean · gofmt clean
 - cross-compile linux/windows/darwin × amd64/arm64 — all build
-- coverage: dht 91%, compact 100%, torrent 92%, metadata 91%, engine 87%,
-  config 92%, cli 82%
 - external deps: none
 
 ## History
@@ -173,3 +157,14 @@ uploads controls, ratio display, UPnP/NAT-PMP, snub timeout vs low limits
   engine runs one node on the peer port's number; `enable_dht` works,
   new `dht_bootstrap`; DHT rows in `denco status`/`info`; targeted bucket
   lookups fill the table (10 → 112 nodes on the public DHT). D42–D43.
+- **Phase 11 commits:** a259f12 (DHT), da5999f (routing-table growth fix).
+- **Phase 12a (2026-11-09):** file selection (D44): `pieces.Wanted`,
+  Manager wanted mask (`Complete` vs `HaveAll`, `MissingBytes`),
+  `Session.SetWanted` + partial seeds (trackers: real `left`, `completed`
+  only when full), `resume.State.Skip` + `Saver.SetSkip`,
+  `storage.Options.Skipped`, `engine.SetFilesWanted` (live, or restart
+  when re-wanting a finished torrent), `AddOptions.Skip`, IPC
+  `POST /v1/torrents/{ref}/files`, CLI `add -skip/-only`,
+  `files <id> skip|want`, 1-based file numbers in `files`/`inspect`/`add`,
+  selected size in `list`/`info`. Also: misplaced comment in
+  `cli/download.go` fixed.
