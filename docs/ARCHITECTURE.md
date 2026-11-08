@@ -19,12 +19,13 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 
 | Package | Status | Responsibility |
 |---|---|---|
-| `cmd/denco` | ✅ (dev) | Entry point; hands args to the CLI layer. |
+| `cmd/denco` | ✅ (dev) | Entry point. One file per command: `inspect.go` (inspect, magnet), `announce.go`. Replaced by `internal/cli` in Phase 8. |
 | `internal/bencode` | ✅ | Bencode decode/encode; raw byte spans of dict values (for info hash). |
 | `internal/metainfo` | ✅ | Parse + validate `.torrent`; info hash; file list with offsets; tracker tiers. |
 | `internal/format` | ✅ | Human-readable sizes, speeds, durations for CLI output. |
-| `internal/magnet` | ⏳ | Parse magnet URIs (xt, dn, tr). |
-| `internal/tracker` | ⏳ | HTTP/HTTPS announce, peer list parsing. |
+| `internal/magnet` | ✅ | Parse/print magnet URIs (xt hex+base32, dn, tr, x.pe). |
+| `internal/peerid` | ✅ | Generate our 20-byte peer ID (`-DE0001-…`). |
+| `internal/tracker` | ✅ | `Client.Announce` (one HTTP/HTTPS announce) and `List` (BEP 12 tiers, concurrent, fallback + promote). UDP client (BEP 15) ⏳ Phase 5b. |
 | `internal/peer` | ⏳ | Peer wire protocol: handshake, messages, connection loops. |
 | `internal/bitfield` | ⏳ | Compact piece-set type shared by peer/pieces/resume. |
 | `internal/storage` | ⏳ | Map pieces onto files, safe paths, read/write blocks. |
@@ -56,10 +57,22 @@ Dependency direction (lower never imports higher):
 - `metainfo.File{Path []string, Length, Offset}` — `Path` excludes the torrent
   name; `Offset` is the byte offset within the concatenated torrent data.
 
+- `magnet.Magnet{InfoHash, Name, Trackers []string, Peers []netip.AddrPort}`
+- `tracker.Request{InfoHash, PeerID, Port, Uploaded, Downloaded, Left, Event,
+  NumWant, Key, TrackerID}` → `tracker.Response{Interval, MinInterval,
+  TrackerID, Seeders, Leechers (-1 = unknown), Peers []netip.AddrPort, Warning}`
+- `tracker.Announcer` interface — one announce; `*Client` implements it, tests
+  use fakes. `List.AnnounceAll(ctx, announcer, req) []Result` (one per tier).
+- Peers everywhere are `netip.AddrPort` (D12).
+
 ## On-disk formats
 
 - None yet. (Resume data, config, IPC token: Phases 7–9.)
 
 ## Wire / IPC formats
 
-- None yet.
+- **Tracker announce (outgoing):** `GET <announce>?[existing&]info_hash=…&peer_id=…
+  &port=&uploaded=&downloaded=&left=&compact=1&numwant=50&key=<hex>[&event=]
+  [&trackerid=]`. Raw-byte params percent-encoded byte-wise (D15).
+- **Tracker response (incoming):** bencoded dict; `peers` as compact string
+  (6 bytes/peer) or list of dicts; optional `peers6` (18 bytes/peer).

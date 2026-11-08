@@ -1,9 +1,11 @@
 # Roadmap
 
 Stable phase plan. Each phase ends green (`go test -race ./...`, `go vet ./...`,
-cross-compile) and with a user commit. Tick a box when its phase is committed.
+cross-compile) and with a user commit. Tick a box when its phase is
+committed. Lettered phases (5b) were inserted later; numbering is kept stable
+so older references stay valid.
 
-- [ ] **Phase 1 — Foundations.** Module scaffold, `bencode` (decode/encode,
+- [x] **Phase 1 — Foundations.** Module scaffold, `bencode` (decode/encode,
       raw spans), `metainfo` (.torrent parse + validate, info hash, file layout,
       path safety), `denco inspect <file>` dev command.
 - [ ] **Phase 2 — Discovery.** `magnet` URI parser (xt/dn/tr, hex + base32),
@@ -17,6 +19,10 @@ cross-compile) and with a user commit. Tick a box when its phase is committed.
 - [ ] **Phase 5 — Single-torrent engine.** Torrent session: tracker loop, peer
       pool, concurrent block downloads from many peers, endgame, reject bad
       pieces, reconnects. End-to-end test with an in-process tracker + seeder.
+- [ ] **Phase 5b — UDP trackers.** BEP 15 client (connect → announce, connection
+      ID caching, retransmit with 15·2ⁿ s backoff, IPv4/IPv6), plugged into
+      `tracker.List` behind the existing `Announcer` interface so `udp://`
+      URLs stop being skipped. Tests against an in-process UDP server.
 - [ ] **Phase 6 — Uploading & seeding.** Serve requests, choking algorithm,
       incoming connections listener, seed after completion, upload stats.
 - [ ] **Phase 7 — Resume.** Persist per-torrent state (bitfield, options,
@@ -37,5 +43,5 @@ cross-compile) and with a user commit. Tick a box when its phase is committed.
       stop-seeding / pause-uploads controls, ratio display, error states &
       retry, real-world interoperability testing, README/usage docs.
 
-Out of scope for now (may revisit): uTP, PEX, UDP trackers, encryption (MSE),
+Out of scope for now (may revisit): uTP, PEX, encryption (MSE),
 web seeds, BitTorrent v2, TUI/GUI.

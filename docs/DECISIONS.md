@@ -85,3 +85,43 @@ One short entry per decision. Newest at the bottom. Format:
 - **Decision:** `go.mod` declares `go 1.23` though development uses 1.27.
 - **Why:** lets the project build on older distro toolchains; nothing newer is
   needed so far. Raise it only when a newer stdlib feature is actually used.
+
+### D12 — Peer addresses use `net/netip.AddrPort`
+- **Decision:** trackers, magnet `x.pe`, and (later) DHT/peer code all
+  represent peers as `netip.AddrPort`; IPv4-mapped IPv6 is unmapped to IPv4.
+- **Alternatives:** custom `Peer{IP net.IP; Port}` struct.
+- **Why:** stdlib, comparable (usable as a map key for dedup), cheap, and
+  handles IPv4 + IPv6 uniformly.
+
+### D13 — Peer ID format `-DE0001-` + 12 random alphanumerics
+- **Decision:** Azureus-style ID, regenerated on each daemon start.
+- **Why:** the convention other clients and trackers recognise; random per
+  session avoids long-term tracking. Some private trackers whitelist client
+  IDs — if that matters later, this is the one place to change.
+
+### D14 — Announce to all tiers concurrently
+- **Decision:** `tracker.List.AnnounceAll` runs every tier in parallel; inside a
+  tier, trackers are tried in (shuffled) order until one answers, and the one
+  that answers is moved to the front (BEP 12). Each attempt has a 15s timeout.
+  Magnet trackers each get their own tier.
+- **Alternatives:** strict BEP 12 (stop at the first working tracker overall).
+- **Why:** matches libtorrent/qBittorrent defaults; many public trackers are
+  dead, and announcing to all of them finds far more peers.
+
+### D15 — Tracker HTTP handling details
+- **Decision:** build the query string by hand with byte-wise percent-encoding
+  (url.Values would turn byte 0x20 into `+`); keep any existing query (private
+  tracker passkeys); cap responses at 2 MiB; a bencoded `failure reason` wins
+  over the HTTP status; any other non-200 is an error; clamp `interval` to at
+  least 60s. UDP trackers return `ErrUnsupportedScheme` and are skipped.
+- **Why:** each rule fixes a real-world interop or abuse case; UDP trackers
+  (BEP 15) come in Phase 5b behind the same `Announcer` interface (D16).
+
+### D16 — Add UDP trackers (BEP 15) as Phase 5b
+- **Decision:** (user-approved 2026-11-08) implement UDP tracker support right
+  after the single-torrent engine works, as a lettered phase so existing phase
+  numbers stay valid.
+- **Alternatives:** leave it out and rely on DHT (Phase 11).
+- **Why:** most public torrents list mainly `udp://` trackers; without them
+  peer discovery is poor until DHT exists. Stdlib-only (`net.UDPConn`), small.
+  Placed after Phase 5 so it can be tested with real downloads end to end.
