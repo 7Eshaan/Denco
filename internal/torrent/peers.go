@@ -19,13 +19,22 @@ type peerState struct {
 
 	peerChoking    bool // they choke us (initially true)
 	amInterested   bool // we told them we're interested
-	peerInterested bool // they're interested in us (used in Phase 6)
+	amChoking      bool // we choke them (initially true)
+	peerInterested bool // they're interested in us
 
+	// Download side.
 	pending      map[peer.Block]bool // our outstanding requests to them
 	lastProgress time.Time           // last useful block, or when requests started
 	downloaded   int64               // payload bytes received from them
-	rate         rate
-	connectedAt  time.Time
+	rate         rate                // their upload rate to us
+
+	// Upload side (upload.go).
+	served   map[peer.Block]bool // their requests we've accepted and not yet sent
+	uploadQ  chan peer.Block     // blocks for the uploader goroutine to read
+	uploaded int64               // payload bytes sent to them
+	upRate   rate                // our upload rate to them
+
+	connectedAt time.Time
 }
 
 // addPeer registers a freshly handshaken connection.
@@ -35,11 +44,16 @@ func (s *Session) addPeer(ctx context.Context, c *peer.Conn) {
 		conn:        c,
 		has:         bitfield.New(s.info.NumPieces()),
 		peerChoking: true,
+		amChoking:   true,
 		pending:     make(map[peer.Block]bool),
+		served:      make(map[peer.Block]bool),
+		uploadQ:     make(chan peer.Block, maxQueuedUploads),
 		connectedAt: time.Now(),
 	}
 	s.peers[p.addr] = p
-	s.swarm.connected(p.addr)
+	if c.Outgoing {
+		s.swarm.connected(p.addr)
+	}
 	s.log.Debug("peer connected", "peer", p.addr, "client", peerid.ClientName(c.Peer.PeerID))
 
 	// Our bitfield must be the first message after the handshake.
@@ -47,6 +61,7 @@ func (s *Session) addPeer(ctx context.Context, c *peer.Conn) {
 		s.sendTo(p, peer.BitfieldMsg(have.Bytes()))
 	}
 
+	s.startUploader(ctx, p)
 	// Forward this peer's messages into the loop.
 	s.goHelper(func() {
 		for m := range c.Incoming() {
@@ -68,7 +83,16 @@ func (s *Session) onPeerClosed(p *peerState) {
 	delete(s.peers, p.addr)
 	s.m.PeerRequestsDropped(p.addr)
 	s.m.PeerGoneBitfield(p.has)
-	s.swarm.disconnected(p.addr, p.downloaded > 0)
+	// Incoming peers use a random source port: nothing to redial.
+	if p.conn.Outgoing {
+		s.swarm.disconnected(p.addr, p.downloaded > 0)
+	}
+	if s.choke.optimistic == p.addr {
+		s.choke.optimistic = netip.AddrPort{}
+	}
+	if !p.amChoking {
+		s.rechoke(time.Now(), false) // hand its slot to someone else now
+	}
 	s.log.Debug("peer disconnected", "peer", p.addr, "err", p.conn.Err())
 }
 
@@ -100,8 +124,10 @@ func (s *Session) onMessage(p *peerState, m *peer.Message) {
 
 	case peer.MsgInterested:
 		p.peerInterested = true
+		s.onInterestChanged(p)
 	case peer.MsgNotInterested:
 		p.peerInterested = false
+		s.onInterestChanged(p)
 
 	case peer.MsgHave:
 		idx, err := peer.ParseHave(m)
@@ -112,6 +138,9 @@ func (s *Session) onMessage(p *peerState, m *peer.Message) {
 		if !p.has.Has(int(idx)) {
 			p.has.Set(int(idx))
 			s.m.PeerHave(int(idx))
+		}
+		if s.bothSeeds(p) {
+			return
 		}
 		s.updateInterest(p)
 
@@ -124,14 +153,18 @@ func (s *Session) onMessage(p *peerState, m *peer.Message) {
 		s.m.PeerGoneBitfield(p.has) // in case of a (non-standard) repeat
 		p.has = bf
 		s.m.PeerBitfield(bf)
+		if s.bothSeeds(p) {
+			return
+		}
 		s.updateInterest(p)
 
 	case peer.MsgPiece:
 		s.onPiece(p, m)
 
-	case peer.MsgRequest, peer.MsgCancel:
-		// Uploading arrives in Phase 6; we never unchoke anyone yet, so
-		// requests are ignored as BEP 3 allows for choked peers.
+	case peer.MsgRequest:
+		s.onRequest(p, m)
+	case peer.MsgCancel:
+		s.onCancel(p, m)
 
 	default:
 		// Port, extended and unknown messages: ignored for now.
@@ -167,6 +200,16 @@ func (s *Session) onPiece(p *peerState, m *peer.Message) {
 		s.verifyAndWrite(s.ctx(), int(index), r.Data, r.Contributors)
 	}
 	s.fillRequests(p)
+}
+
+// bothSeeds drops p if we and it are both complete: neither can give the
+// other anything, and the slot is better used for a leecher.
+func (s *Session) bothSeeds(p *peerState) bool {
+	if s.m.Complete() && p.has.Full() {
+		s.drop(p, "both seeds")
+		return true
+	}
+	return false
 }
 
 // updateInterest tells p whether we want anything it has.

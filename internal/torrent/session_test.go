@@ -197,8 +197,10 @@ func TestSnubbedPeerIsDropped(t *testing.T) {
 }
 
 func TestTrackerStatsAndPeerList(t *testing.T) {
-	f := makeTorrent(t, pl, 200*pl) // big enough to observe mid-download
-	sd := newSeeder(t, f, seederOpts{})
+	f := makeTorrent(t, pl, 100*pl)
+	// Slow seeder: the download must last long enough to observe it, since
+	// a finished session drops its connection to other seeds.
+	sd := newSeeder(t, f, seederOpts{slow: 5 * time.Millisecond})
 	tr := newTracker(t, sd.addr)
 	tr.seeders, tr.leechers = 42, 7
 
@@ -215,7 +217,8 @@ func TestTrackerStatsAndPeerList(t *testing.T) {
 				t.Fatalf("seeds/leechers = %d/%d", st.Seeds, st.Leechers)
 			}
 			r.waitComplete(t, 20*time.Second)
-			if st := r.s.Stats(); st.State != StateComplete || st.ETA() != 0 {
+			// Still running after completion → seeding (Phase 6).
+			if st := r.s.Stats(); st.State != StateSeeding || st.ETA() != 0 {
 				t.Fatalf("final stats %+v", st)
 			}
 			return
@@ -270,21 +273,54 @@ func TestStorageErrorStopsSession(t *testing.T) {
 	}
 }
 
-func TestAlreadyCompleteDoesNothing(t *testing.T) {
+func TestAlreadyCompleteWithNoSeedReturnsImmediately(t *testing.T) {
 	f := makeTorrent(t, pl, 2*pl)
 	have := bitfield.New(2)
 	have.SetAll()
 	sd := newSeeder(t, f, seederOpts{})
 	tr := newTracker(t, sd.addr)
-	r := start(t, f.withTracker(t, tr.srv.URL), t.TempDir(), have, testConfig(), false)
-	r.waitComplete(t, time.Second)
-	time.Sleep(200 * time.Millisecond)
-	if sd.accepts.Load() != 0 {
-		t.Error("complete torrent dialed peers")
+	cfg := testConfig()
+	cfg.NoSeed = true
+	r := start(t, f.withTracker(t, tr.srv.URL), t.TempDir(), have, cfg, false)
+	select {
+	case err := <-r.done:
+		r.done <- err
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("NoSeed session with nothing to download kept running")
 	}
-	r.stopAndWait(t)
+	if sd.accepts.Load() != 0 {
+		t.Error("NoSeed complete torrent dialed peers")
+	}
+	if st := r.s.Stats(); st.State != StateComplete {
+		t.Errorf("state = %s", st.State)
+	}
 	if ev := tr.eventLog(); slices.Contains(ev, "completed") {
 		t.Errorf("sent completed for a torrent that started complete: %v", ev)
+	}
+}
+
+func TestSeedDropsOtherSeeds(t *testing.T) {
+	f := makeTorrent(t, pl, 2*pl)
+	have := bitfield.New(2)
+	have.SetAll()
+	sd := newSeeder(t, f, seederOpts{})
+	tr := newTracker(t, sd.addr)
+	cfg := testConfig()
+	cfg.RetryBase = time.Hour
+	r := start(t, f.withTracker(t, tr.srv.URL), t.TempDir(), have, cfg, false)
+	deadline := time.Now().Add(5 * time.Second)
+	for sd.accepts.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("seeding session never dialed (peers behind NAT need that)")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if st := r.s.Stats(); st.Peers != 0 || st.State != StateSeeding {
+		t.Errorf("seed-to-seed connection kept: %+v", st)
 	}
 }
 

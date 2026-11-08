@@ -1,18 +1,21 @@
 // Package torrent runs one torrent: it finds peers through trackers,
-// connects to them, downloads and verifies pieces, and writes them to disk.
+// connects to them, downloads and verifies pieces, writes them to disk, and
+// uploads to other peers (seeding once complete).
 //
 // Concurrency model (see DECISIONS D23): a single event-loop goroutine owns
 // all mutable state — the pieces.Manager, every peer's state, the swarm of
 // known addresses. Helper goroutines (one forwarder per peer connection, dial
 // attempts, the tracker announcer, hash/write workers) never touch that
 // state; they send events to the loop over one channel. The loop never
-// blocks on the network: it uses peer.Conn.TrySend and drops peers whose
-// send queue is full.
+// blocks on the network or disk: it uses peer.Conn.TrySend and drops peers
+// whose send queue is full, and per-peer uploader goroutines do disk reads.
 //
 // Files:
 //
 //	session.go  – Session, Config, Run and the event loop
-//	peers.go    – per-peer state and wire message handling
+//	peers.go    – per-peer state and wire message handling (download side)
+//	upload.go   – serving requests and the choking algorithm
+//	listener.go – one TCP listener routing incoming peers to sessions
 //	swarm.go    – known addresses, dialing, backoff, bans
 //	announce.go – tracker announce loop
 //	stats.go    – Stats/PeerInfo snapshots and the speed meter
@@ -41,12 +44,19 @@ import (
 
 // Config tunes a session. Zero values use the defaults in withDefaults.
 type Config struct {
-	PeerID peerid.ID // required
-	Port   uint16    // port reported to trackers (listener arrives in Phase 6)
+	PeerID peerid.ID // required; must match the Listener's
+	Port   uint16    // port reported to trackers (the Listener's port)
 
-	MaxPeers     int // connected + dialing; default 50
+	MaxPeers     int // connected (incl. incoming) + dialing; default 50
 	DialParallel int // simultaneous dial attempts; default 10
 	RequestQueue int // outstanding block requests per peer; default 32
+	UploadSlots  int // peers unchoked by rate (plus 1 optimistic); default 4
+
+	// NoSeed makes Run return as soon as the download completes instead of
+	// staying online to upload. Default false: seed until stopped.
+	NoSeed bool
+	// UploadsPaused starts the session with uploads paused (see SetUploadsPaused).
+	UploadsPaused bool
 
 	Announcer tracker.Announcer // default &tracker.Client{}
 	Pieces    pieces.Config
@@ -54,10 +64,14 @@ type Config struct {
 	Logger    *slog.Logger // default: discard
 
 	// Timing knobs (tests shrink these).
-	Tick           time.Duration // housekeeping interval; default 1s
-	RequestTimeout time.Duration // drop a peer that sends nothing back for this long; default 60s
-	RetryBase      time.Duration // first reconnect backoff; doubles per failure; default 30s
-	AnnounceRetry  time.Duration // first retry after all trackers failed; default 1m
+	Tick            time.Duration // housekeeping interval; default 1s
+	RequestTimeout  time.Duration // drop a peer that sends nothing back for this long; default 60s
+	RetryBase       time.Duration // first reconnect backoff; doubles per failure; default 30s
+	AnnounceRetry   time.Duration // first retry after all trackers failed; default 1m
+	ChokeInterval   time.Duration // re-evaluate who is unchoked; default 10s
+	OptimisticEvery time.Duration // rotate the optimistic unchoke; default 30s
+
+	banExactAddr bool // tests only: ban address:port, not the whole IP (see swarm)
 }
 
 func (c Config) withDefaults() Config {
@@ -74,10 +88,13 @@ func (c Config) withDefaults() Config {
 	def(&c.MaxPeers, 50)
 	def(&c.DialParallel, 10)
 	def(&c.RequestQueue, 32)
+	def(&c.UploadSlots, 4)
 	defD(&c.Tick, time.Second)
 	defD(&c.RequestTimeout, 60*time.Second)
 	defD(&c.RetryBase, 30*time.Second)
 	defD(&c.AnnounceRetry, time.Minute)
+	defD(&c.ChokeInterval, 10*time.Second)
+	defD(&c.OptimisticEvery, 30*time.Second)
 	if c.Announcer == nil {
 		c.Announcer = &tracker.Client{}
 	}
@@ -91,7 +108,7 @@ func (c Config) withDefaults() Config {
 // ErrStorage wraps fatal disk errors (disk full, permission denied).
 var ErrStorage = errors.New("torrent: storage error")
 
-// Session downloads one torrent.
+// Session downloads and seeds one torrent.
 type Session struct {
 	mi    *metainfo.MetaInfo
 	info  *metainfo.Info
@@ -122,12 +139,17 @@ type Session struct {
 	downRate rate
 	upRate   rate
 	tracker  trackerInfo
+	choke    chokeState
 
 	snapMu sync.Mutex
 	snap   snapshot
 
-	extraMu sync.Mutex
-	extra   []netip.AddrPort // queued by AddPeers
+	extraMu  sync.Mutex
+	extra    []netip.AddrPort // queued by AddPeers
+	incoming []*peer.Conn     // queued by addIncoming (Listener)
+	running  bool             // Run is active; when false, incoming conns are refused
+
+	uploadsPaused atomic.Bool
 }
 
 // New prepares a session. have is the set of pieces already verified on
@@ -149,6 +171,8 @@ func New(mi *metainfo.MetaInfo, st *storage.Storage, have *bitfield.Bitfield, cf
 		tracker:   trackerInfo{seeders: -1, leechers: -1},
 	}
 	s.left.Store(s.m.BytesLeft())
+	s.uploadsPaused.Store(cfg.UploadsPaused)
+	s.swarm.exact = cfg.banExactAddr
 	if s.m.Complete() {
 		s.startedComplete = true
 		s.markComplete()
@@ -160,41 +184,95 @@ func New(mi *metainfo.MetaInfo, st *storage.Storage, have *bitfield.Bitfield, cf
 // Completed is closed when every piece has been verified.
 func (s *Session) Completed() <-chan struct{} { return s.completed }
 
+// InfoHash identifies the torrent.
+func (s *Session) InfoHash() metainfo.Hash { return s.mi.InfoHash }
+
+// SetUploadsPaused chokes every peer (and keeps them choked) while paused.
+// Downloading continues. Safe to call from any goroutine.
+func (s *Session) SetUploadsPaused(paused bool) {
+	s.uploadsPaused.Store(paused)
+	s.wake()
+}
+
+func (s *Session) wake() {
+	select {
+	case s.events <- wakeEvent{}:
+	default: // loop is busy; it also checks on every tick
+	}
+}
+
+// addIncoming queues a connection accepted by the Listener. Never blocks.
+func (s *Session) addIncoming(c *peer.Conn) {
+	s.extraMu.Lock()
+	if !s.running {
+		s.extraMu.Unlock()
+		c.Close()
+		return
+	}
+	s.incoming = append(s.incoming, c)
+	s.extraMu.Unlock()
+	s.wake()
+}
+
 // AddPeers hands the session extra peer addresses (magnet x.pe, DHT later).
 // Safe to call from any goroutine, before or during Run; never blocks.
 func (s *Session) AddPeers(addrs []netip.AddrPort) {
 	s.extraMu.Lock()
 	s.extra = append(s.extra, addrs...)
 	s.extraMu.Unlock()
-	select {
-	case s.events <- wakeEvent{}:
-	default: // loop is busy; it also drains on every tick
+	s.wake()
+}
+
+// drainExtra moves queued addresses into the swarm and registers queued
+// incoming connections (loop goroutine only).
+func (s *Session) drainExtra(ctx context.Context) {
+	s.extraMu.Lock()
+	addrs, conns := s.extra, s.incoming
+	s.extra, s.incoming = nil, nil
+	s.extraMu.Unlock()
+	s.swarm.add(addrs)
+	for _, c := range conns {
+		s.onIncoming(ctx, c)
 	}
 }
 
-// drainExtra moves AddPeers addresses into the swarm (loop goroutine only).
-func (s *Session) drainExtra() {
-	s.extraMu.Lock()
-	addrs := s.extra
-	s.extra = nil
-	s.extraMu.Unlock()
-	s.swarm.add(addrs)
+// onIncoming accepts a peer that connected to us, if there's room.
+func (s *Session) onIncoming(ctx context.Context, c *peer.Conn) {
+	switch {
+	case ctx.Err() != nil,
+		len(s.peers) >= s.cfg.MaxPeers,
+		s.swarm.isBanned(c.Remote),
+		s.peers[c.Remote] != nil:
+		c.Close()
+	default:
+		s.addPeer(ctx, c)
+	}
 }
 
-// Run downloads until ctx is cancelled or a fatal storage error occurs.
-// It keeps running after completion (seeding comes in Phase 6); callers
-// that only want the download can wait on Completed() and cancel ctx.
-// Run returns nil when stopped via ctx.
+// Run downloads, then seeds, until ctx is cancelled or a fatal storage
+// error occurs. With Config.NoSeed it returns as soon as the download is
+// complete. Run returns nil when stopped via ctx or by finishing.
 func (s *Session) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	s.runCtx = ctx
+	s.extraMu.Lock()
+	s.running = true
+	s.extraMu.Unlock()
 
 	s.goHelper(func() { s.announceLoop(ctx) })
 
 	err := s.loop(ctx)
 
 	cancel()
+	s.extraMu.Lock()
+	s.running = false
+	leftover := s.incoming
+	s.incoming = nil
+	s.extraMu.Unlock()
+	for _, c := range leftover {
+		c.Close()
+	}
 	for _, p := range s.peers {
 		p.conn.Close()
 	}
@@ -258,35 +336,49 @@ type (
 		writeErr     error
 		contributors []pieces.PeerKey
 	}
-	wakeEvent struct{} // "AddPeers queued something"
+	uploadRead struct { // an uploader goroutine finished reading a block
+		p    *peerState
+		b    peer.Block
+		data []byte
+		err  error
+	}
+	wakeEvent struct{} // AddPeers/addIncoming queued something, or pause toggled
 )
 
 // loop is the session's single owner goroutine.
 func (s *Session) loop(ctx context.Context) error {
 	tick := time.NewTicker(s.cfg.Tick)
 	defer tick.Stop()
-	s.drainExtra()
+	if s.m.Complete() && s.cfg.NoSeed {
+		return nil // nothing to download and told not to seed
+	}
+	s.drainExtra(ctx)
 	s.maintain(ctx) // dial immediately if we already know peers
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-tick.C:
-			s.drainExtra()
+		case now := <-tick.C:
+			s.drainExtra(ctx)
 			s.downRate.tick()
 			s.upRate.tick()
 			for _, p := range s.peers {
 				p.rate.tick()
+				p.upRate.tick()
 				s.fillRequests(p) // safety net: never leave an unchoked peer idle
 			}
 			s.checkTimeouts()
+			s.maybeRechoke(now)
 			s.maintain(ctx)
 			s.publish()
 		case ev := <-s.events:
 			if err := s.handle(ctx, ev); err != nil {
 				return err
 			}
+		}
+		if s.m.Complete() && s.cfg.NoSeed && s.hashing == 0 {
+			return nil
 		}
 	}
 }
@@ -300,13 +392,18 @@ func (s *Session) handle(ctx context.Context, ev any) error {
 	case closedEvent:
 		s.onPeerClosed(e.p)
 		s.maintain(ctx)
+	case uploadRead:
+		s.onUploadRead(e)
 	case dialResult:
 		s.onDialResult(ctx, e)
 	case trackerEvent:
 		s.onTracker(e)
 		s.maintain(ctx)
 	case wakeEvent:
-		s.drainExtra()
+		s.drainExtra(ctx)
+		if s.uploadsPaused.Load() != s.choke.paused {
+			s.rechoke(time.Now(), false)
+		}
 		s.maintain(ctx)
 	case hashResult:
 		return s.onHashResult(e)
@@ -357,11 +454,14 @@ func (s *Session) onHashResult(r hashResult) error {
 	s.left.Store(s.m.BytesLeft())
 	have := peer.Have(uint32(r.index))
 	for _, p := range s.peers {
-		s.sendTo(p, have)
+		if !p.has.Has(r.index) { // no point telling a peer about what it has
+			s.sendTo(p, have)
+		}
 		s.updateInterest(p)
 	}
 	if s.m.Complete() {
 		s.log.Info("download complete")
+		s.onComplete()
 		// Publish before signalling, so anyone woken by Completed() sees
 		// final stats rather than the previous tick's snapshot.
 		s.publish()
@@ -383,8 +483,10 @@ func (s *Session) blame(contributors []pieces.PeerKey) {
 		if len(contributors) == 1 || strikes >= 3 {
 			s.log.Warn("banning peer for bad data", "peer", addr)
 			s.swarm.ban(addr)
-			if p := s.peers[addr]; p != nil {
-				p.conn.Close()
+			for _, p := range s.peers { // the IP may have several connections
+				if p.addr.Addr() == addr.Addr() {
+					p.conn.Close()
+				}
 			}
 		}
 	}

@@ -13,8 +13,9 @@ type State string
 
 const (
 	StateDownloading State = "downloading"
-	StateStalled     State = "stalled" // incomplete and no connected peers
-	StateComplete    State = "complete"
+	StateStalled     State = "stalled"  // incomplete and no connected peers
+	StateSeeding     State = "seeding"  // complete and still uploading
+	StateComplete    State = "complete" // complete and Run has returned / NoSeed
 )
 
 // Stats is a point-in-time summary, safe to read from any goroutine.
@@ -59,8 +60,12 @@ type PeerInfo struct {
 	Progress     float64 // fraction of pieces the peer has
 	Downloaded   int64
 	DownloadRate int64
+	Uploaded     int64
+	UploadRate   int64
 	Choking      bool // they choke us
 	Interested   bool // we're interested in them
+	AmChoking    bool // we choke them
+	PeerInterest bool // they're interested in us
 	Pending      int  // our outstanding requests
 }
 
@@ -117,16 +122,24 @@ func (s *Session) publish() {
 			Progress:     float64(p.has.Count()) / float64(max(1, s.info.NumPieces())),
 			Downloaded:   p.downloaded,
 			DownloadRate: p.rate.perSecond(s.cfg.Tick),
+			Uploaded:     p.uploaded,
+			UploadRate:   p.upRate.perSecond(s.cfg.Tick),
 			Choking:      p.peerChoking,
 			Interested:   p.amInterested,
+			AmChoking:    p.amChoking,
+			PeerInterest: p.peerInterested,
 			Pending:      len(p.pending),
 		})
 	}
-	sort.Slice(peers, func(i, j int) bool { return peers[i].DownloadRate > peers[j].DownloadRate })
+	sort.Slice(peers, func(i, j int) bool {
+		return peers[i].DownloadRate+peers[i].UploadRate > peers[j].DownloadRate+peers[j].UploadRate
+	})
 
 	switch {
-	case s.m.Complete():
+	case s.m.Complete() && (s.cfg.NoSeed || !s.isRunning()):
 		st.State = StateComplete
+	case s.m.Complete():
+		st.State = StateSeeding
 	case len(s.peers) == 0:
 		st.State = StateStalled
 	default:
@@ -171,4 +184,10 @@ func (r *rate) perSecond(tick time.Duration) int64 {
 		sum += b
 	}
 	return int64(float64(sum) / (float64(r.filled) * tick.Seconds()))
+}
+
+func (s *Session) isRunning() bool {
+	s.extraMu.Lock()
+	defer s.extraMu.Unlock()
+	return s.running
 }

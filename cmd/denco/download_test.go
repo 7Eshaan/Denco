@@ -93,7 +93,7 @@ func TestDownloadCommand(t *testing.T) {
 	dl := filepath.Join(tmp, "new", "dir") // must be created automatically
 
 	var out, errOut bytes.Buffer
-	if code := run([]string{"download", "-dir", dl, tpath}, &out, &errOut); code != 0 {
+	if code := run([]string{"download", "-port", "0", "-dir", dl, tpath}, &out, &errOut); code != 0 {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out.String(), errOut.String())
 	}
 	got, err := os.ReadFile(filepath.Join(dl, "movie.bin"))
@@ -107,7 +107,7 @@ func TestDownloadCommand(t *testing.T) {
 	// Second run without -existing refuses to touch the file...
 	out.Reset()
 	errOut.Reset()
-	if code := run([]string{"download", "-dir", dl, tpath}, &out, &errOut); code != 1 {
+	if code := run([]string{"download", "-port", "0", "-dir", dl, tpath}, &out, &errOut); code != 1 {
 		t.Fatalf("second run exit = %d", code)
 	}
 	if !strings.Contains(errOut.String(), "-existing") {
@@ -115,7 +115,7 @@ func TestDownloadCommand(t *testing.T) {
 	}
 	// ...and with -existing it verifies the data and is done immediately.
 	out.Reset()
-	if code := run([]string{"download", "-existing", "-dir", dl, tpath}, &out, &errOut); code != 0 {
+	if code := run([]string{"download", "-port", "0", "-existing", "-dir", dl, tpath}, &out, &errOut); code != 0 {
 		t.Fatalf("-existing exit = %d: %s", code, errOut.String())
 	}
 	if !strings.Contains(out.String(), "6 / 6 pieces already present") {
@@ -133,5 +133,27 @@ func TestDownloadCommandErrors(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "Phase 10") {
 		t.Errorf("stderr = %q", errOut.String())
+	}
+}
+
+func TestListenFallsBackWhenPortBusy(t *testing.T) {
+	busy, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	port := uint16(busy.Addr().(*net.TCPAddr).Port)
+
+	var errOut bytes.Buffer
+	ln, err := listen(port, peerid.New(), nil, &errOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if ln.Port() == port || ln.Port() == 0 {
+		t.Fatalf("got port %d, want a different free port", ln.Port())
+	}
+	if !strings.Contains(errOut.String(), "unavailable") {
+		t.Errorf("no warning printed: %q", errOut.String())
 	}
 }

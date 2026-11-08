@@ -19,7 +19,7 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 
 | Package | Status | Responsibility |
 |---|---|---|
-| `cmd/denco` | ✅ (dev) | Entry point. One file per command: `inspect.go` (inspect, magnet), `announce.go` (+ shared `loadTarget`/`announceStarted`), `probe.go`, `verify.go`, `download.go` (foreground single-torrent download). Replaced by `internal/cli` in Phase 8. |
+| `cmd/denco` | ✅ (dev) | Entry point. One file per command: `inspect.go` (inspect, magnet), `announce.go` (+ shared `loadTarget`/`announceStarted`), `probe.go`, `verify.go`, `download.go` (foreground single-torrent download/seed with its own listener). Replaced by `internal/cli` in Phase 8. |
 | `internal/bencode` | ✅ | Bencode decode/encode; raw byte spans of dict values (for info hash). |
 | `internal/metainfo` | ✅ | Parse + validate `.torrent`; info hash; file list with offsets; tracker tiers. |
 | `internal/format` | ✅ | Human-readable sizes, speeds, durations for CLI output. |
@@ -30,7 +30,7 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 | `internal/bitfield` | ✅ | Fixed-size piece set in wire format (high bit = piece 0); validated `FromBytes`. |
 | `internal/storage` | ✅ | `Layout` (OS-safe paths, sanitising, collisions, containment) and `Storage` (ReadAt/WriteAt across files, handle LRU, no-overwrite, ReadOnly, safe DeleteFiles). |
 | `internal/pieces` | ✅ | `Check`/`VerifyPiece`/`Recheck` (parallel hashing) and `Manager` (rarest-first, random-first, endgame, memory budget, block ownership). |
-| `internal/torrent` | ✅ (download side) | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/bans, request pipelining, snub detection, hash+write workers, announce loop, Stats/Peers snapshots. Upload/seeding: Phase 6. |
+| `internal/torrent` | ✅ | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/IP bans, request pipelining, snub detection, hash+write workers, announce loop, uploading (validation, cancel, per-peer uploader), tit-for-tat choker + optimistic unchoke, seeding, pause uploads, Stats/Peers. `Listener`: one TCP port routing incoming peers by info hash. |
 | `internal/engine` | ⏳ | Many sessions, limits, queueing, duplicate detection. |
 | `internal/resume` | ⏳ | Persist/restore per-torrent state atomically. |
 | `internal/ipc` | ⏳ | Daemon HTTP API server + client. |
@@ -79,9 +79,14 @@ Dependency direction (lower never imports higher):
   Piece lifecycle: missing → active → pending (hashing) → have / back to missing.
 
 - `torrent.New(mi, storage, have, Config) *Session`; `Run(ctx) error` (blocks
-  until ctx is cancelled or a fatal `ErrStorage`); `Completed() <-chan struct{}`;
-  `AddPeers([]netip.AddrPort)`; `Stats() Stats` (state, sizes, rates, ETA,
-  peers/seeds/leechers, tracker counts/errors); `Peers() []PeerInfo`.
+  until ctx is cancelled, a fatal `ErrStorage`, or — with `NoSeed` — completion);
+  `Completed() <-chan struct{}`; `AddPeers([]netip.AddrPort)`;
+  `SetUploadsPaused(bool)`; `InfoHash()`; `Stats() Stats` (state
+  downloading/stalled/seeding/complete, sizes, up/down rates, ETA,
+  peers/seeds/leechers, tracker counts/errors); `Peers() []PeerInfo` (incl.
+  per-peer up/down, choke/interest both ways).
+- `torrent.Listen(addr, peer.Options, log) *Listener`; `Add/Remove(*Session)`,
+  `Port()`, `Addr()`, `Close()`.
 
 ## Data flow for a downloaded block
 
@@ -104,10 +109,13 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
 - **tracker.List.AnnounceAll**: one goroutine per tier, joined before return.
 - **storage.Storage**: safe for concurrent use; one mutex per torrent (D21).
 - **torrent.Session** (D23): one loop goroutine owns all state. Helpers →
-  `events` channel: per-peer forwarder (+ the Conn's own 2 goroutines), dialers
-  (≤ DialParallel), announcer (1), hash/write workers (process-wide limit
-  NumCPU). Loop sends only via `TrySend`. `Stats()`/`Peers()` read a snapshot
-  under a mutex. `Run` waits for every helper before returning.
+  `events` channel: per-peer forwarder + per-peer uploader (disk reads) (+ the
+  Conn's own 2 goroutines), dialers (≤ DialParallel), announcer (1), hash/write
+  workers (process-wide limit NumCPU). Loop sends only via `TrySend`.
+  `Stats()`/`Peers()` read a snapshot under a mutex. `Run` waits for every
+  helper before returning.
+- **torrent.Listener**: 1 accept goroutine + ≤ 64 handshake goroutines; hands
+  finished handshakes to a session via a mutex-guarded queue + wake event.
 - **pieces.Manager**: not thread-safe; owned by the session goroutine.
   `pieces.Recheck` uses up to 4 worker goroutines internally.
 

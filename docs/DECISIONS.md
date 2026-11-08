@@ -243,3 +243,30 @@ One short entry per decision. Newest at the bottom. Format:
 - **Alternatives:** one shared UDP socket demultiplexing all trackers (fewer
   sockets but more code: routing by transaction ID, lifetime management).
 - **Why:** simplest correct implementation; sockets are cheap and short-lived.
+
+### D26 — Uploading, choking and seeding
+- **Decision:**
+  - **Listener:** one TCP port for all torrents (`torrent.Listener`); reads the
+    peer's handshake, routes by info hash to the registered `Session`
+    (`Add/Remove`), at most 64 handshakes in flight. A session refuses incoming
+    conns while `Run` isn't active.
+  - **Serving:** requests are validated (≤ 32 KiB, inside the piece, piece
+    verified); bad ranges / nonexistent pieces disconnect the peer; requests
+    while choked are ignored (BEP 3). Up to 256 queued per peer. A per-peer
+    uploader goroutine does disk reads; the loop then sends only if the block
+    wasn't cancelled and the peer wasn't choked meanwhile.
+  - **Choker:** every 10s unchoke the 4 interested peers with the best rate —
+    their upload to us while downloading, our upload to them while seeding —
+    plus 1 optimistic unchoke rotated every 30s. Newly interested peers get a
+    free slot immediately. `SetUploadsPaused(true)` chokes everyone.
+  - **Seeding:** `Run` keeps going after completion (state `seeding`) unless
+    `NoSeed`; seeds keep dialing (NATed leechers can't reach us) but drop
+    connections to other seeds. `have` is not sent to peers that already have
+    the piece.
+  - **Bans by IP** (port ignored), since incoming peers use random ports.
+    Tests use an unexported `banExactAddr` because every test peer is 127.0.0.1.
+  - `denco download` seeds only with `-seed` (CLI default: exit when done; the
+    engine default is to seed — the daemon will make this a config option).
+- **Why:** the standard BitTorrent choking strategy (BEP 3, libtorrent's
+  defaults); all choke decisions are a pure function (`chooseUnchoked`) so they
+  can be unit-tested.

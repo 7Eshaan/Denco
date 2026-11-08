@@ -19,7 +19,7 @@ so older references stay valid.
 - [x] **Phase 5 — Single-torrent engine.** Torrent session: tracker loop, peer
       pool, concurrent block downloads from many peers, endgame, reject bad
       pieces, reconnects. End-to-end test with an in-process tracker + seeder.
-- [ ] **Phase 5b — UDP trackers.** BEP 15 client (connect → announce, connection
+- [x] **Phase 5b — UDP trackers.** BEP 15 client (connect → announce, connection
       ID caching, retransmit with 15·2ⁿ s backoff, IPv4/IPv6), plugged into
       `tracker.List` behind the existing `Announcer` interface so `udp://`
       URLs stop being skipped. Tests against an in-process UDP server.

@@ -16,13 +16,20 @@ const maxBackoff = 30 * time.Minute
 type swarm struct {
 	base  time.Duration
 	addrs map[netip.AddrPort]*candidate
+
+	// Bans and strikes are per IP: a peer that connects to us comes from a
+	// random port, so banning one address:port wouldn't keep it out.
+	// exact (tests only) bans the exact address:port instead, because every
+	// test peer shares 127.0.0.1.
+	strikes map[netip.AddrPort]int
+	banned  map[netip.AddrPort]bool
+	exact   bool
 }
 
 type candidate struct {
 	state    candState
 	failures int       // consecutive failed or useless connections
 	nextTry  time.Time // don't dial before this
-	strikes  int       // hash failures this peer contributed to
 }
 
 type candState int
@@ -31,11 +38,23 @@ const (
 	idle candState = iota
 	dialing
 	connected
-	banned
 )
 
 func newSwarm(base time.Duration) *swarm {
-	return &swarm{base: base, addrs: make(map[netip.AddrPort]*candidate)}
+	return &swarm{
+		base:    base,
+		addrs:   make(map[netip.AddrPort]*candidate),
+		strikes: make(map[netip.AddrPort]int),
+		banned:  make(map[netip.AddrPort]bool),
+	}
+}
+
+// banKey is the IP (port zeroed), or the full address in exact mode.
+func (w *swarm) banKey(a netip.AddrPort) netip.AddrPort {
+	if w.exact {
+		return a
+	}
+	return netip.AddrPortFrom(a.Addr(), 0)
 }
 
 // add records addresses (from trackers, magnet links, ...). Known ones are
@@ -59,7 +78,7 @@ func (w *swarm) next(n int, now time.Time) []netip.AddrPort {
 		if len(out) >= n {
 			break
 		}
-		if c.state == idle && !now.Before(c.nextTry) {
+		if c.state == idle && !now.Before(c.nextTry) && !w.isBanned(a) {
 			c.state = dialing
 			out = append(out, a)
 		}
@@ -79,27 +98,17 @@ func (w *swarm) get(a netip.AddrPort) *candidate {
 // dialFailed schedules a retry with exponential backoff.
 func (w *swarm) dialFailed(a netip.AddrPort, now time.Time) {
 	c := w.get(a)
-	if c.state == banned {
-		return
-	}
 	c.state = idle
 	c.failures++
 	c.nextTry = now.Add(w.backoff(c.failures))
 }
 
-func (w *swarm) connected(a netip.AddrPort) {
-	if c := w.get(a); c.state != banned {
-		c.state = connected
-	}
-}
+func (w *swarm) connected(a netip.AddrPort) { w.get(a).state = connected }
 
 // disconnected makes a peer dialable again. A peer that gave us data is
 // retried soon with its failure count reset; a useless one backs off.
 func (w *swarm) disconnected(a netip.AddrPort, useful bool) {
 	c := w.get(a)
-	if c.state == banned {
-		return
-	}
 	c.state = idle
 	if useful {
 		c.failures = 0
@@ -111,17 +120,13 @@ func (w *swarm) disconnected(a netip.AddrPort, useful bool) {
 }
 
 func (w *swarm) strike(a netip.AddrPort) int {
-	c := w.get(a)
-	c.strikes++
-	return c.strikes
+	w.strikes[w.banKey(a)]++
+	return w.strikes[w.banKey(a)]
 }
 
-func (w *swarm) ban(a netip.AddrPort) { w.get(a).state = banned }
+func (w *swarm) ban(a netip.AddrPort) { w.banned[w.banKey(a)] = true }
 
-func (w *swarm) isBanned(a netip.AddrPort) bool {
-	c, ok := w.addrs[a]
-	return ok && c.state == banned
-}
+func (w *swarm) isBanned(a netip.AddrPort) bool { return w.banned[w.banKey(a)] }
 
 func (w *swarm) backoff(failures int) time.Duration {
 	d := w.base
@@ -143,10 +148,11 @@ func (w *swarm) count(st candState) int {
 
 // --- dialing (session side) --------------------------------------------------------
 
-// maintain opens new connections while we're below the peer limit.
-// A finished download stops dialing (seeding connections: Phase 6).
+// maintain opens new connections while we're below the peer limit. Seeds
+// keep dialing too (peers behind NAT can't connect to us), but connections
+// to other seeds are dropped as soon as we see their bitfield.
 func (s *Session) maintain(ctx context.Context) {
-	if s.m.Complete() || ctx.Err() != nil {
+	if ctx.Err() != nil || (s.m.Complete() && s.cfg.NoSeed) {
 		return
 	}
 	dialing := s.swarm.count(dialing)
@@ -171,9 +177,9 @@ func (s *Session) onDialResult(ctx context.Context, r dialResult) {
 		s.swarm.dialFailed(r.addr, time.Now())
 		return
 	}
-	if s.swarm.isBanned(r.addr) || s.peers[r.addr] != nil || s.m.Complete() {
+	if s.swarm.isBanned(r.addr) || s.peers[r.addr] != nil || len(s.peers) >= s.cfg.MaxPeers {
 		r.conn.Close()
-		if !s.swarm.isBanned(r.addr) && s.peers[r.addr] == nil {
+		if s.peers[r.addr] == nil {
 			s.swarm.disconnected(r.addr, false)
 		}
 		return

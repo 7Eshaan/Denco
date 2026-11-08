@@ -15,27 +15,30 @@ import (
 	"github.com/7Eshaan/Denco/internal/format"
 	"github.com/7Eshaan/Denco/internal/magnet"
 	"github.com/7Eshaan/Denco/internal/metainfo"
+	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/peerid"
 	"github.com/7Eshaan/Denco/internal/pieces"
 	"github.com/7Eshaan/Denco/internal/storage"
 	"github.com/7Eshaan/Denco/internal/torrent"
 )
 
-// cmdDownload is a foreground, single-torrent downloader: the first time all
-// the engine pieces run together. The daemon (Phase 8) will replace it as the
-// normal way to download, but it stays useful for testing.
+// cmdDownload is a foreground, single-torrent client: it listens for peers,
+// downloads, and with -seed keeps uploading afterwards. The daemon (Phase 8)
+// will replace it as the normal way to download, but it stays useful for
+// testing.
 func cmdDownload(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("download", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("dir", ".", "download directory")
-	port := fs.Uint("port", 6881, "port reported to trackers")
+	port := fs.Uint("port", 6881, "TCP port to accept peers on (0 = random)")
 	existing := fs.Bool("existing", false, "reuse data already in -dir (hash-checked first)")
+	seed := fs.Bool("seed", false, "keep seeding after the download completes (until Ctrl-C)")
 	verbose := fs.Bool("v", false, "log peer and tracker events")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 || *port > 65535 {
-		fmt.Fprintln(stderr, "usage: denco download [-dir DIR] [-existing] [-v] <file.torrent>")
+		fmt.Fprintln(stderr, "usage: denco download [-dir DIR] [-port N] [-seed] [-existing] [-v] <file.torrent>")
 		return 2
 	}
 	if magnet.IsMagnet(fs.Arg(0)) {
@@ -87,38 +90,70 @@ func cmdDownload(args []string, stdout, stderr io.Writer) int {
 	if *verbose {
 		logger = slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
-	s := torrent.New(mi, st, haveBits, torrent.Config{PeerID: peerid.New(), Port: uint16(*port), Logger: logger})
+	id := peerid.New()
+	ln, err := listen(uint16(*port), id, logger, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "denco: %v\n", err)
+		return 1
+	}
+	defer ln.Close()
+
+	s := torrent.New(mi, st, haveBits, torrent.Config{
+		PeerID: id,
+		Port:   ln.Port(),
+		NoSeed: !*seed,
+		Logger: logger,
+	})
+	ln.Add(s)
+	defer ln.Remove(s)
 
 	runErr := make(chan error, 1)
 	go func() { runErr <- s.Run(ctx) }()
 
+	completed := s.Completed()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-s.Completed():
-			stop() // ends Run; it announces "completed"/"stopped" on the way out
-			if err := <-runErr; err != nil {
-				fmt.Fprintf(stderr, "\ndenco: %v\n", err)
-				return 1
-			}
+		case <-completed:
+			completed = nil // only once
 			if err := st.Sync(); err != nil {
 				fmt.Fprintf(stderr, "\ndenco: flushing to disk: %v\n", err)
 				return 1
 			}
 			fmt.Fprintf(stdout, "\nDone: %s downloaded to %s\n", mi.Info.Name, layout.Root)
-			return 0
+			if *seed {
+				fmt.Fprintf(stdout, "Seeding on port %d — press Ctrl-C to stop.\n", ln.Port())
+			}
+			// Without -seed, Run returns by itself (NoSeed) after announcing.
 		case err := <-runErr:
 			if err != nil {
 				fmt.Fprintf(stderr, "\ndenco: %v\n", err)
 				return 1
 			}
-			fmt.Fprintln(stdout, "\nStopped. (Resume support arrives in Phase 7; for now, rerun with -existing.)")
+			st := s.Stats()
+			if st.BytesLeft > 0 {
+				fmt.Fprintln(stdout, "\nStopped. (Resume support arrives in Phase 7; for now, rerun with -existing.)")
+			} else if *seed {
+				fmt.Fprintf(stdout, "\nStopped seeding. Uploaded %s this session.\n", format.Bytes(st.Uploaded))
+			}
 			return 0
 		case <-ticker.C:
 			fmt.Fprintln(stdout, progressLine(s.Stats()))
 		}
 	}
+}
+
+// listen opens the peer port, falling back to a random free port if the
+// requested one is taken (e.g. another client is running).
+func listen(port uint16, id peerid.ID, log *slog.Logger, stderr io.Writer) (*torrent.Listener, error) {
+	opts := peer.Options{PeerID: id}
+	ln, err := torrent.Listen(fmt.Sprintf(":%d", port), opts, log)
+	if err == nil || port == 0 {
+		return ln, err
+	}
+	fmt.Fprintf(stderr, "denco: port %d unavailable (%v); using a random port\n", port, err)
+	return torrent.Listen(":0", opts, log)
 }
 
 // initialHave hash-checks existing data when asked to reuse it.
@@ -141,9 +176,13 @@ func progressLine(st torrent.Stats) string {
 	if st.TrackerSeeders >= 0 {
 		seeds = fmt.Sprintf(" (swarm: %d seeds, %d leechers)", st.TrackerSeeders, max(st.TrackerLeechers, 0))
 	}
-	line := fmt.Sprintf("%-11s %6s  %9s / %-9s  ↓ %-11s ETA %-7s  peers %d (%d seeds)%s",
+	eta := "ETA " + format.Duration(st.ETA())
+	if st.BytesLeft == 0 {
+		eta = "up " + format.Bytes(st.Uploaded)
+	}
+	line := fmt.Sprintf("%-11s %6s  %9s / %-9s  ↓ %-11s ↑ %-11s %-12s peers %d (%d seeds)%s",
 		st.State, format.Percent(done, st.TotalBytes), format.Bytes(done), format.Bytes(st.TotalBytes),
-		format.Speed(st.DownloadRate), format.Duration(st.ETA()), st.Peers, st.Seeds, seeds)
+		format.Speed(st.DownloadRate), format.Speed(st.UploadRate), eta, st.Peers, st.Seeds, seeds)
 	if st.TrackerError != "" && st.Peers == 0 {
 		line += "\n  trackers failing: " + firstLine(st.TrackerError)
 	}

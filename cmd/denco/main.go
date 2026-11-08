@@ -20,7 +20,7 @@ Usage:
   denco announce [-port N] <torrent|magnet> ask the trackers for peers
   denco probe [-n N] <torrent|magnet>       connect to peers and show what they have
   denco verify [-dir DIR] <file.torrent>    hash-check data already on disk (read-only)
-  denco download [-dir DIR] <file.torrent>  download a torrent in the foreground
+  denco download [-dir DIR] [-seed] <file.torrent>  download (and optionally seed) in the foreground
   denco help                               show this help
 `
 

@@ -81,10 +81,11 @@ func (f *fixture) withTracker(t *testing.T, trackerURL string) *metainfo.MetaInf
 // --- fake seeder -----------------------------------------------------------------
 
 type seederOpts struct {
-	pieces       []int // pieces it has; nil = all
-	corrupt      bool  // flip a byte in every block it sends
-	dropAfter    int   // close each connection after this many blocks (0 = never)
-	neverRespond bool  // unchoke but ignore requests
+	pieces       []int         // pieces it has; nil = all
+	corrupt      bool          // flip a byte in every block it sends
+	dropAfter    int           // close each connection after this many blocks (0 = never)
+	neverRespond bool          // unchoke but ignore requests
+	slow         time.Duration // pause before sending each block
 }
 
 type seeder struct {
@@ -166,6 +167,9 @@ func (s *seeder) handle(nc net.Conn) {
 			if s.opts.corrupt {
 				block[0] ^= 0xff
 			}
+			if s.opts.slow > 0 {
+				time.Sleep(s.opts.slow)
+			}
 			c.Send(peer.Piece(b.Index, b.Begin, block))
 			s.blocksSent.Add(1)
 			sent++
@@ -232,6 +236,7 @@ func testConfig() Config {
 		RequestTimeout: 2 * time.Second,
 		RetryBase:      50 * time.Millisecond,
 		AnnounceRetry:  50 * time.Millisecond,
+		banExactAddr:   true, // all test peers share 127.0.0.1
 	}
 }
 
