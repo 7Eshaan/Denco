@@ -8,7 +8,7 @@ so older references stay valid.
 - [x] **Phase 1 — Foundations.** Module scaffold, `bencode` (decode/encode,
       raw spans), `metainfo` (.torrent parse + validate, info hash, file layout,
       path safety), `denco inspect <file>` dev command.
-- [ ] **Phase 2 — Discovery.** `magnet` URI parser (xt/dn/tr, hex + base32),
+- [x] **Phase 2 — Discovery.** `magnet` URI parser (xt/dn/tr, hex + base32),
       HTTP/HTTPS `tracker` client (announce, compact + dict peers, failure
       reasons, interval), tracker tests against `httptest`.
 - [ ] **Phase 3 — Peer wire protocol.** Handshake, message framing/codec,

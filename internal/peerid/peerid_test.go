@@ -20,3 +20,25 @@ func TestNew(t *testing.T) {
 		}
 	}
 }
+
+func TestClientName(t *testing.T) {
+	mk := func(s string) ID {
+		var id ID
+		copy(id[:], s)
+		return id
+	}
+	tests := map[string]string{
+		"-qB4630-abcdefghijkl": "qBittorrent 4.6.3.0",
+		"-TR4060-abcdefghijkl": "Transmission 4.0.6.0",
+		"-ZZ0100-abcdefghijkl": "unknown (ZZ) 0.1.0.0",
+		"M7-2-0--abcdefghijkl": "unknown",
+	}
+	for in, want := range tests {
+		if got := ClientName(mk(in)); got != want {
+			t.Errorf("ClientName(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := ClientName(New()); got != "Denco 0.0.0.1" {
+		t.Errorf("our own ID = %q", got)
+	}
+}

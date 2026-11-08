@@ -93,11 +93,15 @@ One short entry per decision. Newest at the bottom. Format:
 - **Why:** stdlib, comparable (usable as a map key for dedup), cheap, and
   handles IPv4 + IPv6 uniformly.
 
-### D13 — Peer ID format `-DE0001-` + 12 random alphanumerics
+### D13 — Peer ID format `-DN0001-` + 12 random alphanumerics
 - **Decision:** Azureus-style ID, regenerated on each daemon start.
 - **Why:** the convention other clients and trackers recognise; random per
   session avoids long-term tracking. Some private trackers whitelist client
   IDs — if that matters later, this is the one place to change.
+- **Amended in Phase 3:** originally `-DE…`, but `DE` is Deluge's code, so
+  peers and trackers would have taken Denco for Deluge (misleading, and
+  impersonating a client can get you banned from private trackers). Changed to
+  `DN`, which isn't in the client-code lists I know of.
 
 ### D14 — Announce to all tiers concurrently
 - **Decision:** `tracker.List.AnnounceAll` runs every tier in parallel; inside a
@@ -125,3 +129,31 @@ One short entry per decision. Newest at the bottom. Format:
 - **Why:** most public torrents list mainly `udp://` trackers; without them
   peer discovery is poor until DHT exists. Stdlib-only (`net.UDPConn`), small.
   Placed after Phase 5 so it can be tested with real downloads end to end.
+
+### D17 — One `peer.Conn` = two goroutines + channels
+- **Decision:** after the handshake, each connection runs a reader goroutine
+  (delivers messages on `Incoming()`, a buffered channel) and a writer
+  goroutine (drains a buffered queue fed by `Send()`, batches writes into one
+  flush, emits keep-alives after 90s idle). Any failure or `Close()` tears the
+  connection down exactly once (`sync.Once`); `Done()` and `Err()` report it.
+  Peers silent for 2 minutes are dropped (`ErrIdle`).
+- **Alternatives:** a single goroutine with `select` on a net.Conn (not
+  possible in Go — reads block); callbacks instead of channels.
+- **Why:** the idiomatic Go shape; the session (Phase 5) can `select` over many
+  peers' channels plus timers without ever blocking on a socket. Back-pressure
+  is natural: if the session stops reading, the reader stops reading the socket.
+
+### D18 — Peer wire codec is permissive about unknown messages
+- **Decision:** `ReadMessage` decodes any ID (unknown ones like BEP 6 fast
+  extension pass through for the session to ignore); typed parsers validate
+  payload sizes strictly. Incoming messages capped at 2 MiB; blocks are 16 KiB.
+- **Why:** dropping peers for messages we merely don't implement would cost
+  us good peers; strict payload checks still catch malformed input.
+
+### D19 — Accept reads the peer's handshake before replying
+- **Decision:** for incoming connections we read the peer's handshake first,
+  check the info hash against the torrents we serve (`known` callback), then
+  reply. Self-connections (our own peer ID) are rejected in both directions.
+- **Why:** one listening port serves all torrents, so we must learn which
+  torrent the peer wants before we can answer; trackers often return our own
+  address, so self-connection detection saves a wasted slot.

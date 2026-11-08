@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
@@ -34,60 +35,87 @@ func cmdAnnounce(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	tiers, req, err := announceTarget(fs.Arg(0))
+	t, err := loadTarget(fs.Arg(0))
 	if err != nil {
 		fmt.Fprintf(stderr, "denco: %v\n", err)
 		return 1
 	}
-	if len(tiers) == 0 {
+	if len(t.tiers) == 0 {
 		fmt.Fprintln(stderr, "denco: no trackers in this torrent (DHT support comes in Phase 11)")
 		return 1
 	}
-	req.PeerID = peerid.New()
-	req.Port = uint16(*port)
-	req.Key = rand.Uint32()
-	req.Event = tracker.EventStarted
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stopSignals()
 
-	list := tracker.NewList(tiers)
-	client := &tracker.Client{}
-	results := list.AnnounceAll(ctx, client, req)
+	results, stopAnnounce := announceStarted(ctx, t, peerid.New(), uint16(*port))
+	defer stopAnnounce()
 
 	ok := printResults(stdout, results, *showPeers)
-
-	// Politely deregister; short timeout, errors ignored.
-	req.Event = tracker.EventStopped
-	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	for _, r := range results {
-		if r.Err == nil {
-			client.Announce(sctx, r.URL, req)
-		}
-	}
 	if !ok {
 		return 1
 	}
 	return 0
 }
 
-// announceTarget turns a CLI argument into tracker tiers and a base request.
-func announceTarget(arg string) ([][]string, tracker.Request, error) {
+// target is what the dev commands need to know about a torrent or magnet.
+type target struct {
+	tiers     [][]string
+	req       tracker.Request  // InfoHash and Left filled in
+	numPieces int              // 0 if unknown (magnet before metadata)
+	peers     []netip.AddrPort // peers given directly (magnet x.pe)
+}
+
+// loadTarget turns a CLI argument (.torrent path or magnet URI) into a target.
+func loadTarget(arg string) (*target, error) {
 	if magnet.IsMagnet(arg) {
 		m, err := magnet.Parse(arg)
 		if err != nil {
-			return nil, tracker.Request{}, err
+			return nil, err
 		}
 		// Size unknown before metadata: report 1 byte left so trackers treat
 		// us as a leecher and return seeders.
-		return tracker.TiersFromMagnet(m), tracker.Request{InfoHash: m.InfoHash, Left: 1}, nil
+		return &target{
+			tiers: tracker.TiersFromMagnet(m),
+			req:   tracker.Request{InfoHash: m.InfoHash, Left: 1},
+			peers: m.Peers,
+		}, nil
 	}
 	mi, err := metainfo.Load(arg)
 	if err != nil {
-		return nil, tracker.Request{}, err
+		return nil, err
 	}
-	return tracker.TiersFromMetaInfo(mi), tracker.Request{InfoHash: mi.InfoHash, Left: mi.Info.TotalLength}, nil
+	return &target{
+		tiers:     tracker.TiersFromMetaInfo(mi),
+		req:       tracker.Request{InfoHash: mi.InfoHash, Left: mi.Info.TotalLength},
+		numPieces: mi.Info.NumPieces(),
+	}, nil
+}
+
+// announceStarted sends "started" to all tiers and returns the results.
+// The caller must call the returned stop func to send "stopped" afterwards.
+func announceStarted(ctx context.Context, t *target, id peerid.ID, port uint16) ([]tracker.Result, func()) {
+	req := t.req
+	req.PeerID = id
+	req.Port = port
+	req.Key = rand.Uint32()
+	req.Event = tracker.EventStarted
+
+	client := &tracker.Client{}
+	results := tracker.NewList(t.tiers).AnnounceAll(ctx, client, req)
+
+	stop := func() {
+		// Politely deregister; short timeout, errors ignored.
+		req.Event = tracker.EventStopped
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for _, r := range results {
+			if r.Err == nil {
+				client.Announce(sctx, r.URL, req)
+			}
+		}
+	}
+	return results, stop
 }
 
 // printResults prints one block per tier; returns true if any tier succeeded.

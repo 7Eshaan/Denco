@@ -19,15 +19,15 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 
 | Package | Status | Responsibility |
 |---|---|---|
-| `cmd/denco` | ✅ (dev) | Entry point. One file per command: `inspect.go` (inspect, magnet), `announce.go`. Replaced by `internal/cli` in Phase 8. |
+| `cmd/denco` | ✅ (dev) | Entry point. One file per command: `inspect.go` (inspect, magnet), `announce.go` (+ shared `loadTarget`/`announceStarted`), `probe.go`. Replaced by `internal/cli` in Phase 8. |
 | `internal/bencode` | ✅ | Bencode decode/encode; raw byte spans of dict values (for info hash). |
 | `internal/metainfo` | ✅ | Parse + validate `.torrent`; info hash; file list with offsets; tracker tiers. |
 | `internal/format` | ✅ | Human-readable sizes, speeds, durations for CLI output. |
 | `internal/magnet` | ✅ | Parse/print magnet URIs (xt hex+base32, dn, tr, x.pe). |
-| `internal/peerid` | ✅ | Generate our 20-byte peer ID (`-DE0001-…`). |
+| `internal/peerid` | ✅ | Generate our 20-byte peer ID (`-DN0001-…`); `ClientName` decodes other clients' IDs. |
 | `internal/tracker` | ✅ | `Client.Announce` (one HTTP/HTTPS announce) and `List` (BEP 12 tiers, concurrent, fallback + promote). UDP client (BEP 15) ⏳ Phase 5b. |
-| `internal/peer` | ⏳ | Peer wire protocol: handshake, messages, connection loops. |
-| `internal/bitfield` | ⏳ | Compact piece-set type shared by peer/pieces/resume. |
+| `internal/peer` | ✅ | Peer wire protocol: `Handshake`, `Message` codec + typed constructors/parsers, `Conn` (Dial/Accept, reader + writer goroutines, keep-alive, idle timeout). |
+| `internal/bitfield` | ✅ | Fixed-size piece set in wire format (high bit = piece 0); validated `FromBytes`. |
 | `internal/storage` | ⏳ | Map pieces onto files, safe paths, read/write blocks. |
 | `internal/pieces` | ⏳ | Piece state, rarest-first picker, block bookkeeping, verification. |
 | `internal/torrent` | ⏳ | One torrent session: ties tracker + peers + pieces + storage. |
@@ -64,6 +64,20 @@ Dependency direction (lower never imports higher):
 - `tracker.Announcer` interface — one announce; `*Client` implements it, tests
   use fakes. `List.AnnounceAll(ctx, announcer, req) []Result` (one per tier).
 - Peers everywhere are `netip.AddrPort` (D12).
+- `peer.Conn{Remote, Peer Handshake, Outgoing}` with `Incoming() <-chan *Message`,
+  `Send(*Message) error`, `Done()`, `Err()`, `Close()`, `BytesRead/Written()`.
+  `peer.Dial(ctx, addr, infoHash, Options)`, `peer.Accept(netConn, known, Options)`.
+- `peer.Message{ID, Payload}`; nil = keep-alive. `peer.Block{Index, Begin, Length}`.
+- `bitfield.Bitfield` — `New(n)`, `FromBytes(b, n)`, `Has/Set/Clear/SetAll/Count/Full/Bytes/Clone`.
+
+## Concurrency model
+
+- **peer.Conn** (D17): 2 goroutines per connection. Reader → `Incoming()`
+  (buffered 64, closed on shutdown). `Send()` → buffered queue → writer
+  (batches, flushes, keep-alive every 90s idle). First error or `Close()`
+  shuts down once; peer silent > 2 min → `ErrIdle`. Handshake bounded by
+  10s and by the caller's context.
+- **tracker.List.AnnounceAll**: one goroutine per tier, joined before return.
 
 ## On-disk formats
 
@@ -76,3 +90,7 @@ Dependency direction (lower never imports higher):
   [&trackerid=]`. Raw-byte params percent-encoded byte-wise (D15).
 - **Tracker response (incoming):** bencoded dict; `peers` as compact string
   (6 bytes/peer) or list of dicts; optional `peers6` (18 bytes/peer).
+- **Peer handshake:** `<19>"BitTorrent protocol"<8 reserved><20 info hash><20 peer id>`
+  (68 bytes). Reserved bits we use: `[5]&0x10` extensions (BEP 10), `[7]&0x01` DHT.
+- **Peer messages:** `<uint32 BE length><uint8 id><payload>`; length 0 =
+  keep-alive. IDs 0–9 (BEP 3), 20 extended (BEP 10). Max 2 MiB incoming.

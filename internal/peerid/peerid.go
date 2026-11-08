@@ -1,6 +1,6 @@
 // Package peerid generates the 20-byte peer ID that identifies this client to
-// trackers and peers. It uses the common Azureus style: "-DE0001-" followed by
-// 12 random alphanumeric characters, where "DE" is Denco's client code and
+// trackers and peers. It uses the common Azureus style: "-DN0001-" followed by
+// 12 random alphanumeric characters, where "DN" is Denco's client code and
 // "0001" the version (0.0.0.1).
 package peerid
 
@@ -10,7 +10,7 @@ import (
 )
 
 // Prefix identifies Denco and its version to other clients.
-const Prefix = "-DE0001-"
+const Prefix = "-DN0001-"
 
 // ID is a 20-byte peer ID.
 type ID [20]byte
