@@ -414,7 +414,8 @@ One short entry per decision. Newest at the bottom. Format:
   false` gives the engine a throwaway state dir deleted at exit, so nothing
   persists (the engine itself stays unaware). `enable_dht` (default true,
   as in the spec) and `enable_pex` (default false) are accepted now; the
-  daemon prints a note that they do nothing yet.
+  daemon prints a note that they do nothing yet. *Amended in Phase 10b:*
+  `enable_pex` now works and defaults to **true** (D41).
 - **Alternatives:** lenient parsing (warn on unknown keys); rewriting the
   whole file on `set` (loses comments); JSON.
 - **Why:** a typo like `max_actve_downloads` silently doing nothing is the
@@ -525,6 +526,10 @@ One short entry per decision. Newest at the bottom. Format:
     leaks nothing). A peer with no metadata but with PEX — typically another
     magnet user — is kept until its PEX message arrives (≤ RequestTimeout).
     PEX peers join the fetcher's list, which seeds the download (D38).
+  - **Default on** (user's choice, 2026-11-08), like qBittorrent,
+    Transmission and libtorrent; the spec's example showed `false`, but PEX
+    is safe to leave on because private torrents never use it. Turn off
+    with `enable_pex: false`.
   - `denco status` shows "Peer exchange: on/off". The standalone
     `denco download` tool doesn't speak extensions, so no PEX there.
 - **Alternatives:** one global round every minute (first version: a magnet

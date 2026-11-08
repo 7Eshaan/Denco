@@ -87,7 +87,6 @@ func TestDaemonUsesConfigAndFlagsOverride(t *testing.T) {
 		"max_connections_per_torrent: 30",
 		"upload_limit: 300K",
 		"download_limit: 5M   # overridden by the flag below",
-		"enable_pex: true",
 		"listen_port: 0",
 	}, "\n")), 0o644)
 

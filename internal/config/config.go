@@ -52,6 +52,7 @@ func Defaults(home string) Config {
 		MaxActiveDownloads:       5,
 		MaxConnectionsPerTorrent: 50,
 		EnableDHT:                true,
+		EnablePEX:                true, // like mainstream clients; private torrents never use it
 		ListenPort:               6881,
 		ResumeEnabled:            true,
 		ResumeDir:                filepath.Join(home, "resume"),

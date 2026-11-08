@@ -31,9 +31,6 @@ shared helper then).
 - Linux/Windows: compiled + vetted, tests only *run* on macOS.
 
 ## Open questions for the user
-- `enable_pex` defaults to **false** (as in the spec's example config).
-  Mainstream clients default to on; it's safe (never for private
-  torrents). Switch the default to true?
 - Daemon start: explicit `denco daemon` (my recommendation; not explicitly
   confirmed). Auto-start from `denco add` is possible later.
 - UPnP/NAT-PMP in Phase 12, MSE encryption out of scope — OK?
@@ -60,6 +57,9 @@ shared helper then).
   seconds. B and C byte-identical to A; `denco status` shows
   "Peer exchange: on"; all three stopped cleanly
 - real config dir (`~/Library/Application Support/denco`) untouched
+- after switching `enable_pex` to default on: full `-race` run passes again;
+  config test checks the default and that `enable_pex: off` still disables
+  it; the daemon test sees "Peer exchange: on" with no setting in its file
 - `go vet` (darwin, linux, windows) clean · gofmt clean
 - cross-compile linux/windows/darwin × amd64/arm64 — all build
 - coverage: peer 95%, torrent 92%, metadata 91%, engine 88%
@@ -141,4 +141,5 @@ shared helper then).
   ≤ 1 message per half interval and ≤ 50 addresses from a peer, PEX-grown
   swarm capped at 2000; metadata fetcher receives PEX (keeps PEX-only
   peers); `enable_pex` plumbed daemon → engine → session/fetcher;
-  "Peer exchange" row in `denco status`. D41.
+  "Peer exchange" row in `denco status`; `enable_pex` defaults to true
+  (user's choice). D41.

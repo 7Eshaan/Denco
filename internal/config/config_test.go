@@ -22,7 +22,7 @@ func TestDefaults(t *testing.T) {
 	home := t.TempDir()
 	c := Defaults(home)
 	if c.MaxActiveDownloads != 5 || c.MaxConnectionsPerTorrent != 50 || c.ListenPort != 6881 ||
-		c.DownloadLimit != 0 || c.UploadLimit != 0 || !c.EnableDHT || c.EnablePEX || !c.ResumeEnabled {
+		c.DownloadLimit != 0 || c.UploadLimit != 0 || !c.EnableDHT || !c.EnablePEX || !c.ResumeEnabled {
 		t.Fatalf("defaults = %+v", c)
 	}
 	if c.ResumeDir != filepath.Join(home, "resume") || !filepath.IsAbs(c.DownloadDir) {
@@ -47,7 +47,7 @@ func TestParse(t *testing.T) {
 		"download_limit: 2M",
 		"upload_limit: 500 KB/s",
 		"enable_dht: no",
-		"enable_pex: true",
+		"enable_pex: off",
 		"listen_port: 51413",
 		"resume_enabled: off\r", // Windows line ending
 		`resume_dir: "` + dl + ` #1"`,
@@ -64,7 +64,7 @@ func TestParse(t *testing.T) {
 		DownloadLimit:            2_000_000,
 		UploadLimit:              500_000,
 		EnableDHT:                false,
-		EnablePEX:                true,
+		EnablePEX:                false,
 		ListenPort:               51413,
 		ResumeEnabled:            false,
 		ResumeDir:                dl + " #1",
