@@ -25,7 +25,10 @@
 //	POST /v1/torrents/{ref}/pause    → engine.Torrent
 //	POST /v1/torrents/{ref}/resume   → engine.Torrent
 //	POST /v1/torrents/{ref}/remove   RemoveRequest → engine.Removed
+//	POST /v1/torrents/{ref}/uploads  UploadsRequest → engine.Torrent
+//	POST /v1/torrents/{ref}/seed     SeedRequest → engine.Torrent
 //	POST /v1/limits                  LimitsRequest → Status
+//	POST /v1/seed-limits             SeedLimitsRequest → Status
 //	POST /v1/shutdown                → {}
 //
 // {ref} is a torrent ID or an info hash prefix. Errors are
@@ -40,6 +43,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/7Eshaan/Denco/internal/engine"
 )
@@ -136,6 +140,22 @@ type RemoveRequest struct {
 	DeleteFiles bool `json:"delete_files"`
 }
 
+// UploadsRequest pauses or resumes one torrent's uploads.
+type UploadsRequest struct {
+	Paused bool `json:"paused"`
+}
+
+// SeedRequest sets one torrent's seeding mode: "on", "off" or "default".
+type SeedRequest struct {
+	Mode string `json:"mode"`
+}
+
+// SeedLimitsRequest sets the global seeding limits (0 = no limit).
+type SeedLimitsRequest struct {
+	Ratio float64       `json:"ratio"`
+	Time  time.Duration `json:"time"` // nanoseconds, like every duration in the API
+}
+
 // LimitsRequest sets the total speed limits (bytes/s, 0 = unlimited).
 type LimitsRequest struct {
 	Download int64 `json:"download"`
@@ -157,6 +177,7 @@ const (
 	CodeInvalid   = "invalid"
 	CodeBusy      = "busy"
 	CodeNoMeta    = "no_metadata"
+	CodeSeedLimit = "seed_limit"
 	CodeAuth      = "unauthorized"
 	CodeInternal  = "internal"
 )

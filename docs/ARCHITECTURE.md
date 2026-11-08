@@ -35,7 +35,7 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 | `internal/storage` | ✅ | `Layout` (OS-safe paths, sanitising, collisions, containment) and `Storage` (ReadAt/WriteAt across files, handle LRU, no-overwrite, ReadOnly, safe DeleteFiles). |
 | `internal/pieces` | ✅ | `Check`/`VerifyPiece`/`Recheck` (parallel hashing), `Manager` (rarest-first, random-first, endgame, memory budget, block ownership, wanted-pieces mask), `Wanted`/`SkipSet` (file selection → pieces, D44). |
 | `internal/torrent` | ✅ | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/IP bans, request pipelining, snub detection, hash+write workers, announce loop, uploading (validation, cancel, per-peer uploader), tit-for-tat choker + optimistic unchoke, seeding, pause uploads, peer exchange (`pex.go`, D41), file selection (`SetWanted`, partial seeds, D44), Stats/Peers. `Listener`: one TCP port routing incoming peers by info hash. |
-| `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (magnet: fetch metadata → open storage → restore/recheck → Session + Saver → final save), Add/AddMagnet/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview, `SetLimits`, `SetFilesWanted` (D44). `commands.go`, `view.go`, `magnet.go`. |
+| `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (magnet: fetch metadata → open storage → restore/recheck → Session + Saver → final save), Add/AddMagnet/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview, `SetLimits`, `SetFilesWanted` (D44), seeding controls in `seeding.go` (`SetUploadsPaused`, `SetSeedMode`, `SetSeedLimits`, ratio, per-run seeding watcher, finished state; D45). `commands.go`, `view.go`, `magnet.go`. |
 | `internal/resume` | ✅ | `Store` (atomic save/load/list/delete of `<hash>.json` + `<hash>.torrent`), `Restore` (trust rules, partial recheck), `Saver` (periodic/no-op-skipping saves with lifetime totals). |
 | `internal/ipc` | ✅ | Daemon file (`Info`, atomic 0600 write), `NewHandler`/`Serve` (loopback HTTP API over an `*engine.Engine`, bearer-token auth, error→status mapping), `Client` (+ `Connect`, stale-file detection). |
 | `internal/config` | ✅ | `Config` + `Defaults(home)`, the settings table (`Settings`, `Lookup`, `Get`/`Set` with validation), `Load`/`Parse` (strict, line numbers), in-place `SetInFile`/`UnsetInFile`, `Init`, `KeysInFile`, rate syntax (`ParseRate`/`FormatRate`). |
@@ -109,6 +109,13 @@ Dependency direction (lower never imports higher):
 - `engine.AddOptions.Skip []int`, `Engine.SetFilesWanted(ref, files, wanted) ([]File, error)`
   (`ErrBadFile`); `Torrent.WantedBytes/SkippedFiles`, `File.Skipped`;
   `resume.Saver.SetSkip`; `storage.Options.Skipped`.
+- Seeding (D45): `engine.Config.SeedRatio/SeedTime/SeedCheckEvery`;
+  `Engine.SetUploadsPaused(ref, bool)`, `SetSeedMode(ref, "on"|"off"|"default")`
+  (`ErrBadSeedMode`), `SetSeedLimits(ratio, d)`; `Resume` → `ErrSeedLimit` for a
+  finished torrent a limit would stop again; state `finished`;
+  `Torrent.Ratio/SeedingTime/SeedMode/SeedPolicy/SeedNote/UploadsPaused`,
+  `Overview.SeedRatio/SeedTime`; `resume.Snapshot.SeedingTime`,
+  `resume.Saver.Update(func(*State))`; `config.ParseSeedTime/FormatSeedTime`.
 - `resume.OpenStore(dir)`; `Store.Save(*State, torrentBytes)`, `Load(hash)
   (*State, *MetaInfo, error)`, `List() []Entry`, `Delete(hash)`;
   `resume.Restore(ctx, state, mi, layout, readerAt) (*Bitfield, Report, error)`;
@@ -211,7 +218,9 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   `files` ([{`size`, `mtime_ns`}] in torrent order), and for the daemon
   (all optional): `id`, `paused`, `fresh` (never started: files at its paths
   aren't ours, D32), `existing` (reuse data, recheck on first start), `skip`
-  (indexes of files not to download, D44).
+  (indexes of files not to download, D44), `uploads_paused`, `seed` ("on" /
+  "off"; absent = global limits), `finished` (done seeding; not restarted
+  on its own), `seed_seconds` (lifetime seeding time) (D45).
 - **DHT state (D42):** `<state dir>/dht.json` = `{"id": "<40 hex>", "nodes":
   [{"id": "<40 hex>", "addr": "ip:port"}, …]}` (≤ 200 good nodes), written
   atomically every 15 min and on close. Missing/corrupt = fresh ID, no nodes.
@@ -269,9 +278,11 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   `Authorization: Bearer <token>`. `GET /v1/status`, `GET|POST /v1/torrents`
   (POST body `{"torrent":"<base64 .torrent>" | "magnet":"magnet:?…","dir","existing","paused","skip":[i…]}`),
   `GET /v1/torrents/{ref}[/files|/peers]`, `POST /v1/torrents/{ref}/files {"files":[i…],"wanted":bool}`
-  (→ files), `POST /v1/torrents/{ref}/pause|resume`,
+  (→ files), `POST /v1/torrents/{ref}/uploads {"paused":bool}`,
+  `POST /v1/torrents/{ref}/seed {"mode":"on|off|default"}` (→ torrent),
+  `POST /v1/seed-limits {"ratio":float,"time":ns}` (→ status), `POST /v1/torrents/{ref}/pause|resume`,
   `POST /v1/torrents/{ref}/remove {"delete_files":bool}` (→ torrent + `files_deleted`),
   `POST /v1/limits {"download":B/s,"upload":B/s}` (→ status), `POST /v1/shutdown`.
   Status now includes `max_peers`, `download_limit`, `upload_limit`.
-  Errors: `{"error":"…","code":"not_found|ambiguous|duplicate|files_exist|invalid|busy|unauthorized|internal","id":N}`
+  Errors: `{"error":"…","code":"not_found|ambiguous|duplicate|files_exist|invalid|busy|no_metadata|seed_limit|unauthorized|internal","id":N}`
   with 404/400/409/401/500. Full list in `internal/ipc/ipc.go`.

@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func abs(t *testing.T, parts ...string) string {
@@ -260,5 +261,49 @@ func TestDHTBootstrapNone(t *testing.T) {
 	d := Defaults(t.TempDir())
 	if r := d.DHTRouters(); len(r) != 4 || r[0] != "router.bittorrent.com:6881" {
 		t.Errorf("default routers = %v", r)
+	}
+}
+
+func TestSeedSettings(t *testing.T) {
+	good := map[string]time.Duration{
+		"0": 0, "90m": 90 * time.Minute, "24h": 24 * time.Hour, "2d": 48 * time.Hour,
+		"1d12h": 36 * time.Hour, "1D 30m": 24*time.Hour + 30*time.Minute,
+	}
+	for in, want := range good {
+		got, err := ParseSeedTime(in)
+		if err != nil || got != want {
+			t.Errorf("ParseSeedTime(%q) = %v, %v; want %v", in, got, err, want)
+			continue
+		}
+		if back, err := ParseSeedTime(FormatSeedTime(got)); err != nil || back != got {
+			t.Errorf("%q: FormatSeedTime gives %q, which reads back as %v, %v", in, FormatSeedTime(got), back, err)
+		}
+	}
+	for _, in := range []string{"", "x", "-1h", "30s", "1d-2h", "4000d", "d", "2days"} {
+		if _, err := ParseSeedTime(in); err == nil {
+			t.Errorf("ParseSeedTime(%q) should fail", in)
+		}
+	}
+	if FormatSeedTime(36*time.Hour) != "1d12h" || FormatSeedTime(90*time.Minute) != "1h30m" || FormatSeedTime(48*time.Hour) != "2d" {
+		t.Errorf("FormatSeedTime: %q %q %q", FormatSeedTime(36*time.Hour), FormatSeedTime(90*time.Minute), FormatSeedTime(48*time.Hour))
+	}
+
+	c := Defaults(t.TempDir())
+	if c.SeedRatio != 0 || c.SeedTime != 0 {
+		t.Error("seeding limits must default to none")
+	}
+	if err := c.Set("seed_ratio", "1.5"); err != nil || c.SeedRatio != 1.5 {
+		t.Errorf("seed_ratio 1.5: %v, %v", c.SeedRatio, err)
+	}
+	for _, bad := range []string{"-1", "abc", "NaN", "2000"} {
+		if err := c.Set("seed_ratio", bad); err == nil {
+			t.Errorf("seed_ratio %q accepted", bad)
+		}
+	}
+	if err := c.Set("seed_time", "2d"); err != nil || c.SeedTime != 48*time.Hour {
+		t.Errorf("seed_time 2d: %v, %v", c.SeedTime, err)
+	}
+	if v, _ := c.Get("seed_time"); v != "2d" {
+		t.Errorf("get seed_time = %q", v)
 	}
 }

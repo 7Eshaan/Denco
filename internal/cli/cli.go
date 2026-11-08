@@ -27,13 +27,13 @@ const usage = `denco — a BitTorrent client
 
 Daemon (keeps torrents running in the background):
   denco daemon [-v] [flags]                    run the daemon (Ctrl-C or 'denco stop' to quit);
-                                               flags (-dir -port -max-active -max-peers
-                                               -down-limit -up-limit) override the config file
+                                               flags (-dir -port -max-active -max-peers -down-limit
+                                               -up-limit -seed-ratio -seed-time) override the config
   denco stop                                   stop the daemon (torrents resume on next start)
 
 Settings ($DENCO_HOME/config.yaml; no daemon needed):
   denco config [-v]                            show all settings
-  denco config set <key> <value>               change one (speed limits apply at once)
+  denco config set <key> <value>               change one (speed and seed limits apply at once)
   denco config get|unset <key> · init · path
 
 Managing torrents (needs a running daemon):
@@ -46,8 +46,10 @@ Managing torrents (needs a running daemon):
   denco files <id>                             files of a torrent with progress
   denco files <id> skip|want <files>           stop / start downloading some files
   denco peers <id>                             connected peers
-  denco pause <id>... | all                    pause torrents
-  denco resume <id>... | all                   resume paused (or failed) torrents
+  denco pause [-uploads] <id>... | all         pause torrents (-uploads: only uploading)
+  denco resume [-uploads] <id>... | all        resume paused, failed or finished torrents
+  denco seed on|off|default <id>... | all      seed with no limits / don't seed / use the
+                                               seed_ratio and seed_time limits
   denco remove [-delete] <id>...               remove torrents (-delete also deletes their files)
   denco status                                 overall client status
 
@@ -138,6 +140,8 @@ func runEnv(e *env, args []string) int {
 		return cmdRemove(e, rest)
 	case "status":
 		return cmdStatus(e, rest)
+	case "seed":
+		return cmdSeed(e, rest)
 	case "config":
 		return cmdConfig(e, rest)
 

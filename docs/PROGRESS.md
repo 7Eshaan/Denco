@@ -1,13 +1,16 @@
 # Progress
 
-**Current phase:** 12a — File selection · ✅ done, waiting for the user's commit
+**Current phase:** 12b — Seeding controls · ✅ done, waiting for the user's commit
 
-**Next action:** once the user has committed 12a, tick it in
-`docs/ROADMAP.md`, then start **12b — Seeding controls** (per-torrent pause
-uploads / stop seeding, ratio display, optional `seed_ratio`/`seed_time`).
-Phase 12 is split into 12a–12e (ROADMAP, user-approved 2026-11-09).
+**Next action:** once the user has committed 12b, tick it in
+`docs/ROADMAP.md`, then start **12c — Robustness** (snub timeout scaled to
+speed limits (D36), automatic retry of failed torrents with backoff,
+optional daemon log file).
 
 ## Known issues
+- A finished torrent (seed limit reached) stays finished when limits are
+  raised; the user resumes it (D45). Per-torrent choices made while a
+  torrent runs reach disk at its next periodic save (≤ 30 s) or when it stops.
 - Skipped files can appear on disk holding only the bytes of a *border
   piece* shared with a wanted file (D44, Transmission-style). `add` still
   refuses if any target file exists, skipped ones included.
@@ -40,33 +43,38 @@ Phase 12 is split into 12a–12e (ROADMAP, user-approved 2026-11-09).
   confirmed). Auto-start from `denco add` is possible later.
 - UPnP/NAT-PMP (12d) in scope? MSE encryption stays out of scope?
 
-## Last test run (2026-11-09, end of Phase 12a)
+## Last test run (2026-11-09, end of Phase 12b)
 - `go test -race -count=1 ./...` — all 20 packages pass
-- stress `-race -cpu=1,2,8`: `torrent`, `engine` ×10 (30 runs each);
-  `peer`, `pieces`, `cli`, `ipc`, `resume`, `storage` ×5 (15 each) — pass;
-  `resume`, `engine` again ×3 after the last change — pass
-- new tests: `TestCovers`; `TestWanted`, `TestSkipSet`,
-  `TestManagerOnlyRequestsWantedPieces`, `TestSetWantedAbandonsActivePieces`;
-  `TestSkippedFilesAreNotDownloaded`, `TestSetWantedCompletesAndReopens`
-  (real peer connections); `TestAddWithSkippedFile`,
-  `TestSkipWhileDownloadingAndPartialSeed` (engine ↔ engine);
-  `TestSaverSkipAndPartialCompletion`; `TestSkippedEmptyFileNotCreated`;
-  `TestAPIFileSelection`; `TestParseFileList`, `TestSkipFromFlags`,
-  `TestFileSelectionCommands` (daemon + CLI)
-- mutation checks — each makes a test fail: Manager ignoring the selection;
-  partial seed announcing `completed`; tracker `left` = wanted bytes only
-  (first survived: the fake tracker didn't record `left` — test extended);
-  no restart when re-wanting a finished torrent; live SetWanted never
-  applied; abandoned pieces kept active; SetSkip not forcing a save;
-  skipped empty file created; skipping every file allowed. **Survived:**
-  dropping the selection refresh at session start (race-window only, D44)
-- smoke test, two real daemons + a loopback tracker, scratch homes:
-  `add -skip 2` → tracks 1 and 3 byte-identical, track 2 only border bytes
-  (8.2%), state Seeding; `files 1 want 2` → restarted, all 3 files
-  byte-identical. Real config dir untouched; no public network used
-- found by the smoke test: `completed_at` from a partial completion stayed
-  set after re-wanting a file — now cleared while the selection is
-  incomplete (test added)
+- stress `-race -cpu=1,2,8`: `torrent` ×10 (30 runs) pass; `cli`, `ipc`,
+  `resume`, `config`, `peer` ×5 (15 each) pass. **`engine` failed 12 of 30
+  at first:** `TestSeedTimeCountsOnlyUnpausedSeeding` — a run's seeding time
+  was saved truncated to whole seconds (0.3 s → 0), which also blanked the
+  "why finished" note. Now rounded up when saved (D45); then `engine` ×10
+  (30 runs) passes, and `resume`, `cli` ×5 again pass
+- new tests: `TestRatio`, `TestSeedStopReason`,
+  `TestSeedRatioLimitFinishesAndPersists`, `TestSeedOffStopsOnCompletion`,
+  `TestUploadsPausedPerTorrent`, `TestSeedTimeCountsOnlyUnpausedSeeding`
+  (engine ↔ engine); `TestSeedSettings` (config); `TestSaverSeedingTimeAndFlags`;
+  `TestAPISeeding`; `TestSeedingCommands`, `TestDaemonSeedFlags` (daemon + CLI)
+- **found by the new tests:** `resume` on a torrent that was finished but
+  still shutting down silently did nothing (exit 0) — it now applies the
+  same limit check whether or not the run has exited (test added for both)
+- mutation checks — each makes a test fail (16/16): ratio ignoring data
+  already on disk; seeding time counting paused uploads; `finished` or
+  `uploads_paused` not saved; session started without uploads paused;
+  uploads pause not applied live; Resume ignoring limits; `seed off` not
+  stopping a seeding torrent at once; mode `on` not overriding limits;
+  schedule restarting finished torrents (first survived: the restart test
+  re-supplied the limit — now restarts with no limits); `seed_time`
+  ignored; lifetime seeding time not accumulated; `config set seed_*` not
+  applied live; daemon flags / engine config limits not passed on (no test
+  covered the daemon → engine wiring — added)
+- smoke test, two real daemons + loopback tracker, scratch homes, DHT off:
+  A `pause -uploads` → B 0% after 3 s with A connected; `resume -uploads` →
+  B complete, 3 files byte-identical; A (seed_ratio 1) → Finished at ratio
+  1.00, still Finished after a daemon restart, `resume` refused with the
+  hint, `seed on` → Seeding; B `seed off` → Finished, saved as
+  `"seed": "off", "finished": true`. Real config dir untouched
 - `go vet` (darwin, linux, windows) clean · gofmt clean
 - cross-compile linux/windows/darwin × amd64/arm64 — all build
 - external deps: none
@@ -168,3 +176,12 @@ Phase 12 is split into 12a–12e (ROADMAP, user-approved 2026-11-09).
   `files <id> skip|want`, 1-based file numbers in `files`/`inspect`/`add`,
   selected size in `list`/`info`. Also: misplaced comment in
   `cli/download.go` fixed.
+- **Phase 12a commit:** d399435.
+- **Phase 12b (2026-11-09):** seeding controls (D45): ratio (uploaded ÷
+  max(downloaded, have)), per-torrent seeding modes `on/off/default`
+  (`denco seed`), global `seed_ratio`/`seed_time` (config, daemon flags,
+  live via `POST /v1/seed-limits`), "finished" state (saved, never
+  restarted on its own; `resume` refuses while a limit applies), lifetime
+  seeding time (`seed_seconds`, paused uploads excluded), per-torrent
+  pause uploads (`pause/resume -uploads`), RATIO in `list`, seeding rows
+  in `info`/`status`. New IPC routes `/uploads`, `/seed`, `/v1/seed-limits`.

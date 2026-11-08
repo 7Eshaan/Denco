@@ -655,3 +655,54 @@ One short entry per decision. Newest at the bottom. Format:
   every rule above has a test that fails without it (mutation-checked),
   except the refresh of the selection at session start, which only matters
   if it changes during the brief checking phase.
+
+### D45 — Seeding controls, Phase 12b
+- **Decision:**
+  - **Ratio** = lifetime uploaded ÷ max(lifetime downloaded, bytes of the
+    wanted files we have). The `max` gives a torrent added with
+    `-existing` (downloaded ≈ 0) a finite ratio, and charges wasted
+    downloads. -1 (shown "-") until there is anything to divide by.
+  - **Seeding modes per torrent** (`resume.State.Seed`): default = follow
+    the global limits; `on` = seed until the user stops it, ignoring the
+    limits; `off` = don't seed (stop now if complete, else on completion).
+    `denco seed on|off|default <id>…|all`.
+  - **Global limits** `seed_ratio` (float) and `seed_time` (`24h`, `2d`,
+    `1d12h`; ≥ 1 min), both 0 = no limit by default (the spec lists no
+    defaults; mainstream clients seed forever by default). Config file,
+    daemon flags `-seed-ratio`/`-seed-time`, applied live by
+    `denco config set` (`POST /v1/seed-limits`).
+  - **Finished:** a complete torrent that reached a limit (or has seeding
+    off) is stopped like a paused one and marked `finished` (saved), state
+    "Finished". It is *not* restarted on its own — not on daemon start,
+    not when limits are raised; `scheduleLocked` also refuses to start a
+    complete torrent whose limit is already reached, so it never starts
+    just to stop. `resume` restarts it only if no limit would stop it at
+    once; otherwise it fails with the reason and the hint
+    `denco seed on <id>` (as qBittorrent, which re-pauses at once, but
+    explained). Wanting more files (12a) clears it: it downloads again.
+  - **Seeding time** (lifetime, `seed_seconds`) counts time running
+    complete with uploads *not* paused, measured by a per-run watcher
+    goroutine (every 5 s) that also enforces the limits. Saved with the
+    other resume data, but a change of < 5 minutes alone doesn't force a
+    write (seeding torrents would otherwise write every 30 s). Stored in
+    whole seconds, each run's time *rounded up*, so the saved total never
+    falls below a limit the run reached (found by the stress run:
+    truncation turned 0.3 s into 0 and blanked the "why finished" note).
+  - **Pause uploads per torrent:** `denco pause -uploads <id>|all` /
+    `resume -uploads`; the session's existing `SetUploadsPaused` (chokes
+    everyone; downloading continues). Saved (`uploads_paused`) and applied
+    at the next start. `list` shows "paused" in UP.
+  - Per-torrent choices live in the engine entry and are copied into every
+    save (`flagsTo`, `resume.Saver.Update`), so a run's final save can't
+    drop a choice made while it ran.
+  - **Display:** RATIO column in `list`; `info` shows ratio, seeding time,
+    the seeding policy in words (or why it finished), paused uploads;
+    `status` shows the global limits.
+- **Alternatives:** per-torrent numeric ratio/time limits (more flags and
+  state for little gain; `on`/`off`/`default` covers the common cases);
+  pausing instead of a separate "finished" state (the user couldn't tell a
+  limit from their own pause); restarting finished torrents when limits
+  are raised (surprising uploads after a config edit).
+- **Why:** covers the spec's "stop seeding", "pause uploads", "display
+  seeding status / uploaded data" with a small state machine; every rule
+  has a test that fails without it (mutation-checked).

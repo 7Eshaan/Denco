@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -55,6 +56,29 @@ func short(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
+// ratioText shows a share ratio with two decimals, "-" when unknown.
+func ratioText(r float64) string {
+	if r < 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.2f", r)
+}
+
+// describeSeedLimits describes the global seeding limits.
+func describeSeedLimits(ratio float64, d time.Duration) string {
+	var lims []string
+	if ratio > 0 {
+		lims = append(lims, "until ratio "+strconv.FormatFloat(ratio, 'f', -1, 64))
+	}
+	if d > 0 {
+		lims = append(lims, "for "+format.Duration(d))
+	}
+	if len(lims) == 0 {
+		return "no limits"
+	}
+	return strings.Join(lims, " or ")
+}
+
 // running reports whether a torrent has live speeds/peers to show.
 func running(t engine.Torrent) bool {
 	switch t.State {
@@ -82,11 +106,14 @@ func renderList(w io.Writer, list []engine.Torrent) {
 	section := func(title string, ts []engine.Torrent) {
 		fmt.Fprintf(w, "%s (%d)\n", title, len(ts))
 		tw := newTable(w)
-		fmt.Fprintln(tw, "ID\tNAME\tSIZE\tPROGRESS\tSTATUS\tDOWN\tUP\tETA\tPEERS")
+		fmt.Fprintln(tw, "ID\tNAME\tSIZE\tPROGRESS\tSTATUS\tDOWN\tUP\tETA\tPEERS\tRATIO")
 		for _, t := range ts {
 			down, up, eta, peers := "-", "-", "-", "-"
 			if running(t) {
 				up, peers = format.Speed(t.UploadRate), fmt.Sprint(t.Peers)
+				if t.UploadsPaused {
+					up = "paused"
+				}
 				if !t.Complete {
 					down, eta = format.Speed(t.DownloadRate), format.Duration(t.ETA)
 				}
@@ -94,8 +121,8 @@ func renderList(w io.Writer, list []engine.Torrent) {
 			if t.State == engine.StateMetadata {
 				peers = fmt.Sprint(t.Peers)
 			}
-			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, short(t.Name, maxNameWidth),
-				sizeText(t), progressText(t), stateLabel(t.State), down, up, eta, peers)
+			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, short(t.Name, maxNameWidth),
+				sizeText(t), progressText(t), stateLabel(t.State), down, up, eta, peers, ratioText(t.Ratio))
 		}
 		tw.Flush()
 	}
@@ -173,6 +200,22 @@ func renderInfo(w io.Writer, t engine.Torrent) {
 	}
 	row("Total downloaded", format.Bytes(t.Downloaded))
 	row("Total uploaded", format.Bytes(t.Uploaded))
+	row("Ratio", ratioText(t.Ratio))
+	if t.SeedingTime > 0 {
+		row("Seeding time", format.Duration(t.SeedingTime))
+	}
+	seeding := t.SeedPolicy
+	if t.State == engine.StateFinished {
+		seeding = "finished"
+		if t.SeedNote != "" {
+			seeding += ": " + t.SeedNote
+		}
+		seeding += fmt.Sprintf("  ('denco seed on %d' seeds again with no limits)", t.ID)
+	}
+	row("Seeding", seeding)
+	if t.UploadsPaused {
+		row("Uploads", fmt.Sprintf("paused ('denco resume -uploads %d')", t.ID))
+	}
 	if t.Private {
 		row("Private", "yes")
 	}
@@ -271,7 +314,7 @@ func renderStatus(w io.Writer, st ipc.Status) {
 	row("State dir", st.StateDir)
 	var counts []string
 	for _, s := range []engine.State{engine.StateMetadata, engine.StateDownloading, engine.StateStalled, engine.StateChecking,
-		engine.StateSeeding, engine.StateQueued, engine.StatePaused, engine.StateError} {
+		engine.StateSeeding, engine.StateFinished, engine.StateQueued, engine.StatePaused, engine.StateError} {
 		if n := st.ByState[s]; n > 0 {
 			counts = append(counts, fmt.Sprintf("%d %s", n, strings.ToLower(stateLabel(s))))
 		}
@@ -295,6 +338,7 @@ func renderStatus(w io.Writer, st ipc.Status) {
 	}
 	row("DHT", dht)
 	row("Limits", fmt.Sprintf("↓ %s  ↑ %s", config.DescribeRate(st.DownLimit), config.DescribeRate(st.UpLimit)))
+	row("Seeding", describeSeedLimits(st.SeedRatio, st.SeedTime))
 	row("Speed", fmt.Sprintf("↓ %s  ↑ %s", format.Speed(st.DownloadRate), format.Speed(st.UploadRate)))
 	row("This session", fmt.Sprintf("↓ %s  ↑ %s", format.Bytes(st.Downloaded), format.Bytes(st.Uploaded)))
 	row("Connected peers", fmt.Sprint(st.Peers))

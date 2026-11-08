@@ -22,7 +22,8 @@ const (
 	StateSeeding     State = "seeding"     // complete and uploading
 	StateQueued      State = "queued"      // waiting for a download slot (MaxActive)
 	StatePaused      State = "paused"
-	StateError       State = "error" // stopped by an error; Resume retries
+	StateError       State = "error"    // stopped by an error; Resume retries
+	StateFinished    State = "finished" // complete and done seeding (limit reached, or seeding off)
 )
 
 // Torrent is a snapshot of one torrent for display. Byte counts are
@@ -57,6 +58,16 @@ type Torrent struct {
 	Downloaded   int64         `json:"downloaded"`
 	Uploaded     int64         `json:"uploaded"`
 	ETA          time.Duration `json:"eta"` // 0 when done, negative when unknown
+
+	// Seeding (D45). Ratio is uploaded ÷ downloaded (-1 = nothing yet);
+	// SeedingTime is lifetime. SeedPolicy says in words how long it seeds;
+	// SeedNote why a finished torrent stopped.
+	Ratio         float64       `json:"ratio"`
+	SeedingTime   time.Duration `json:"seeding_time"`
+	SeedMode      string        `json:"seed_mode"` // default, on, off
+	SeedPolicy    string        `json:"seed_policy"`
+	SeedNote      string        `json:"seed_note,omitempty"`
+	UploadsPaused bool          `json:"uploads_paused,omitempty"`
 
 	Peers           int    `json:"peers"`
 	Seeds           int    `json:"seeds"`
@@ -111,6 +122,8 @@ type Overview struct {
 	DHTPort     uint16        `json:"dht_port,omitempty"`
 	DHTNodes    int           `json:"dht_nodes"`      // in its routing table
 	DHTGood     int           `json:"dht_good_nodes"` // of which answered recently
+	SeedRatio   float64       `json:"seed_ratio"`     // global seeding limits; 0 = none
+	SeedTime    time.Duration `json:"seed_time"`
 	Torrents    int           `json:"torrents"`
 	ByState     map[State]int `json:"by_state"`
 	Complete    int           `json:"complete"`
@@ -204,6 +217,7 @@ func (e *Engine) Overview() Overview {
 		StartedAt: e.started, ListenPort: e.ln.Port(), MaxActive: e.cfg.MaxActive,
 		MaxPeers: e.cfg.Session.MaxPeers, DownLimit: e.down.Rate(), UpLimit: e.up.Rate(), PEX: e.cfg.Session.PEX,
 		DownloadDir: e.cfg.DownloadDir, StateDir: e.store.Dir(),
+		SeedRatio: e.seedRatio, SeedTime: e.seedTime,
 		ByState:    map[State]int{},
 		Downloaded: e.finished.down, Uploaded: e.finished.up,
 	}
@@ -247,6 +261,8 @@ func (e *Engine) viewLocked(t *entry) Torrent {
 		Downloaded: t.state.Downloaded, Uploaded: t.state.Uploaded,
 		TrackerSeeders: -1, TrackerLeechers: -1, ETA: -1,
 		AddedAt: t.state.AddedAt, CompletedAt: t.state.CompletedAt,
+		Ratio: -1, SeedingTime: t.seedingTimeLocked(), SeedMode: modeName(t.seedMode),
+		SeedPolicy: e.seedPolicyLocked(t), UploadsPaused: t.uploadsPaused,
 	}
 	if t.mi == nil { // magnet link without metadata
 		if t.fetcher != nil {
@@ -287,12 +303,16 @@ func (e *Engine) viewLocked(t *entry) Torrent {
 	if v.Complete {
 		v.ETA = 0
 	}
+	v.Ratio = ratio(v.Uploaded, v.Downloaded, v.DoneBytes)
 
 	switch {
 	case t.err != nil:
 		v.State, v.Error = StateError, t.err.Error()
 	case t.paused:
 		v.State = StatePaused // even while it is still shutting down
+	case t.finished:
+		v.State = StateFinished // also while it is still shutting down
+		v.SeedNote = seedStopReason(t.seedMode, v.Ratio, v.SeedingTime, e.seedRatio, e.seedTime)
 	case t.checking:
 		v.State = StateChecking
 	case t.sess != nil:

@@ -75,6 +75,8 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 		UploadLimit:   cfg.UploadLimit,
 		Session:       torrent.Config{MaxPeers: cfg.MaxConnectionsPerTorrent, PEX: cfg.EnablePEX},
 		EnableDHT:     cfg.EnableDHT,
+		SeedRatio:     cfg.SeedRatio,
+		SeedTime:      cfg.SeedTime,
 		DHTBootstrap:  cfg.DHTRouters(),
 		Logger:        log,
 	})
@@ -102,8 +104,9 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 		dhtNote = fmt.Sprintf("DHT on UDP port %d", ov.DHTPort)
 	}
 	fmt.Fprintf(e.stdout, "Denco daemon running (pid %d). %d torrents, peer port %d, %s.\n", os.Getpid(), ov.Torrents, ov.ListenPort, dhtNote)
-	fmt.Fprintf(e.stdout, "Downloads go to %s by default. Limits: ↓ %s  ↑ %s.\n",
-		cfg.DownloadDir, config.DescribeRate(cfg.DownloadLimit), config.DescribeRate(cfg.UploadLimit))
+	fmt.Fprintf(e.stdout, "Downloads go to %s by default. Limits: ↓ %s  ↑ %s. Seeding: %s.\n",
+		cfg.DownloadDir, config.DescribeRate(cfg.DownloadLimit), config.DescribeRate(cfg.UploadLimit),
+		describeSeedLimits(cfg.SeedRatio, cfg.SeedTime))
 	for _, note := range daemonNotes(e, cfg) {
 		fmt.Fprintln(e.stdout, note)
 	}
@@ -144,6 +147,8 @@ var daemonFlagKeys = map[string]string{
 	"max-peers":  "max_connections_per_torrent",
 	"down-limit": "download_limit",
 	"up-limit":   "upload_limit",
+	"seed-ratio": "seed_ratio",
+	"seed-time":  "seed_time",
 }
 
 // daemonFlags parses the daemon's flags over cfg (config file values are
@@ -159,8 +164,10 @@ func daemonFlags(e *env, cfg config.Config, args []string) (config.Config, bool,
 	fs.String("max-peers", def("max_connections_per_torrent"), "peer connections per torrent")
 	fs.String("down-limit", def("download_limit"), "total download limit, e.g. 2M or 500K (0 = unlimited)")
 	fs.String("up-limit", def("upload_limit"), "total upload limit (0 = unlimited)")
+	fs.String("seed-ratio", def("seed_ratio"), "stop seeding at this ratio, e.g. 2.0 (0 = no limit)")
+	fs.String("seed-time", def("seed_time"), "stop seeding after this long, e.g. 24h or 2d (0 = no limit)")
 	verbose := fs.Bool("v", false, "debug logging (peers, trackers)")
-	usageLine := "usage: denco daemon [-dir DIR] [-port N] [-max-active N] [-max-peers N] [-down-limit R] [-up-limit R] [-v]"
+	usageLine := "usage: denco daemon [-dir DIR] [-port N] [-max-active N] [-max-peers N] [-down-limit R] [-up-limit R] [-seed-ratio X] [-seed-time D] [-v]"
 	if err := fs.Parse(args); err != nil {
 		return cfg, false, 2
 	}

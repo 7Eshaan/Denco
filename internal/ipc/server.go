@@ -53,7 +53,10 @@ func NewHandler(e *engine.Engine, token string, shutdown func(), log *slog.Logge
 	mux.HandleFunc("POST /v1/torrents/{ref}/pause", h.pause)
 	mux.HandleFunc("POST /v1/torrents/{ref}/resume", h.resume)
 	mux.HandleFunc("POST /v1/torrents/{ref}/remove", h.remove)
+	mux.HandleFunc("POST /v1/torrents/{ref}/uploads", h.uploads)
+	mux.HandleFunc("POST /v1/torrents/{ref}/seed", h.seed)
 	mux.HandleFunc("POST /v1/limits", h.limits)
+	mux.HandleFunc("POST /v1/seed-limits", h.seedLimits)
 	mux.HandleFunc("POST /v1/shutdown", h.stop)
 	return requireToken(token, mux)
 }
@@ -168,6 +171,37 @@ func (h *handler) limits(w http.ResponseWriter, r *http.Request) {
 	h.status(w, r)
 }
 
+func (h *handler) uploads(w http.ResponseWriter, r *http.Request) {
+	var req UploadsRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	t, err := h.e.SetUploadsPaused(r.PathValue("ref"), req.Paused)
+	reply(w, t, err)
+}
+
+func (h *handler) seed(w http.ResponseWriter, r *http.Request) {
+	var req SeedRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	t, err := h.e.SetSeedMode(r.PathValue("ref"), req.Mode)
+	reply(w, t, err)
+}
+
+func (h *handler) seedLimits(w http.ResponseWriter, r *http.Request) {
+	var req SeedLimitsRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.Ratio < 0 || req.Time < 0 {
+		writeErr(w, &Error{Status: http.StatusBadRequest, Code: CodeInvalid, Message: "seeding limits can't be negative"})
+		return
+	}
+	h.e.SetSeedLimits(req.Ratio, req.Time)
+	h.status(w, r)
+}
+
 func (h *handler) stop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, struct{}{})
 	h.shutdown()
@@ -216,12 +250,15 @@ func toError(err error) *Error {
 		e.Status, e.Code = http.StatusBadRequest, CodeAmbiguous
 	case errors.Is(err, storage.ErrExists):
 		e.Status, e.Code = http.StatusConflict, CodeExists
-	case errors.Is(err, metainfo.ErrInvalid), errors.Is(err, magnet.ErrInvalid), errors.Is(err, engine.ErrBadFile):
+	case errors.Is(err, metainfo.ErrInvalid), errors.Is(err, magnet.ErrInvalid), errors.Is(err, engine.ErrBadFile),
+		errors.Is(err, engine.ErrBadSeedMode):
 		e.Status, e.Code = http.StatusBadRequest, CodeInvalid
 	case errors.Is(err, engine.ErrBusy):
 		e.Status, e.Code = http.StatusConflict, CodeBusy
 	case errors.Is(err, engine.ErrNoMetadata):
 		e.Status, e.Code = http.StatusConflict, CodeNoMeta
+	case errors.Is(err, engine.ErrSeedLimit):
+		e.Status, e.Code = http.StatusConflict, CodeSeedLimit
 	}
 	return e
 }

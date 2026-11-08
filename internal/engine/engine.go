@@ -30,6 +30,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/7Eshaan/Denco/internal/bitfield"
@@ -60,6 +61,14 @@ type Config struct {
 	// kept in StateDir/dht.json.
 	EnableDHT    bool
 	DHTBootstrap []string
+	// Seeding limits (D45): a complete torrent stops seeding ("finished")
+	// at this ratio or after this much seeding time; 0 = no limit. A
+	// torrent's own seeding mode ("on"/"off") overrides them. Changeable
+	// later with SetSeedLimits. SeedCheckEvery is how often they are
+	// checked (default 5s; tests shrink it).
+	SeedRatio      float64
+	SeedTime       time.Duration
+	SeedCheckEvery time.Duration
 	// Session is the template for every torrent session (timeouts, peer
 	// limits, announcer). PeerID, Port, Logger, NoSeed and the rate
 	// limiters are set by the engine.
@@ -79,12 +88,14 @@ type Engine struct {
 	up      *ratelimit.Limiter
 	dht     *dht.Server // nil when DHT is off
 
-	mu       sync.Mutex
-	byID     map[int]*entry
-	byHash   map[metainfo.Hash]*entry
-	nextID   int
-	closed   bool
-	finished struct{ up, down int64 } // payload moved by sessions that have ended
+	mu        sync.Mutex
+	seedRatio float64       // current limits (Config values, then SetSeedLimits)
+	seedTime  time.Duration //
+	byID      map[int]*entry
+	byHash    map[metainfo.Hash]*entry
+	nextID    int
+	closed    bool
+	finished  struct{ up, down int64 } // payload moved by sessions that have ended
 
 	wg        sync.WaitGroup // run goroutines
 	closeOnce sync.Once
@@ -102,7 +113,13 @@ type entry struct {
 	state resume.State       // last persisted state (while running: as of start)
 	have  *bitfield.Bitfield // pieces believed good while not running
 
-	paused   bool
+	// The user's per-torrent choices; the entry owns them and every save
+	// records them (flagsTo).
+	paused        bool
+	uploadsPaused bool   // choke every peer; downloading goes on
+	seedMode      string // "" = global limits, SeedOn, SeedOff
+	finished      bool   // stopped seeding (limit or mode off); not restarted on its own
+
 	removing bool  // Remove is waiting for the run goroutine
 	err      error // why it last stopped; cleared by Resume
 
@@ -112,8 +129,10 @@ type entry struct {
 	cancel   context.CancelFunc
 	done     chan struct{} // closed when the run goroutine has exited
 	sess     *torrent.Session
-	saver    *resume.Saver     // set with sess
-	fetcher  *metadata.Fetcher // set while fetching a magnet's metadata
+	saver    *resume.Saver          // set with sess
+	snapshot func() resume.Snapshot // set with sess: what saves record
+	seeded   atomic.Int64           // ns spent seeding during this run
+	fetcher  *metadata.Fetcher      // set while fetching a magnet's metadata
 	// bootstrap: peers the metadata fetcher found, handed to the first
 	// session (a magnet's x.pe peers are known nowhere else).
 	bootstrap []netip.AddrPort
@@ -138,6 +157,9 @@ func Open(cfg Config) (*Engine, error) {
 	if cfg.SaveEvery <= 0 {
 		cfg.SaveEvery = 30 * time.Second
 	}
+	if cfg.SeedCheckEvery <= 0 {
+		cfg.SeedCheckEvery = 5 * time.Second
+	}
 	if cfg.Session.MaxPeers <= 0 {
 		cfg.Session.MaxPeers = 50 // same default as torrent.Config; set here so Overview can show it
 	}
@@ -161,6 +183,7 @@ func Open(cfg Config) (*Engine, error) {
 	e := &Engine{
 		cfg: cfg, log: log, store: store, ln: ln, peerID: id, started: time.Now(), down: down, up: up,
 		byID: map[int]*entry{}, byHash: map[metainfo.Hash]*entry{}, nextID: 1,
+		seedRatio: cfg.SeedRatio, seedTime: cfg.SeedTime,
 	}
 	if cfg.EnableDHT {
 		if e.dht, err = openDHT(cfg, ln.Port(), log); err != nil {
@@ -263,7 +286,8 @@ func (e *Engine) load() error {
 // restoreEntry rebuilds a torrent from its saved state (and .torrent, if
 // it has metadata).
 func (e *Engine) restoreEntry(en resume.Entry) (*entry, error) {
-	t := &entry{state: *en.State, paused: en.State.Paused}
+	st := en.State
+	t := &entry{state: *st, paused: st.Paused, uploadsPaused: st.UploadsPaused, seedMode: st.Seed, finished: st.Finished}
 	if en.Meta == nil { // magnet link still waiting for metadata
 		h, err := hashFromHex(en.State.InfoHash)
 		t.hash = h
@@ -339,7 +363,25 @@ func (e *Engine) scheduleLocked() {
 		if t.running || t.paused || t.removing || t.err != nil {
 			continue
 		}
-		if !t.completeLocked() {
+		complete := t.completeLocked()
+		if t.finished && !complete { // its selection grew: download again
+			t.finished = false
+			e.persistLocked(t)
+		}
+		if t.finished {
+			continue
+		}
+		if complete {
+			// Done seeding already (limit reached, mode off)? Then don't
+			// start it just to stop it.
+			if reason := e.seedStopLocked(t); reason != "" {
+				t.finished = true
+				e.persistLocked(t)
+				e.log.Info("not seeding", "id", t.id, "torrent", t.name(), "reason", reason)
+				continue
+			}
+		}
+		if !complete {
 			if active >= e.cfg.MaxActive {
 				continue // stays queued
 			}
@@ -394,6 +436,7 @@ func (e *Engine) startLocked(t *entry) {
 	t.cancel = cancel
 	t.done = make(chan struct{})
 	t.err = nil
+	t.seeded.Store(0)
 	state := t.state // copy: the run goroutine works from this
 	e.wg.Add(1)
 	go func() {
@@ -446,18 +489,21 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 	// changed it while the data was being checked.
 	e.mu.Lock()
 	prev.Skip = append([]int(nil), t.state.Skip...)
+	t.flagsTo(&prev)
 	cfg.Wanted = t.wantLocked()
+	cfg.UploadsPaused = t.uploadsPaused
 	sess := torrent.New(t.mi, st, have, cfg)
 	sess.AddPeers(t.bootstrap)
 	t.bootstrap = nil
 	saver := resume.NewSaver(e.store, t.mi, t.layout, st, &prev)
-	t.sess, t.saver, t.checking = sess, saver, false
-	e.mu.Unlock()
-
 	snapshot := func() resume.Snapshot {
 		s := sess.Stats()
-		return resume.Snapshot{Have: sess.Have(), Uploaded: s.Uploaded, Downloaded: s.Downloaded}
+		return resume.Snapshot{Have: sess.Have(), Uploaded: s.Uploaded, Downloaded: s.Downloaded,
+			SeedingTime: time.Duration(t.seeded.Load())}
 	}
+	t.sess, t.saver, t.snapshot, t.checking = sess, saver, snapshot, false
+	e.mu.Unlock()
+
 	logErr := func(err error) { e.log.Warn("saving resume data", "torrent", t.mi.Info.Name, "err", err) }
 	if err := saver.Save(snapshot(), false); err != nil {
 		logErr(err)
@@ -472,18 +518,20 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 		defer helpers.Done()
 		saver.Run(hctx, e.cfg.SaveEvery, snapshot, logErr)
 	}()
-	go func() { // on completion: save now, and let the next download start
+	go func() { // on completion: save now, let the next download start, then watch seeding
 		defer helpers.Done()
 		select {
 		case <-sess.Completed():
-			if err := saver.Save(snapshot(), false); err != nil {
-				logErr(err)
-			}
-			e.mu.Lock()
-			e.scheduleLocked()
-			e.mu.Unlock()
 		case <-hctx.Done():
+			return
 		}
+		if err := saver.Save(snapshot(), false); err != nil {
+			logErr(err)
+		}
+		e.mu.Lock()
+		e.scheduleLocked()
+		e.mu.Unlock()
+		e.watchSeeding(hctx, t)
 	}()
 
 	runErr := sess.Run(ctx)
@@ -491,7 +539,7 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 	helpers.Wait()
 
 	e.mu.Lock()
-	saver.SetPaused(t.paused)
+	saver.Update(t.flagsTo)
 	e.mu.Unlock()
 	// Run has returned, so nothing writes any more: this save may be clean.
 	final := snapshot()
@@ -545,11 +593,12 @@ func (e *Engine) prepare(ctx context.Context, t *entry, state resume.State) (*st
 func (e *Engine) finish(ctx context.Context, t *entry, r runResult) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	t.running, t.checking, t.sess, t.saver, t.cancel = false, false, nil, nil, nil
+	t.running, t.checking, t.sess, t.saver, t.snapshot, t.cancel = false, false, nil, nil, nil, nil
 	if r.state.InfoHash != "" {
 		skip := t.state.Skip // the live selection wins, even if the last save failed
 		t.state = r.state
 		t.state.Skip = skip
+		t.seeded.Store(0) // now part of state.SeedSeconds
 	}
 	if r.have != nil {
 		t.have = r.have
@@ -560,8 +609,9 @@ func (e *Engine) finish(ctx context.Context, t *entry, r runResult) {
 		t.err = r.err
 		e.log.Error("torrent stopped", "torrent", t.name(), "err", r.err)
 	}
-	// Paused (or resumed) before the session started: nothing saved it yet.
-	if t.state.Paused != t.paused && !t.removing {
+	// A choice made before the session started (or after its final save)
+	// isn't in the saved state yet.
+	if t.flagsDiffer() && !t.removing {
 		e.persistLocked(t)
 	}
 	e.scheduleLocked()
@@ -570,7 +620,7 @@ func (e *Engine) finish(ctx context.Context, t *entry, r runResult) {
 // persistLocked writes t's state with its current paused flag. Used for
 // torrents that aren't running (a running one's Saver does this).
 func (e *Engine) persistLocked(t *entry) {
-	t.state.Paused = t.paused
+	t.flagsTo(&t.state)
 	if err := e.store.Save(&t.state, t.raw()); err != nil {
 		e.log.Warn("saving torrent state", "torrent", t.name(), "err", err)
 	}

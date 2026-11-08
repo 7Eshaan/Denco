@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/7Eshaan/Denco/internal/dht"
 )
@@ -42,6 +43,8 @@ type Config struct {
 	ListenPort               int
 	ResumeEnabled            bool
 	ResumeDir                string
+	SeedRatio                float64       // stop seeding at this upload/download ratio; 0 = no limit
+	SeedTime                 time.Duration // stop seeding after this much seeding; 0 = no limit
 }
 
 // DefaultDHTBootstrap is the default dht_bootstrap. A variable so tests can
@@ -95,6 +98,12 @@ var settings = []Setting{
 	{Name: "upload_limit", Help: "total upload speed limit, same format; 0 = unlimited", Live: true,
 		get: func(c *Config) string { return FormatRate(c.UploadLimit) },
 		set: func(c *Config, v string) error { return setRate(&c.UploadLimit, v) }},
+	{Name: "seed_ratio", Help: "stop seeding a torrent at this ratio (uploaded ÷ downloaded), e.g. 2.0; 0 = no limit", Live: true,
+		get: func(c *Config) string { return strconv.FormatFloat(c.SeedRatio, 'f', -1, 64) },
+		set: func(c *Config, v string) error { return setRatio(&c.SeedRatio, v) }},
+	{Name: "seed_time", Help: "stop seeding a torrent after seeding this long, e.g. 24h, 2d, 1d12h; 0 = no limit", Live: true,
+		get: func(c *Config) string { return FormatSeedTime(c.SeedTime) },
+		set: func(c *Config, v string) error { return setSeedTime(&c.SeedTime, v) }},
 	{Name: "enable_dht", Help: "find peers without trackers (DHT); never used for private torrents",
 		get: func(c *Config) string { return strconv.FormatBool(c.EnableDHT) },
 		set: func(c *Config, v string) error { return setBool(&c.EnableDHT, v) }},
@@ -209,6 +218,81 @@ func (c *Config) DHTRouters() []string {
 		return nil
 	}
 	return strings.Split(c.DHTBootstrap, ",")
+}
+
+func setRatio(dst *float64, v string) error {
+	r, err := strconv.ParseFloat(v, 64)
+	if err != nil || r < 0 || r > 1000 || r != r {
+		return fmt.Errorf("%q is not a ratio between 0 and 1000 (e.g. 2.0; 0 = no limit)", v)
+	}
+	*dst = r
+	return nil
+}
+
+func setSeedTime(dst *time.Duration, v string) error {
+	d, err := ParseSeedTime(v)
+	if err != nil {
+		return err
+	}
+	*dst = d
+	return nil
+}
+
+// ParseSeedTime reads a seeding time: "0" (no limit), a Go duration
+// ("36h", "90m"), or days with an optional rest ("2d", "1d12h").
+// At least one minute; at most ten years.
+func ParseSeedTime(v string) (time.Duration, error) {
+	bad := fmt.Errorf("%q is not a time (e.g. 24h, 90m, 2d, 1d12h; 0 = no limit)", v)
+	s := strings.ToLower(strings.ReplaceAll(v, " ", ""))
+	if s == "0" {
+		return 0, nil
+	}
+	var d time.Duration
+	if days, rest, ok := strings.Cut(s, "d"); ok {
+		n, err := strconv.Atoi(days)
+		if err != nil || n < 0 || n > 3650 {
+			return 0, bad
+		}
+		d, s = time.Duration(n)*24*time.Hour, rest
+	}
+	if s != "" {
+		r, err := time.ParseDuration(s)
+		if err != nil || r < 0 {
+			return 0, bad
+		}
+		d += r
+	}
+	if d < time.Minute || d > 3650*24*time.Hour {
+		return 0, fmt.Errorf("%q: use at least 1m and at most 3650d (0 = no limit)", v)
+	}
+	return d, nil
+}
+
+// FormatSeedTime renders a seeding time the way ParseSeedTime reads it.
+func FormatSeedTime(d time.Duration) string {
+	const day = 24 * time.Hour
+	switch {
+	case d <= 0:
+		return "0"
+	case d%day == 0:
+		return fmt.Sprintf("%dd", d/day)
+	case d > day:
+		return fmt.Sprintf("%dd%s", d/day, shortDuration(d%day))
+	default:
+		return shortDuration(d)
+	}
+}
+
+// shortDuration drops Go's trailing zero units: "12h0m0s" → "12h".
+func shortDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
 }
 
 func setRate(dst *int64, v string) error {

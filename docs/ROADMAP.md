@@ -44,7 +44,7 @@ so older references stay valid.
       get_peers / announce_peer, bootstrap, persisted node cache).
 - [ ] **Phase 12 — Daily-driver polish**, split into lettered sub-phases
       (user-approved 2026-11-09), each ending green with its own commit:
-  - [ ] **12a — File selection.** Skip / re-want files (`add -skip/-only`,
+  - [x] **12a — File selection.** Skip / re-want files (`add -skip/-only`,
         `denco files <id> skip|want`), only wanted pieces downloaded,
         partial-seed completion, persisted in resume data.
   - [ ] **12b — Seeding controls.** Per-torrent pause uploads / stop

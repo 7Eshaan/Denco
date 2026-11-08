@@ -112,6 +112,24 @@ func (c *Client) Remove(ctx context.Context, ref string, deleteFiles bool) (engi
 	return t, c.do(ctx, http.MethodPost, torrentPath(ref, "/remove"), RemoveRequest{DeleteFiles: deleteFiles}, &t)
 }
 
+// SetUploadsPaused pauses or resumes one torrent's uploads.
+func (c *Client) SetUploadsPaused(ctx context.Context, ref string, paused bool) (engine.Torrent, error) {
+	var t engine.Torrent
+	return t, c.do(ctx, http.MethodPost, torrentPath(ref, "/uploads"), UploadsRequest{Paused: paused}, &t)
+}
+
+// SetSeedMode sets one torrent's seeding mode ("on", "off", "default").
+func (c *Client) SetSeedMode(ctx context.Context, ref, mode string) (engine.Torrent, error) {
+	var t engine.Torrent
+	return t, c.do(ctx, http.MethodPost, torrentPath(ref, "/seed"), SeedRequest{Mode: mode}, &t)
+}
+
+// SetSeedLimits changes the global seeding limits (0 = no limit).
+func (c *Client) SetSeedLimits(ctx context.Context, ratio float64, d time.Duration) (Status, error) {
+	var s Status
+	return s, c.do(ctx, http.MethodPost, "/v1/seed-limits", SeedLimitsRequest{Ratio: ratio, Time: d}, &s)
+}
+
 // SetLimits changes the daemon's total speed limits (bytes/s, 0 = unlimited).
 func (c *Client) SetLimits(ctx context.Context, down, up int64) (Status, error) {
 	var s Status

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/7Eshaan/Denco/internal/bencode"
 	"github.com/7Eshaan/Denco/internal/engine"
@@ -238,5 +239,30 @@ func TestAPIFileSelection(t *testing.T) {
 	}
 	if _, err := c.SetFiles(ctx, "9", []int{0}, false); !errors.As(err, &apiErr) || apiErr.Code != CodeNotFound {
 		t.Errorf("unknown torrent: %v", err)
+	}
+}
+
+func TestAPISeeding(t *testing.T) {
+	c, _, _ := setup(t)
+	ctx := context.Background()
+	if _, err := c.Add(ctx, AddRequest{Torrent: testTorrent(t, "s"), Paused: true}); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := c.SetUploadsPaused(ctx, "1", true); err != nil || !v.UploadsPaused {
+		t.Fatalf("SetUploadsPaused = %+v, %v", v, err)
+	}
+	if v, err := c.SetSeedMode(ctx, "1", "off"); err != nil || v.SeedMode != "off" {
+		t.Fatalf("SetSeedMode = %+v, %v", v, err)
+	}
+	var apiErr *Error
+	if _, err := c.SetSeedMode(ctx, "1", "maybe"); !errors.As(err, &apiErr) || apiErr.Code != CodeInvalid {
+		t.Errorf("bad mode: %v", err)
+	}
+	st, err := c.SetSeedLimits(ctx, 2, time.Hour)
+	if err != nil || st.SeedRatio != 2 || st.SeedTime != time.Hour {
+		t.Fatalf("SetSeedLimits = %+v, %v", st, err)
+	}
+	if _, err := c.SetSeedLimits(ctx, -1, 0); !errors.As(err, &apiErr) || apiErr.Code != CodeInvalid {
+		t.Errorf("negative limit: %v", err)
 	}
 }

@@ -260,17 +260,64 @@ func withClient(e *env, f func(context.Context, *ipc.Client) error) int {
 	return 0
 }
 
+// pauseFlags parses pause/resume's flags; -uploads means "only uploads".
+func pauseFlags(e *env, name string, args []string) (uploads bool, refs []string, ok bool) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(e.stderr)
+	up := fs.Bool("uploads", false, "only uploads: keep downloading, stop sending data to peers")
+	if err := fs.Parse(args); err != nil {
+		return false, nil, false
+	}
+	return *up, fs.Args(), true
+}
+
 func cmdPause(e *env, args []string) int {
-	return forEach(e, "pause", args, func(ctx context.Context, c *ipc.Client, ref string) (string, error) {
+	uploads, refs, ok := pauseFlags(e, "pause", args)
+	if !ok {
+		return 2
+	}
+	if uploads {
+		return forEach(e, "pause -uploads", refs, func(ctx context.Context, c *ipc.Client, ref string) (string, error) {
+			t, err := c.SetUploadsPaused(ctx, ref, true)
+			return fmt.Sprintf("Uploads paused for #%d %s (still downloading if incomplete)", t.ID, t.Name), err
+		})
+	}
+	return forEach(e, "pause", refs, func(ctx context.Context, c *ipc.Client, ref string) (string, error) {
 		t, err := c.Pause(ctx, ref)
 		return fmt.Sprintf("Paused #%d %s", t.ID, t.Name), err
 	})
 }
 
 func cmdResume(e *env, args []string) int {
-	return forEach(e, "resume", args, func(ctx context.Context, c *ipc.Client, ref string) (string, error) {
+	uploads, refs, ok := pauseFlags(e, "resume", args)
+	if !ok {
+		return 2
+	}
+	if uploads {
+		return forEach(e, "resume -uploads", refs, func(ctx context.Context, c *ipc.Client, ref string) (string, error) {
+			t, err := c.SetUploadsPaused(ctx, ref, false)
+			return fmt.Sprintf("Uploads resumed for #%d %s", t.ID, t.Name), err
+		})
+	}
+	return forEach(e, "resume", refs, func(ctx context.Context, c *ipc.Client, ref string) (string, error) {
 		t, err := c.Resume(ctx, ref)
 		return fmt.Sprintf("Resuming #%d %s (%s)", t.ID, t.Name, strings.ToLower(stateLabel(t.State))), err
+	})
+}
+
+// cmdSeed sets torrents' seeding mode.
+func cmdSeed(e *env, args []string) int {
+	if len(args) < 2 || !slices.Contains([]string{"on", "off", "default"}, args[0]) {
+		fmt.Fprintln(e.stderr, `usage: denco seed on|off|default <id>... | all
+  on       seed until you stop it (ignores seed_ratio / seed_time)
+  off      don't seed: stop now if complete, else as soon as it completes
+  default  follow seed_ratio / seed_time (see 'denco config')`)
+		return 2
+	}
+	mode := args[0]
+	return forEach(e, "seed "+mode, args[1:], func(ctx context.Context, c *ipc.Client, ref string) (string, error) {
+		t, err := c.SetSeedMode(ctx, ref, mode)
+		return fmt.Sprintf("#%d %s: seeding %s — %s", t.ID, t.Name, t.SeedPolicy, strings.ToLower(stateLabel(t.State))), err
 	})
 }
 

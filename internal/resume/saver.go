@@ -16,6 +16,9 @@ type Snapshot struct {
 	Have       *bitfield.Bitfield // verified pieces, all already written to storage
 	Uploaded   int64              // payload bytes this session
 	Downloaded int64
+	// SeedingTime is how long this session has been seeding (complete,
+	// uploads not paused); added to the lifetime total.
+	SeedingTime time.Duration
 }
 
 // Saver keeps one torrent's resume state current. Safe for concurrent use.
@@ -30,6 +33,7 @@ type Saver struct {
 	want     *bitfield.Bitfield // pieces of the wanted files (from state.Skip); nil = all
 	baseUp   int64              // lifetime totals from earlier sessions
 	baseDown int64
+	baseSeed int64 // seconds
 	last     savedKey
 	hasLast  bool
 	saved    State // the last state written successfully
@@ -39,6 +43,7 @@ type Saver struct {
 type savedKey struct {
 	pieces   int
 	up, down int64
+	seed5min int64 // seeding time in 5-minute steps: saved often enough, not every round
 	clean    bool
 }
 
@@ -48,7 +53,7 @@ func NewSaver(store *Store, mi *metainfo.MetaInfo, layout *storage.Layout, st *s
 	sv := &Saver{store: store, mi: mi, layout: layout, st: st}
 	if prev != nil {
 		sv.state = *prev
-		sv.baseUp, sv.baseDown = prev.Uploaded, prev.Downloaded
+		sv.baseUp, sv.baseDown, sv.baseSeed = prev.Uploaded, prev.Downloaded, prev.SeedSeconds
 	} else {
 		sv.state = State{AddedAt: time.Now().UTC()}
 	}
@@ -68,7 +73,7 @@ func NewSaver(store *Store, mi *metainfo.MetaInfo, layout *storage.Layout, st *s
 func (sv *Saver) Save(snap Snapshot, clean bool) error {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	key := savedKey{snap.Have.Count(), snap.Uploaded, snap.Downloaded, clean}
+	key := savedKey{snap.Have.Count(), snap.Uploaded, snap.Downloaded, int64(snap.SeedingTime / (5 * time.Minute)), clean}
 	if sv.hasLast && key == sv.last {
 		return nil // nothing new since the last save
 	}
@@ -79,6 +84,9 @@ func (sv *Saver) Save(snap Snapshot, clean bool) error {
 	s.Have = snap.Have.Bytes()
 	s.Uploaded = sv.baseUp + snap.Uploaded
 	s.Downloaded = sv.baseDown + snap.Downloaded
+	// Rounded up: the saved total is never below a seed_time limit the
+	// run reached, so "finished: seeded for…" stays true after a restart.
+	s.SeedSeconds = sv.baseSeed + int64((snap.SeedingTime+time.Second-1)/time.Second)
 	s.Clean = clean
 	// CompletedAt is when the current selection finished; wanting more
 	// files (or losing data) makes it incomplete again, so it is cleared.
@@ -106,6 +114,15 @@ func (sv *Saver) SetPaused(paused bool) {
 		sv.state.Paused = paused
 		sv.hasLast = false // force the next Save to write
 	}
+}
+
+// Update changes the options recorded by the following saves (paused,
+// uploads paused, seeding mode, finished…); the next Save always writes.
+func (sv *Saver) Update(fn func(*State)) {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	fn(&sv.state)
+	sv.hasLast = false
 }
 
 // SetSkip changes the skipped files recorded by the following saves.

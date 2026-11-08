@@ -122,6 +122,9 @@ func humanValue(key, v string) string {
 	if (key == "download_limit" || key == "upload_limit") && v == "0" {
 		return "0 (unlimited)"
 	}
+	if (key == "seed_ratio" || key == "seed_time") && v == "0" {
+		return "0 (no limit)"
+	}
 	return v
 }
 
@@ -172,13 +175,26 @@ func applyToDaemon(e *env, key string, cfg config.Config) int {
 	// Change only this limit: the other may have been set by a daemon flag.
 	st, err := c.Status(ctx)
 	if err == nil {
-		down, up := st.DownLimit, st.UpLimit
-		if key == "download_limit" {
-			down = cfg.DownloadLimit
-		} else {
-			up = cfg.UploadLimit
+		switch key {
+		case "download_limit", "upload_limit":
+			down, up := st.DownLimit, st.UpLimit
+			if key == "download_limit" {
+				down = cfg.DownloadLimit
+			} else {
+				up = cfg.UploadLimit
+			}
+			_, err = c.SetLimits(ctx, down, up)
+		case "seed_ratio", "seed_time":
+			ratio, d := st.SeedRatio, st.SeedTime
+			if key == "seed_ratio" {
+				ratio = cfg.SeedRatio
+			} else {
+				d = cfg.SeedTime
+			}
+			_, err = c.SetSeedLimits(ctx, ratio, d)
+		default:
+			err = fmt.Errorf("%s is marked live but the daemon has no way to apply it", key)
 		}
-		_, err = c.SetLimits(ctx, down, up)
 	}
 	if err != nil {
 		fmt.Fprintf(e.stderr, "denco: saved, but applying it to the daemon failed: %v\n", err)

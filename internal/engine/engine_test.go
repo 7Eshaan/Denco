@@ -127,10 +127,11 @@ func newTracker(t *testing.T) string {
 
 func testConfig(stateDir, dlDir string) Config {
 	return Config{
-		StateDir:    stateDir,
-		DownloadDir: dlDir,
-		ListenAddr:  "127.0.0.1:0",
-		SaveEvery:   50 * time.Millisecond,
+		StateDir:       stateDir,
+		DownloadDir:    dlDir,
+		ListenAddr:     "127.0.0.1:0",
+		SaveEvery:      50 * time.Millisecond,
+		SeedCheckEvery: 20 * time.Millisecond,
 		Session: torrent.Config{
 			Tick:           20 * time.Millisecond,
 			RetryBase:      50 * time.Millisecond,

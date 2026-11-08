@@ -516,3 +516,35 @@ func TestSaverSkipAndPartialCompletion(t *testing.T) {
 		t.Error("CompletedAt must be set again once everything is done")
 	}
 }
+
+func TestSaverSeedingTimeAndFlags(t *testing.T) {
+	f := newFixture(t, 3000)
+	store, _ := OpenStore(t.TempDir())
+	prev := f.state(true)
+	prev.SeedSeconds = 100
+	sv := NewSaver(store, f.mi, f.layout, f.st, prev)
+	have := bitfield.New(f.mi.Info.NumPieces())
+	have.SetAll()
+	sv.Save(Snapshot{Have: have, SeedingTime: 2 * time.Minute}, false)
+	if got := sv.State().SeedSeconds; got != 220 {
+		t.Fatalf("SeedSeconds = %d, want 100 + 120", got)
+	}
+	// Seeding a little longer isn't worth a write on its own…
+	saved := sv.State().SavedAt
+	sv.Save(Snapshot{Have: have, SeedingTime: 3 * time.Minute}, false)
+	if !sv.State().SavedAt.Equal(saved) {
+		t.Error("a minute more of seeding forced a write")
+	}
+	// …five minutes more is.
+	sv.Save(Snapshot{Have: have, SeedingTime: 6 * time.Minute}, false)
+	if sv.State().SeedSeconds != 460 {
+		t.Errorf("SeedSeconds = %d, want 460", sv.State().SeedSeconds)
+	}
+	// Update changes options and forces the next save.
+	sv.Update(func(st *State) { st.Finished, st.Seed, st.UploadsPaused = true, "off", true })
+	sv.Save(Snapshot{Have: have, SeedingTime: 6 * time.Minute}, false)
+	got, _, err := store.Load(f.mi.InfoHash)
+	if err != nil || !got.Finished || got.Seed != "off" || !got.UploadsPaused || got.SeedSeconds != 460 {
+		t.Fatalf("saved = %+v, %v", got, err)
+	}
+}

@@ -140,7 +140,9 @@ func (e *Engine) Pause(ref string) (Torrent, error) {
 	return e.viewLocked(t), nil
 }
 
-// Resume un-pauses a torrent, or retries one that stopped with an error.
+// Resume un-pauses a torrent, retries one that stopped with an error, or
+// restarts a finished one — unless its seeding limits would stop it again
+// at once (ErrSeedLimit; SetSeedMode(SeedOn) seeds it regardless).
 // It starts now, or waits in the queue if MaxActive torrents are downloading.
 func (e *Engine) Resume(ref string) (Torrent, error) {
 	e.mu.Lock()
@@ -149,8 +151,15 @@ func (e *Engine) Resume(ref string) (Torrent, error) {
 	if err != nil {
 		return Torrent{}, err
 	}
-	if t.paused || t.err != nil {
-		t.paused, t.err = false, nil
+	// A finished torrent may still be shutting down; either way it only
+	// restarts if its limits allow (finish() then reschedules it).
+	if t.finished {
+		if reason := e.seedStopLocked(t); reason != "" {
+			return Torrent{}, fmt.Errorf("%w: %s (seed it anyway: denco seed on %d)", ErrSeedLimit, reason, t.id)
+		}
+	}
+	if t.paused || t.err != nil || t.finished {
+		t.paused, t.err, t.finished = false, nil, false
 		if !t.running {
 			e.persistLocked(t)
 		}

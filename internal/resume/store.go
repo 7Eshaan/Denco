@@ -77,6 +77,16 @@ type State struct {
 	// Skip lists the indexes (torrent order, from 0) of files the user
 	// chose not to download (D44). Empty = every file wanted.
 	Skip []int `json:"skip,omitempty"`
+
+	// Seeding (D45). UploadsPaused: the user paused uploads (downloading
+	// goes on). Seed is the torrent's seeding mode: "" = the global limits
+	// (seed_ratio, seed_time), "on" = seed with no limits, "off" = don't
+	// seed. Finished: it stopped seeding (limit reached, or mode off) and
+	// must not start again on its own. SeedSeconds: lifetime seeding time.
+	UploadsPaused bool   `json:"uploads_paused,omitempty"`
+	Seed          string `json:"seed,omitempty"`
+	Finished      bool   `json:"finished,omitempty"`
+	SeedSeconds   int64  `json:"seed_seconds,omitempty"`
 }
 
 // FileStamp is a file's size and mtime when the state was saved.

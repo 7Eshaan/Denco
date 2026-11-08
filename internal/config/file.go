@@ -168,7 +168,7 @@ func Init(path string, c Config) error {
 var header = []string{
 	"# Denco configuration. Format: key: value   (# starts a comment)",
 	"# Edit here or use 'denco config set <key> <value>'. Restart the daemon",
-	"# to apply; speed limits set with 'denco config set' apply at once.",
+	"# to apply; speed and seed limits set with 'denco config set' apply at once.",
 }
 
 // trailingComment returns a setting line's trailing comment (" # …"), or "".
