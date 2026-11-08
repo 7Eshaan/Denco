@@ -270,3 +270,36 @@ One short entry per decision. Newest at the bottom. Format:
 - **Why:** the standard BitTorrent choking strategy (BEP 3, libtorrent's
   defaults); all choke decisions are a pure function (`chooseUnchoked`) so they
   can be unit-tested.
+
+### D27 — Resume data format and trust rules
+- **Decision:** per torrent, `<state dir>/<infohash>.torrent` (original bytes,
+  written once) + `<infohash>.json` (State: version, download dir, verified
+  bitfield, lifetime up/down totals, added/completed/saved times, per-file
+  size+mtime stamps, `clean` flag). Default state dir:
+  `os.UserConfigDir()/denco/resume` (dirs 0700, files 0600). Every write is
+  temp file → fsync → rename → fsync dir.
+  - **Save order:** take the session's `Have()` snapshot *first*, then
+    `Storage.Sync()`, then stamp files, then write. Pieces in Have were written
+    before being marked verified, so after the fsync they are durable.
+  - **When:** immediately on start, every 30s (skipped if nothing changed),
+    on completion, and a final `clean=true` save after `Run` returns.
+  - **Restore:** missing/too-short file → drop its pieces; file longer than
+    the torrent says → re-hash its pieces; `clean` state + changed size/mtime →
+    re-hash that file's pieces (external modification); `!clean` (crash) →
+    trust the bitfield without comparing mtimes, since our own writes after the
+    last save changed them. Mismatched torrent/piece count/file list →
+    `ErrMismatch`, caller falls back to a full recheck.
+- **Alternatives:** bencoded state (libtorrent "fastresume"); always full
+  recheck on start; per-piece checksums in the state.
+- **Why:** JSON is stdlib and human-inspectable for debugging. The clean flag
+  gives fast restarts after crashes (no multi-GB re-hash) while still catching
+  files edited while Denco was stopped. **Known limitation:** a file modified
+  externally *while Denco was running and then crashed* isn't detected; such
+  pieces would be served wrongly until a manual recheck (`denco verify`).
+
+### D28 — `denco download` resumes automatically
+- **Decision:** rerunning `denco download <file.torrent>` finds the saved state
+  and continues; without `-dir` it uses the saved download dir. `-existing`
+  is only for data Denco has no state for. A saved state for a *different* dir
+  than an explicit `-dir` is ignored (fresh start there).
+- **Why:** "run the same command again" is the least surprising UX.

@@ -403,3 +403,24 @@ func TestNoGoroutineLeakAfterStop(t *testing.T) {
 	}
 	t.Fatalf("goroutines: before=%d after=%d", before, runtime.NumGoroutine())
 }
+
+func TestHaveSnapshot(t *testing.T) {
+	f := makeTorrent(t, pl, 6*pl)
+	have := bitfield.New(6)
+	have.Set(2)
+	sd := newSeeder(t, f, seederOpts{})
+	r := start(t, f.mi, t.TempDir(), have, testConfig(), false)
+	if got := r.s.Have(); got.Count() != 1 || !got.Has(2) {
+		t.Fatalf("initial Have = %08b", got.Bytes())
+	}
+	got := r.s.Have()
+	got.Set(0) // a copy: must not affect the session
+	if r.s.Have().Has(0) {
+		t.Fatal("Have() returned shared state")
+	}
+	r.s.AddPeers([]netip.AddrPort{sd.addr})
+	r.waitComplete(t, 20*time.Second)
+	if !r.s.Have().Full() {
+		t.Fatal("Have() not full after completion")
+	}
+}

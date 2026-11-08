@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/7Eshaan/Denco/internal/bitfield"
 	"github.com/7Eshaan/Denco/internal/peerid"
 )
 
@@ -72,6 +73,7 @@ type PeerInfo struct {
 type snapshot struct {
 	stats Stats
 	peers []PeerInfo
+	have  *bitfield.Bitfield // verified pieces; every one is already written to storage
 }
 
 // Stats returns the latest snapshot (refreshed every tick).
@@ -79,6 +81,15 @@ func (s *Session) Stats() Stats {
 	s.snapMu.Lock()
 	defer s.snapMu.Unlock()
 	return s.snap.stats
+}
+
+// Have returns a copy of the verified pieces as of the latest snapshot.
+// Every piece in it has already been written to storage (though not
+// necessarily fsynced: resume savers call Storage.Sync after reading this).
+func (s *Session) Have() *bitfield.Bitfield {
+	s.snapMu.Lock()
+	defer s.snapMu.Unlock()
+	return s.snap.have.Clone()
 }
 
 // Peers returns the latest connected-peer list, fastest first.
@@ -90,6 +101,7 @@ func (s *Session) Peers() []PeerInfo {
 
 // publish rebuilds the snapshot (loop goroutine only).
 func (s *Session) publish() {
+	have := s.m.Have()
 	st := Stats{
 		Name:            s.info.Name,
 		TotalBytes:      s.info.TotalLength,
@@ -98,7 +110,7 @@ func (s *Session) publish() {
 		Uploaded:        s.uploaded.Load(),
 		DownloadRate:    s.downRate.perSecond(s.cfg.Tick),
 		UploadRate:      s.upRate.perSecond(s.cfg.Tick),
-		PiecesHave:      s.m.Have().Count(),
+		PiecesHave:      have.Count(),
 		PiecesTotal:     s.info.NumPieces(),
 		Peers:           len(s.peers),
 		Known:           len(s.swarm.addrs),
@@ -147,7 +159,7 @@ func (s *Session) publish() {
 	}
 
 	s.snapMu.Lock()
-	s.snap = snapshot{stats: st, peers: peers}
+	s.snap = snapshot{stats: st, peers: peers, have: have}
 	s.snapMu.Unlock()
 }
 

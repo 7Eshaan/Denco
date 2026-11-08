@@ -33,6 +33,11 @@ daily-driver client and a portfolio project. Targets macOS, Linux and Windows.
   never overwrite unrelated existing files.
 - **Honesty:** report test failures as they are. Do not mark a phase done unless
   every test passes.
+- **Tests never touch real user data:** no network beyond loopback, and no
+  writes outside `t.TempDir()`. Anything with a default under the user's
+  config/home dir (resume store, config file) must be overridden in tests;
+  `cmd/denco` has a `TestMain` that redirects HOME/XDG_CONFIG_HOME/AppData as
+  a backstop. (Phase 7 incident: a test wrote into the real resume dir.)
 
 ## Commands
 

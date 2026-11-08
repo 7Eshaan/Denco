@@ -41,6 +41,10 @@ type MetaInfo struct {
 	InfoHash  Hash
 	InfoBytes []byte // raw bencoded info dict, exactly as in the file
 	Info      Info
+
+	// Raw is the whole .torrent file as parsed, kept so it can be saved
+	// alongside resume data and restored byte-for-byte later.
+	Raw []byte
 }
 
 // Load reads and parses a .torrent file from disk.
@@ -83,6 +87,7 @@ func Parse(data []byte) (*MetaInfo, error) {
 		InfoHash:  sha1.Sum(infoBytes),
 		InfoBytes: append([]byte(nil), infoBytes...),
 		Info:      *info,
+		Raw:       append([]byte(nil), data...),
 	}
 	mi.Announce, _ = bencode.GetString(root, "announce")
 	mi.Comment, _ = bencode.GetString(root, "comment")

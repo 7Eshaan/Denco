@@ -32,7 +32,7 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 | `internal/pieces` | ✅ | `Check`/`VerifyPiece`/`Recheck` (parallel hashing) and `Manager` (rarest-first, random-first, endgame, memory budget, block ownership). |
 | `internal/torrent` | ✅ | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/IP bans, request pipelining, snub detection, hash+write workers, announce loop, uploading (validation, cancel, per-peer uploader), tit-for-tat choker + optimistic unchoke, seeding, pause uploads, Stats/Peers. `Listener`: one TCP port routing incoming peers by info hash. |
 | `internal/engine` | ⏳ | Many sessions, limits, queueing, duplicate detection. |
-| `internal/resume` | ⏳ | Persist/restore per-torrent state atomically. |
+| `internal/resume` | ✅ | `Store` (atomic save/load/list/delete of `<hash>.json` + `<hash>.torrent`), `Restore` (trust rules, partial recheck), `Saver` (periodic/no-op-skipping saves with lifetime totals). |
 | `internal/ipc` | ⏳ | Daemon HTTP API server + client. |
 | `internal/config` | ⏳ | Config file parse, defaults, overrides. |
 | `internal/dht` | ⏳ | BEP 5 DHT node. |
@@ -87,6 +87,13 @@ Dependency direction (lower never imports higher):
   per-peer up/down, choke/interest both ways).
 - `torrent.Listen(addr, peer.Options, log) *Listener`; `Add/Remove(*Session)`,
   `Port()`, `Addr()`, `Close()`.
+- `Session.Have()` — copy of verified pieces (all already written to storage).
+- `resume.OpenStore(dir)`; `Store.Save(*State, torrentBytes)`, `Load(hash)
+  (*State, *MetaInfo, error)`, `List() []Entry`, `Delete(hash)`;
+  `resume.Restore(ctx, state, mi, layout, readerAt) (*Bitfield, Report, error)`;
+  `resume.NewSaver(store, mi, layout, storage, prev)` → `Save(Snapshot, clean)`,
+  `Run(ctx, interval, snapshotFn, errFn)`.
+- `metainfo.MetaInfo.Raw` — original .torrent bytes (stored with resume data).
 
 ## Data flow for a downloaded block
 
@@ -123,7 +130,12 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
 
 - **Downloaded data:** `<download dir>/<name>[/<path…>]`, names sanitised per
   D20. Files grow sparsely as pieces arrive (no preallocation).
-- Resume data, config, IPC token: Phases 7–9.
+- **Resume data (D27):** `<state dir>/<infohash>.json` + `<infohash>.torrent`.
+  Default state dir `os.UserConfigDir()/denco/resume`. JSON fields: `version`,
+  `info_hash`, `name`, `download_dir`, `pieces`, `have` (base64 bitfield),
+  `uploaded`, `downloaded`, `added_at`, `completed_at`, `saved_at`, `clean`,
+  `files` ([{`size`, `mtime_ns`}] in torrent order), `paused`.
+- Config, IPC token: Phases 8–9.
 
 ## Wire / IPC formats
 

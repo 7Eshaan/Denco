@@ -1,6 +1,7 @@
 package metainfo
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"errors"
 	"os"
@@ -85,6 +86,13 @@ func TestParseSingleFile(t *testing.T) {
 	}
 	if got := mi.Trackers(); len(got) != 1 || got[0] != "http://tracker.example/announce" {
 		t.Errorf("Trackers = %v", got)
+	}
+	if !bytes.Equal(mi.Raw, data) {
+		t.Error("Raw does not hold the original file bytes")
+	}
+	data[0] = 'X' // Raw must be a copy
+	if mi.Raw[0] == 'X' {
+		t.Error("Raw aliases the input buffer")
 	}
 }
 
