@@ -11,7 +11,7 @@ so older references stay valid.
 - [x] **Phase 2 — Discovery.** `magnet` URI parser (xt/dn/tr, hex + base32),
       HTTP/HTTPS `tracker` client (announce, compact + dict peers, failure
       reasons, interval), tracker tests against `httptest`.
-- [ ] **Phase 3 — Peer wire protocol.** Handshake, message framing/codec,
+- [x] **Phase 3 — Peer wire protocol.** Handshake, message framing/codec,
       bitfield type, per-connection read/write loops, keep-alives, timeouts.
 - [ ] **Phase 4 — Storage & pieces.** Multi-file piece↔file mapping, safe path
       resolution (incl. Windows name sanitising), no-overwrite policy, piece

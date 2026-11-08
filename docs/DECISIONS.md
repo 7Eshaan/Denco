@@ -157,3 +157,44 @@ One short entry per decision. Newest at the bottom. Format:
 - **Why:** one listening port serves all torrents, so we must learn which
   torrent the peer wants before we can answer; trackers often return our own
   address, so self-connection detection saves a wasted slot.
+
+### D20 — On-disk layout rules (storage.Layout)
+- **Decision:** files go to `<download dir>/<torrent name>/<path…>` (single-file:
+  `<dir>/<name>`). Per component: on Windows replace `<>:"/\|?*` and control
+  chars with `_`, strip trailing dots/spaces, prefix reserved device names
+  (`CON`, `com1.txt` → `_CON`, `_com1.txt`); on every OS truncate to 255 bytes
+  (keeping the extension, never splitting UTF-8). Collisions are detected
+  **case-insensitively on every OS** and resolved with ` (1)`, ` (2)` suffixes;
+  a path that needs an existing *file* to be a directory is rejected. Every
+  final path must pass `filepath.IsLocal` and a `filepath.Rel` containment check.
+  Files that were changed carry `Renamed: true` so the UI can say so.
+- **Why:** same layout on all OSes (a torrent downloaded on Linux can be moved
+  to a Mac and resumed); two independent containment checks for traversal.
+
+### D21 — Storage I/O model
+- **Decision:** one mutex per torrent serialises all reads/writes; up to 32
+  file handles are cached (LRU). Files are created lazily on first write (sparse
+  where the FS supports it), except zero-length files, created at open. No
+  preallocation. `Open` refuses if any target file exists unless
+  `AllowExisting` (resume / user said "use existing data") or `ReadOnly`
+  (verify). `DeleteFiles` removes only the layout's files, then directories that
+  became empty — never `RemoveAll`, never the download root.
+- **Alternatives:** per-file locks; preallocating full size; mmap.
+- **Why:** simplest correct design; disk is rarely the bottleneck for one
+  torrent. Preallocation wastes space for skipped files (Phase 12) and is slow
+  on some filesystems. Revisit if profiling shows lock contention.
+
+### D22 — Piece selection & block bookkeeping (pieces.Manager)
+- **Decision:** 16 KiB blocks. Order: (1) unrequested blocks of active pieces,
+  (2) new piece — random until 4 pieces are complete, then rarest-first with
+  random tie-break, (3) endgame duplicates when every missing block is already
+  requested; duplicates produce cancel lists. Active pieces capped by a memory
+  budget (128 MiB, min 4 pieces); an empty, un-requested active piece can be
+  abandoned to free a slot. Completed pieces go to "pending" with their data
+  and contributor list; the caller hashes, writes, then calls `PieceVerified`.
+  Choke/disconnect → `PeerRequestsDropped` frees that peer's blocks.
+- **Why:** the standard strategy (libtorrent/BEP 3 recommendations); hashing
+  happens outside the Manager so it can run off the session goroutine; the
+  contributor list is what Phase 5 needs to ban peers that send bad data.
+- **Known cost:** picking scans all pieces (O(n)) — fine up to ~10⁵ pieces;
+  revisit with a bucketed structure if profiling says so.

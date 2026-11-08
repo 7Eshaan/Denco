@@ -19,7 +19,7 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 
 | Package | Status | Responsibility |
 |---|---|---|
-| `cmd/denco` | ✅ (dev) | Entry point. One file per command: `inspect.go` (inspect, magnet), `announce.go` (+ shared `loadTarget`/`announceStarted`), `probe.go`. Replaced by `internal/cli` in Phase 8. |
+| `cmd/denco` | ✅ (dev) | Entry point. One file per command: `inspect.go` (inspect, magnet), `announce.go` (+ shared `loadTarget`/`announceStarted`), `probe.go`, `verify.go`. Replaced by `internal/cli` in Phase 8. |
 | `internal/bencode` | ✅ | Bencode decode/encode; raw byte spans of dict values (for info hash). |
 | `internal/metainfo` | ✅ | Parse + validate `.torrent`; info hash; file list with offsets; tracker tiers. |
 | `internal/format` | ✅ | Human-readable sizes, speeds, durations for CLI output. |
@@ -28,8 +28,8 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 | `internal/tracker` | ✅ | `Client.Announce` (one HTTP/HTTPS announce) and `List` (BEP 12 tiers, concurrent, fallback + promote). UDP client (BEP 15) ⏳ Phase 5b. |
 | `internal/peer` | ✅ | Peer wire protocol: `Handshake`, `Message` codec + typed constructors/parsers, `Conn` (Dial/Accept, reader + writer goroutines, keep-alive, idle timeout). |
 | `internal/bitfield` | ✅ | Fixed-size piece set in wire format (high bit = piece 0); validated `FromBytes`. |
-| `internal/storage` | ⏳ | Map pieces onto files, safe paths, read/write blocks. |
-| `internal/pieces` | ⏳ | Piece state, rarest-first picker, block bookkeeping, verification. |
+| `internal/storage` | ✅ | `Layout` (OS-safe paths, sanitising, collisions, containment) and `Storage` (ReadAt/WriteAt across files, handle LRU, no-overwrite, ReadOnly, safe DeleteFiles). |
+| `internal/pieces` | ✅ | `Check`/`VerifyPiece`/`Recheck` (parallel hashing) and `Manager` (rarest-first, random-first, endgame, memory budget, block ownership). |
 | `internal/torrent` | ⏳ | One torrent session: ties tracker + peers + pieces + storage. |
 | `internal/engine` | ⏳ | Many sessions, limits, queueing, duplicate detection. |
 | `internal/resume` | ⏳ | Persist/restore per-torrent state atomically. |
@@ -69,6 +69,25 @@ Dependency direction (lower never imports higher):
   `peer.Dial(ctx, addr, infoHash, Options)`, `peer.Accept(netConn, known, Options)`.
 - `peer.Message{ID, Payload}`; nil = keep-alive. `peer.Block{Index, Begin, Length}`.
 - `bitfield.Bitfield` — `New(n)`, `FromBytes(b, n)`, `Has/Set/Clear/SetAll/Count/Full/Bytes/Clone`.
+- `storage.NewLayout(dir, *Info) → *Layout{Root, Files []File{Path, Rel, Length, Offset, Renamed}}`;
+  `storage.Open(layout, Options{AllowExisting, ReadOnly, MaxOpenFiles}) → *Storage`
+  (`io.ReaderAt`/`io.WriterAt` over torrent offsets, `Sync`, `Close`, `DeleteFiles`).
+- `pieces.Manager` (owned by one goroutine): `PeerBitfield/PeerGoneBitfield/PeerHave`
+  (availability), `Interesting`, `NextRequests(peer, peerHas, n) []peer.Block`,
+  `BlockReceived(peer, index, begin, data) Received{Accepted, Cancel, Complete,
+  Data, Contributors}`, `PieceVerified(i, ok)`, `PeerRequestsDropped(peer)`.
+  Piece lifecycle: missing → active → pending (hashing) → have / back to missing.
+
+## Data flow for a downloaded block (wired up in Phase 5)
+
+```
+peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
+                                              │ Complete?
+                                              ▼
+                       hash worker: pieces.Check(data, info.Pieces[i])
+                         ok ─▶ Storage.WriteAt ─▶ Manager.PieceVerified(i, true) ─▶ send Have to peers
+                         bad ─▶ Manager.PieceVerified(i, false) ─▶ blame Contributors
+```
 
 ## Concurrency model
 
@@ -78,10 +97,15 @@ Dependency direction (lower never imports higher):
   shuts down once; peer silent > 2 min → `ErrIdle`. Handshake bounded by
   10s and by the caller's context.
 - **tracker.List.AnnounceAll**: one goroutine per tier, joined before return.
+- **storage.Storage**: safe for concurrent use; one mutex per torrent (D21).
+- **pieces.Manager**: not thread-safe; owned by the session goroutine.
+  `pieces.Recheck` uses up to 4 worker goroutines internally.
 
 ## On-disk formats
 
-- None yet. (Resume data, config, IPC token: Phases 7–9.)
+- **Downloaded data:** `<download dir>/<name>[/<path…>]`, names sanitised per
+  D20. Files grow sparsely as pieces arrive (no preallocation).
+- Resume data, config, IPC token: Phases 7–9.
 
 ## Wire / IPC formats
 
