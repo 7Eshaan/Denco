@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/7Eshaan/Denco/internal/config"
 	"github.com/7Eshaan/Denco/internal/engine"
 	"github.com/7Eshaan/Denco/internal/format"
 	"github.com/7Eshaan/Denco/internal/ipc"
@@ -234,6 +235,8 @@ func renderStatus(w io.Writer, st ipc.Status) {
 	row("Torrents", summary)
 	row("Completed", fmt.Sprintf("%d of %d", st.Complete, st.Torrents))
 	row("Max downloading", fmt.Sprint(st.MaxActive))
+	row("Max peers", fmt.Sprintf("%d per torrent", st.MaxPeers))
+	row("Limits", fmt.Sprintf("↓ %s  ↑ %s", config.DescribeRate(st.DownLimit), config.DescribeRate(st.UpLimit)))
 	row("Speed", fmt.Sprintf("↓ %s  ↑ %s", format.Speed(st.DownloadRate), format.Speed(st.UploadRate)))
 	row("This session", fmt.Sprintf("↓ %s  ↑ %s", format.Bytes(st.Downloaded), format.Bytes(st.Uploaded)))
 	row("Connected peers", fmt.Sprint(st.Peers))

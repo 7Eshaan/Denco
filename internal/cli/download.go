@@ -50,7 +50,12 @@ type downloadOpts struct {
 // runDownload is cmdDownload with an explicit context, so tests can stop it.
 func runDownload(ctx context.Context, e *env, args []string) int {
 	stdout, stderr := e.stdout, e.stderr
-	o, torrentPath, code := parseDownloadFlags(args, e.stateDir(), stderr)
+	cfg, err := e.loadConfig()
+	if err != nil {
+		fmt.Fprintf(stderr, "denco: %v\n", err)
+		return 1
+	}
+	o, torrentPath, code := parseDownloadFlags(args, cfg.ResumeDir, stderr)
 	if code != 0 {
 		return code
 	}

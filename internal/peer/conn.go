@@ -14,6 +14,7 @@ import (
 
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/peerid"
+	"github.com/7Eshaan/Denco/internal/ratelimit"
 )
 
 // Options configures connections. Zero durations use the defaults below.
@@ -29,6 +30,11 @@ type Options struct {
 	WriteTimeout      time.Duration // one flush must finish within this; default 60s
 
 	QueueSize int // buffered messages in each direction; default 256
+
+	// ReadLimiter, if set, caps how fast this connection reads (shared by
+	// all connections for a global download limit). Reading slower makes
+	// TCP slow the peer down; nothing is dropped.
+	ReadLimiter *ratelimit.Limiter
 }
 
 func (o *Options) withDefaults() Options {
@@ -90,6 +96,10 @@ type Conn struct {
 	in   chan *Message
 	out  chan *Message
 	done chan struct{}
+	// ctx is cancelled at shutdown, so a reader waiting on the rate
+	// limiter stops at once.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	closeOnce sync.Once
 	errMu     sync.Mutex
@@ -162,7 +172,10 @@ func Accept(nc net.Conn, known func(metainfo.Hash) bool, opts Options) (*Conn, e
 }
 
 func start(nc net.Conn, addr netip.AddrPort, theirs Handshake, outgoing bool, o Options) *Conn {
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &Conn{
+		ctx:      ctx,
+		cancel:   cancel,
 		Remote:   addr,
 		Peer:     theirs,
 		Outgoing: outgoing,
@@ -243,13 +256,18 @@ func (c *Conn) fail(err error) {
 		c.err = err
 		c.errMu.Unlock()
 		close(c.done)
+		c.cancel()
 		c.nc.Close() // unblocks the reader and writer
 	})
 }
 
 func (c *Conn) readLoop() {
 	defer close(c.in)
-	r := bufio.NewReaderSize(countingReader{c.nc, &c.bytesRead}, 32*1024)
+	var src io.Reader = countingReader{c.nc, &c.bytesRead}
+	if c.opts.ReadLimiter != nil {
+		src = limitedReader{src, c.opts.ReadLimiter, c.ctx}
+	}
+	r := bufio.NewReaderSize(src, 32*1024)
 	for {
 		c.nc.SetReadDeadline(time.Now().Add(c.opts.IdleTimeout))
 		m, err := ReadMessage(r)
@@ -347,6 +365,24 @@ type countingReader struct {
 func (cr countingReader) Read(p []byte) (int, error) {
 	n, err := cr.r.Read(p)
 	cr.n.Add(int64(n))
+	return n, err
+}
+
+// limitedReader charges every read to a rate limiter, pausing after reads
+// while the limit is exceeded.
+type limitedReader struct {
+	r   io.Reader
+	lim *ratelimit.Limiter
+	ctx context.Context
+}
+
+func (lr limitedReader) Read(p []byte) (int, error) {
+	n, err := lr.r.Read(p)
+	if n > 0 {
+		if werr := lr.lim.WaitN(lr.ctx, n); werr != nil && err == nil {
+			err = werr // connection closing
+		}
+	}
 	return n, err
 }
 

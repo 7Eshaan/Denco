@@ -1,59 +1,53 @@
 # Progress
 
-**Current phase:** 8 — Daemon, IPC, CLI · ✅ done, waiting for the user's commit
+**Current phase:** 9 — Configuration · ✅ done, waiting for the user's commit
 
-**Next action:** once the user has committed Phase 8, tick it in
-`docs/ROADMAP.md` and start **Phase 9 — Configuration**: `internal/config`
-(flat `key: value` file at `$DENCO_HOME/config`, D4; defaults when missing;
-keys from the spec: `download_dir` (with `~` expansion), `max_active_downloads`,
-`max_connections_per_torrent`, `download_limit`, `upload_limit`, `enable_dht`,
-`enable_pex` (accepted, reported as not supported yet), `listen_port`,
-`resume_enabled`/resume location), flags override the file
-(`denco daemon -dir/-port/-max-active` already exist), `denco config
-get/set/list`, and global up/down **rate limiting** (token bucket shared by
-all sessions) plus per-torrent connection limit wiring (`torrent.Config.MaxPeers`).
+**Next action:** once the user has committed Phase 9, tick it in
+`docs/ROADMAP.md` and start **Phase 10 — Magnets end-to-end**: BEP 10
+extension handshake in `peer`/`torrent` (advertise `ut_metadata`, parse the
+peer's `m` dict and `metadata_size`), BEP 9 `ut_metadata` (request/data/reject
+pieces of 16 KiB, assemble, SHA-1 must equal the info hash, then
+`metainfo.ParseInfo`), a "fetching metadata" state in the engine (torrent
+known by hash + name only, peers from magnet `tr`/`x.pe`), then switch to a
+normal session; `denco add <magnet>` and `denco add <http(s) URL>` (download
+the .torrent, size cap, timeout). Design the extension layer so Phase 10b
+(PEX, D37) plugs into it.
 
 ## Known issues
-- No rate limiting yet (Phase 9).
+- Low download/upload limits shared by many peers can trip the 60s snub
+  timeout and cause peer churn (D36). Phase 12 candidate.
 - No NAT traversal (UPnP/NAT-PMP): incoming peers need a forwarded port.
-  Planned for Phase 12 (agreed with the user).
+  Planned for Phase 12.
+- DHT and PEX are config keys only (Phases 11 and 10b); the daemon says so.
 - Resume: a file edited externally *during* a run that then crashed isn't
   detected (D27); `denco verify` checks manually.
 - Daemon runs in the foreground and logs to its terminal; no log file or
-  auto-start yet (D30). Could revisit in Phase 12 (launchd/systemd notes).
+  auto-start yet (D30). Started with `&` from a script it ignores Ctrl-C.
+- Config changes other than speed limits need a daemon restart.
 - Removing the highest-numbered torrent lets the next add reuse its ID (D31).
 - Linux/Windows: compiled + vetted, tests only *run* on macOS.
 
 ## Open questions for the user
-- Daemon start: went with explicit `denco daemon` (my recommendation; not
-  explicitly confirmed). Auto-start from `denco add` is possible later.
-- `enable_pex`: accept-but-unsupported (my default) vs. adding PEX as a
-  small phase after magnets — needed by Phase 9.
+- Daemon start: explicit `denco daemon` (my recommendation; not explicitly
+  confirmed). Auto-start from `denco add` is possible later.
 - UPnP/NAT-PMP in Phase 12, MSE encryption out of scope — OK?
 
-## Last test run (2026-11-08, end of Phase 8)
-- after review fixes (second Ctrl-C force-quits; `remove -delete` reports
-  what it really deleted; restart test checks saved IDs via the API, with an
-  ID gap — mutation "ignore saved IDs" now fails it): everything below re-run
-- `go test -race -count=1 ./...` — all 15 packages pass
-- `-race -count=5 -cpu=1,2,8` on `torrent`, `peer`, `engine`, `ipc`, `cli` — pass
-- mutation checks on engine tests: 6 of 7 caught (queue limit, seeding not
-  counted, fresh-file guard ×2, queued pause persisted, legacy ID). The
-  survivor (dropping `Saver.SetPaused`) is behaviour-neutral: `finish()`
-  re-persists the paused flag anyway.
-- new regression test `TestStartedCompleteAnnouncesOnce` failed before the
-  D34 fix, passes after
-- manual smoke test of the built binary with a temp `DENCO_HOME`: daemon,
-  add (incl. `-existing`), list, info, files, peers, pause, stop, restart
-  (paused state and IDs restored)
-- double Ctrl-C on the real binary, with a tracker that stalls "stopped":
-  one SIGINT → clean exit after 5.0s; two → killed after 0.5s. (Caveat: a
-  daemon started with `&` from a script inherits "ignore SIGINT", so there
-  Ctrl-C does nothing at all; use `denco stop` or SIGTERM.)
+## Last test run (2026-11-08, end of Phase 9)
+- `go test -race -count=1 ./...` — all 17 packages pass
+- `-race -count=5 -cpu=1,2,8` on `torrent`, `peer`, `engine`, `ipc`, `cli`,
+  `ratelimit` — pass
+- speed-limit test mutation-checked: removing the upload limiter, the
+  download limiter, or the uploader's wait each makes it fail
+- found while writing it: shared fake tracker let earlier unlimited engines
+  join the swarm and hide the limit — test fixed (one tracker per measurement)
+- manual smoke test of the built binary: `config` list/set/get/invalid
+  value, file created with header, daemon picks up the file, `-down-limit`
+  flag overrides it, live `config set upload_limit` applied, status shows it
 - real config dir (`~/Library/Application Support/denco`) confirmed untouched
 - `go vet` (darwin, linux, windows) clean · gofmt clean
 - cross-compile linux/windows/darwin × amd64/arm64 — all build
-- coverage: engine 87%, ipc 86%, cli 80%, resume 88%, torrent 92%, others 90–100%
+- coverage: config 91%, ratelimit 100%, engine 87%, ipc 86%, cli 81%,
+  others 88–100%
 - external deps: none
 
 ## History
@@ -97,7 +91,7 @@ all sessions) plus per-torrent connection limit wiring (`torrent.Config.MaxPeers
   an old CLI test wrote into the real resume dir — artifacts removed, tests now
   isolated (`-state` + `TestMain` HOME redirect), rule added to CLAUDE.md.
   Mutation checks on the clean/crash rules and the resume CLI test. D27–D28.
-- **Phase 8 (2026-11-08):** `engine` (torrent table with persistent IDs and
+- **Phase 8 (2026-11-08, commit 097a8da):** `engine` (torrent table with persistent IDs and
   info-hash dedup, shared listener, download queue, per-torrent run
   goroutine with restore/recheck + Saver, add/pause/resume/remove with safe
   file deletion, views); `ipc` (loopback JSON API, token auth, daemon file,
@@ -108,4 +102,12 @@ all sessions) plus per-torrent connection limit wiring (`torrent.Config.MaxPeers
   torrents (D34); tracker errors no longer echo the announce URL. Review
   fixes: second Ctrl-C force-quits, `remove -delete` reports what it deleted,
   stronger restart test. D29–D34.
+- **Phase 9 (2026-11-08):** `config` (strict flat file, defaults, in-place
+  set/unset/init, rate syntax); `ratelimit` (shared token bucket, live
+  SetRate); download limit in `peer.Conn` reader, upload limit in the
+  session uploader; engine `SetLimits`, max peers per torrent; IPC
+  `POST /v1/limits`; `denco config`; daemon reads the file, flags override
+  (`-dir -port -max-active -max-peers -down-limit -up-limit`),
+  `resume_enabled: false`, notes for DHT/PEX. PEX scheduled as Phase 10b
+  (D37). D35–D37.
 

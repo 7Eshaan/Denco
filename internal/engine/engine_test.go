@@ -564,3 +564,57 @@ func TestFileDone(t *testing.T) {
 		t.Errorf("doneBytes = %d, want 12", got)
 	}
 }
+
+// transferTime measures how long a fresh engine takes to download a
+// 768 KiB torrent from a seeding engine, with the given limits on each
+// side. Each call gets its own tracker, so earlier engines (still running
+// until the test ends) can't join the swarm and bypass the limits.
+func transferTime(t *testing.T, seedUp, leechDown int64) time.Duration {
+	t.Helper()
+	f := newFixture(t, "limited", newTracker(t), 16384, 768<<10)
+	tmp := t.TempDir()
+	seedDir := filepath.Join(tmp, "seed")
+	f.writeData(t, seedDir)
+	ca := testConfig(filepath.Join(tmp, "sa"), seedDir)
+	ca.UploadLimit = seedUp
+	a := openEngine(t, ca)
+	a.Add(f.raw, AddOptions{Existing: true})
+	waitState(t, a, "1", StateSeeding)
+
+	cb := testConfig(filepath.Join(tmp, "sb"), filepath.Join(tmp, "dl"))
+	cb.DownloadLimit = leechDown
+	b := openEngine(t, cb)
+	start := time.Now()
+	b.Add(f.raw, AddOptions{})
+	waitState(t, b, "1", StateSeeding)
+	f.checkData(t, filepath.Join(tmp, "dl"))
+	return time.Since(start)
+}
+
+func TestSpeedLimits(t *testing.T) {
+	// 768 KiB at 1 MiB/s: the 256 KiB burst is free, the rest takes ~0.5s.
+	const limit = 1 << 20
+	if d := transferTime(t, 0, 0); d > 400*time.Millisecond {
+		t.Skipf("unlimited transfer already takes %v here; can't measure limits", d)
+	}
+	if d := transferTime(t, limit, 0); d < 400*time.Millisecond {
+		t.Errorf("upload limit not applied: took %v", d)
+	}
+	if d := transferTime(t, 0, limit); d < 400*time.Millisecond {
+		t.Errorf("download limit not applied: took %v", d)
+	}
+}
+
+func TestSetLimits(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := testConfig(filepath.Join(tmp, "state"), tmp)
+	cfg.DownloadLimit = 5000
+	e := openEngine(t, cfg)
+	if o := e.Overview(); o.DownLimit != 5000 || o.UpLimit != 0 || o.MaxPeers != 50 {
+		t.Fatalf("overview = %+v", o)
+	}
+	e.SetLimits(0, 250_000)
+	if o := e.Overview(); o.DownLimit != 0 || o.UpLimit != 250_000 {
+		t.Fatalf("after SetLimits: %+v", o)
+	}
+}

@@ -33,6 +33,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/peerid"
 	"github.com/7Eshaan/Denco/internal/pieces"
+	"github.com/7Eshaan/Denco/internal/ratelimit"
 	"github.com/7Eshaan/Denco/internal/resume"
 	"github.com/7Eshaan/Denco/internal/storage"
 	"github.com/7Eshaan/Denco/internal/torrent"
@@ -45,8 +46,12 @@ type Config struct {
 	ListenAddr  string // peer port, e.g. ":6881" (default); falls back to a random port if busy
 	MaxActive   int    // torrents downloading at once; seeding ones don't count; default 5
 	SaveEvery   time.Duration
+	// Total speed limits in bytes/s for all torrents together; 0 = unlimited.
+	// Changeable later with SetLimits.
+	DownloadLimit, UploadLimit int64
 	// Session is the template for every torrent session (timeouts, peer
-	// limits, announcer). PeerID, Port, Logger and NoSeed are set by the engine.
+	// limits, announcer). PeerID, Port, Logger, NoSeed and the rate
+	// limiters are set by the engine.
 	Session torrent.Config
 	Logger  *slog.Logger // default: discard
 }
@@ -59,6 +64,8 @@ type Engine struct {
 	ln      *torrent.Listener
 	peerID  peerid.ID
 	started time.Time
+	down    *ratelimit.Limiter // shared by every connection
+	up      *ratelimit.Limiter
 
 	mu       sync.Mutex
 	byID     map[int]*entry
@@ -112,6 +119,9 @@ func Open(cfg Config) (*Engine, error) {
 	if cfg.SaveEvery <= 0 {
 		cfg.SaveEvery = 30 * time.Second
 	}
+	if cfg.Session.MaxPeers <= 0 {
+		cfg.Session.MaxPeers = 50 // same default as torrent.Config; set here so Overview can show it
+	}
 	log := cfg.Logger
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -124,12 +134,13 @@ func Open(cfg Config) (*Engine, error) {
 	if id == (peerid.ID{}) {
 		id = peerid.New()
 	}
-	ln, err := listen(cfg.ListenAddr, peer.Options{PeerID: id}, log)
+	down, up := ratelimit.New(cfg.DownloadLimit), ratelimit.New(cfg.UploadLimit)
+	ln, err := listen(cfg.ListenAddr, peer.Options{PeerID: id, ReadLimiter: down}, log)
 	if err != nil {
 		return nil, fmt.Errorf("engine: peer port: %w", err)
 	}
 	e := &Engine{
-		cfg: cfg, log: log, store: store, ln: ln, peerID: id, started: time.Now(),
+		cfg: cfg, log: log, store: store, ln: ln, peerID: id, started: time.Now(), down: down, up: up,
 		byID: map[int]*entry{}, byHash: map[metainfo.Hash]*entry{}, nextID: 1,
 	}
 	if err := e.load(); err != nil {
@@ -220,6 +231,14 @@ func (e *Engine) Close() error {
 		e.ln.Close()
 	})
 	return nil
+}
+
+// SetLimits changes the total download and upload limits (bytes/s,
+// 0 = unlimited) for every torrent, effective immediately.
+func (e *Engine) SetLimits(down, up int64) {
+	e.down.SetRate(down)
+	e.up.SetRate(up)
+	e.log.Info("speed limits changed", "download", down, "upload", up)
 }
 
 // --- queue ------------------------------------------------------------------------------
@@ -313,6 +332,7 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 
 	cfg := e.cfg.Session
 	cfg.PeerID, cfg.Port, cfg.Logger, cfg.NoSeed = e.peerID, e.ln.Port(), e.log, false
+	cfg.PeerOpts.ReadLimiter, cfg.UploadLimiter = e.down, e.up
 	sess := torrent.New(t.mi, st, have, cfg)
 
 	prev := state

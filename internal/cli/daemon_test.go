@@ -22,7 +22,6 @@ import (
 type daemonHarness struct {
 	t    *testing.T
 	home string
-	dl   string
 	out  *syncBuffer
 	done chan int
 	stop context.CancelFunc
@@ -30,10 +29,16 @@ type daemonHarness struct {
 
 func startDaemon(t *testing.T, home, dl string) *daemonHarness {
 	t.Helper()
+	return startDaemonArgs(t, home, "-port", "0", "-dir", dl)
+}
+
+// startDaemonArgs starts a daemon with exactly these flags.
+func startDaemonArgs(t *testing.T, home string, args ...string) *daemonHarness {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	h := &daemonHarness{t: t, home: home, dl: dl, out: &syncBuffer{}, done: make(chan int, 1), stop: cancel}
+	h := &daemonHarness{t: t, home: home, out: &syncBuffer{}, done: make(chan int, 1), stop: cancel}
 	e := &env{home: home, stdout: h.out, stderr: h.out}
-	go func() { h.done <- runDaemon(ctx, e, []string{"-port", "0", "-dir", dl}, nil) }()
+	go func() { h.done <- runDaemon(ctx, e, args, nil) }()
 	t.Cleanup(func() {
 		cancel()
 		select {

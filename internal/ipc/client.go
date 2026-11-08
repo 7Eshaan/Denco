@@ -105,6 +105,12 @@ func (c *Client) Remove(ctx context.Context, ref string, deleteFiles bool) (engi
 	return t, c.do(ctx, http.MethodPost, torrentPath(ref, "/remove"), RemoveRequest{DeleteFiles: deleteFiles}, &t)
 }
 
+// SetLimits changes the daemon's total speed limits (bytes/s, 0 = unlimited).
+func (c *Client) SetLimits(ctx context.Context, down, up int64) (Status, error) {
+	var s Status
+	return s, c.do(ctx, http.MethodPost, "/v1/limits", LimitsRequest{Download: down, Upload: up}, &s)
+}
+
 // Shutdown asks the daemon to stop. It returns once the request is
 // accepted; the daemon then stops its torrents and exits.
 func (c *Client) Shutdown(ctx context.Context) error {

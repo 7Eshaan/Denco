@@ -24,6 +24,7 @@
 //	POST /v1/torrents/{ref}/pause    → engine.Torrent
 //	POST /v1/torrents/{ref}/resume   → engine.Torrent
 //	POST /v1/torrents/{ref}/remove   RemoveRequest → engine.Removed
+//	POST /v1/limits                  LimitsRequest → Status
 //	POST /v1/shutdown                → {}
 //
 // {ref} is a torrent ID or an info hash prefix. Errors are
@@ -123,6 +124,12 @@ type AddRequest struct {
 // RemoveRequest removes a torrent.
 type RemoveRequest struct {
 	DeleteFiles bool `json:"delete_files"`
+}
+
+// LimitsRequest sets the total speed limits (bytes/s, 0 = unlimited).
+type LimitsRequest struct {
+	Download int64 `json:"download"`
+	Upload   int64 `json:"upload"`
 }
 
 // Status is the daemon's overall status.

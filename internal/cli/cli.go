@@ -9,8 +9,8 @@
 //     probe, verify, download.
 //
 // Files: cli.go (dispatch, usage, paths), daemon.go, client.go (client
-// commands), render.go (tables and detail views), plus one file per
-// standalone command.
+// commands), configcmd.go (denco config), render.go (tables and detail
+// views), plus one file per standalone command.
 package cli
 
 import (
@@ -19,14 +19,22 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/7Eshaan/Denco/internal/config"
 	"github.com/7Eshaan/Denco/internal/ipc"
 )
 
 const usage = `denco — a BitTorrent client
 
 Daemon (keeps torrents running in the background):
-  denco daemon [-dir DIR] [-port N] [-max-active N] [-v]   run the daemon (Ctrl-C or 'denco stop' to quit)
+  denco daemon [-v] [flags]                    run the daemon (Ctrl-C or 'denco stop' to quit);
+                                               flags (-dir -port -max-active -max-peers
+                                               -down-limit -up-limit) override the config file
   denco stop                                   stop the daemon (torrents resume on next start)
+
+Settings ($DENCO_HOME/config.yaml; no daemon needed):
+  denco config [-v]                            show all settings
+  denco config set <key> <value>               change one (speed limits apply at once)
+  denco config get|unset <key> · init · path
 
 Managing torrents (needs a running daemon):
   denco add [-dir DIR] [-existing] [-paused] <file.torrent>...   add torrents
@@ -67,7 +75,12 @@ type env struct {
 }
 
 func (e *env) daemonFile() string { return filepath.Join(e.home, ipc.DaemonFile) }
-func (e *env) stateDir() string   { return filepath.Join(e.home, "resume") }
+func (e *env) configFile() string { return filepath.Join(e.home, config.FileName) }
+
+// loadConfig reads the config file (defaults if it doesn't exist).
+func (e *env) loadConfig() (config.Config, error) {
+	return config.Load(e.configFile(), config.Defaults(e.home))
+}
 
 // Home returns the directory for Denco's own files: $DENCO_HOME if set,
 // else <user config dir>/denco (e.g. ~/Library/Application Support/denco).
@@ -121,6 +134,8 @@ func runEnv(e *env, args []string) int {
 		return cmdRemove(e, rest)
 	case "status":
 		return cmdStatus(e, rest)
+	case "config":
+		return cmdConfig(e, rest)
 
 	case "inspect":
 		return cmdInspect(rest, stdout, stderr)

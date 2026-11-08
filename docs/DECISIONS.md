@@ -397,3 +397,57 @@ One short entry per decision. Newest at the bottom. Format:
 - **Decision:** don't watch `Completed()` when the session started complete.
   Regression test: `TestStartedCompleteAnnouncesOnce` (fails without the fix).
 
+### D35 — Config file
+- **Decision:** `$DENCO_HOME/config.yaml`, flat `key: value` (D4). Keys:
+  `download_dir`, `max_active_downloads`, `max_connections_per_torrent`,
+  `download_limit`, `upload_limit`, `enable_dht`, `enable_pex`,
+  `listen_port`, `resume_enabled`, `resume_dir`. Missing file = defaults.
+  **Strict:** unknown keys, duplicate keys and bad values are errors with
+  the line number (the daemon refuses to start). `#` starts a comment
+  (whole line, or after a space); values may be quoted to contain `#`.
+  Paths: `~` expanded, must then be absolute (no dependence on the daemon's
+  working dir). Booleans: true/false/yes/no/on/off. Rates: see D36.
+  `denco config set` validates, then edits the file *in place* (only that
+  line; comments and order kept; appends new keys); `unset` removes the line;
+  `init` writes a commented file with every key. Daemon flags override the
+  file and are validated by the same code (`cfg.Set`). `resume_enabled:
+  false` gives the engine a throwaway state dir deleted at exit, so nothing
+  persists (the engine itself stays unaware). `enable_dht` (default true,
+  as in the spec) and `enable_pex` (default false) are accepted now; the
+  daemon prints a note that they do nothing yet.
+- **Alternatives:** lenient parsing (warn on unknown keys); rewriting the
+  whole file on `set` (loses comments); JSON.
+- **Why:** a typo like `max_actve_downloads` silently doing nothing is the
+  worst config bug; preserving comments keeps hand-edited files intact.
+
+### D36 — Global rate limiting
+- **Decision:** `internal/ratelimit.Limiter`, a token bucket (burst = ¼ s
+  of the rate, ≥ 32 KiB) with "take after use, go into debt, wait until
+  repaid"; one for downloads and one for uploads, shared by every
+  connection of the engine, so limits are totals. **Download:** applied to
+  the socket reader in `peer.Conn` (reading slower makes TCP slow the peer;
+  counts wire bytes). **Upload:** applied in the per-peer uploader *before*
+  the disk read (counts payload), not in the socket writer — a throttled
+  writer would fill the send queue and the session would drop the peer.
+  Limits change live (`SetRate` wakes waiters; debt is forgiven) via
+  `POST /v1/limits`; `denco config set download_limit/upload_limit` applies
+  them to a running daemon. Rate syntax: `0` unlimited, bare number = KB/s,
+  `K/M/G` (decimal, D10) or `KiB/MiB/GiB`, optional `/s`; minimum 1 KB/s.
+- **Alternatives:** `golang.org/x/time/rate` (external dep); per-torrent
+  limits; throttling in the writer.
+- **Known cost:** with a low limit shared by many peers each peer may get
+  < ~270 B/s, slower than one 16 KiB block per 60 s, so the snub timeout
+  (D24) drops peers and they get redialed. E.g. 10 KB/s over 50 peers.
+  Candidate fix for Phase 12: scale the request pipeline / timeout with
+  the limit.
+
+### D37 — PEX as Phase 10b
+- **Decision:** (user left it to my judgement, 2026-11-08) implement peer
+  exchange (BEP 11) right after magnets, as Phase 10b; until then
+  `enable_pex` is accepted and reported as unavailable.
+- **Why:** PEX matters for a daily driver — swarms fill up fast even when
+  trackers are dead, and it's the main source of peers for many magnets —
+  but it is carried by the BEP 10 extension handshake that Phase 10 builds
+  for `ut_metadata`. Doing it before Phase 10 would mean building that
+  layer twice; after, it's a small addition. Never used for private torrents.
+

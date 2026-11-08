@@ -92,6 +92,9 @@ type Overview struct {
 	DownloadDir string        `json:"download_dir"`
 	StateDir    string        `json:"state_dir"`
 	MaxActive   int           `json:"max_active"`
+	MaxPeers    int           `json:"max_peers"`      // per torrent
+	DownLimit   int64         `json:"download_limit"` // bytes/s, 0 = unlimited
+	UpLimit     int64         `json:"upload_limit"`
 	Torrents    int           `json:"torrents"`
 	ByState     map[State]int `json:"by_state"`
 	Complete    int           `json:"complete"`
@@ -174,6 +177,7 @@ func (e *Engine) Overview() Overview {
 	defer e.mu.Unlock()
 	o := Overview{
 		StartedAt: e.started, ListenPort: e.ln.Port(), MaxActive: e.cfg.MaxActive,
+		MaxPeers: e.cfg.Session.MaxPeers, DownLimit: e.down.Rate(), UpLimit: e.up.Rate(),
 		DownloadDir: e.cfg.DownloadDir, StateDir: e.store.Dir(),
 		ByState:    map[State]int{},
 		Downloaded: e.finished.down, Uploaded: e.finished.up,

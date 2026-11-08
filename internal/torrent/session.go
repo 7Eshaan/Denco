@@ -38,6 +38,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/peerid"
 	"github.com/7Eshaan/Denco/internal/pieces"
+	"github.com/7Eshaan/Denco/internal/ratelimit"
 	"github.com/7Eshaan/Denco/internal/storage"
 	"github.com/7Eshaan/Denco/internal/tracker"
 )
@@ -57,6 +58,10 @@ type Config struct {
 	NoSeed bool
 	// UploadsPaused starts the session with uploads paused (see SetUploadsPaused).
 	UploadsPaused bool
+
+	// UploadLimiter, if set, caps upload speed (shared by all sessions for
+	// a global limit). The download limit lives in PeerOpts.ReadLimiter.
+	UploadLimiter *ratelimit.Limiter
 
 	Announcer tracker.Announcer // default &tracker.Client{}
 	Pieces    pieces.Config

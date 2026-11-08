@@ -24,11 +24,25 @@ const (
 // startUploader runs a goroutine that performs disk reads for p's requests,
 // so the loop never waits on the disk. The loop decides afterwards whether
 // the block is still wanted (the peer may have cancelled or been choked).
+// The upload limit is applied here, before each read, so queues never fill
+// up behind a throttled socket.
 func (s *Session) startUploader(ctx context.Context, p *peerState) {
+	pctx, cancel := context.WithCancel(ctx) // ends when the peer goes away
 	s.goHelper(func() {
+		select {
+		case <-p.conn.Done():
+		case <-pctx.Done():
+		}
+		cancel()
+	})
+	s.goHelper(func() {
+		defer cancel()
 		for {
 			select {
 			case b := <-p.uploadQ:
+				if s.cfg.UploadLimiter.WaitN(pctx, int(b.Length)) != nil {
+					return // peer or session gone
+				}
 				data := make([]byte, b.Length)
 				off := int64(b.Index)*s.info.PieceLength + int64(b.Begin)
 				_, err := s.st.ReadAt(data, off)

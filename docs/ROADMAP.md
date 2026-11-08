@@ -28,7 +28,7 @@ so older references stay valid.
 - [x] **Phase 7 — Resume.** Persist per-torrent state (bitfield, options,
       stats), periodic + on-exit saves, crash-safe atomic writes, recheck on
       start when files changed.
-- [ ] **Phase 8 — Daemon, IPC, CLI.** Multi-torrent engine, daemon process,
+- [x] **Phase 8 — Daemon, IPC, CLI.** Multi-torrent engine, daemon process,
       JSON-over-HTTP IPC on localhost, `add/list/info/pause/resume/remove/
       status/peers/files/stop`, progress tables, duplicate detection.
 - [ ] **Phase 9 — Configuration.** Config file (flat `key: value`), defaults,
@@ -37,11 +37,14 @@ so older references stay valid.
 - [ ] **Phase 10 — Magnets end-to-end.** Extension protocol (BEP 10),
       `ut_metadata` (BEP 9), metadata validation against info hash, `.torrent`
       from HTTP(S) URL.
+- [ ] **Phase 10b — PEX.** Peer exchange (BEP 11, `ut_pex` over the BEP 10
+      extension protocol from Phase 10): send/receive added/dropped peers,
+      never for private torrents, behind `enable_pex`.
 - [ ] **Phase 11 — DHT.** Basic BEP 5 DHT (KRPC over UDP, routing table,
       get_peers / announce_peer, bootstrap, persisted node cache).
 - [ ] **Phase 12 — Daily-driver polish.** File selection (skip files),
       stop-seeding / pause-uploads controls, ratio display, error states &
       retry, real-world interoperability testing, README/usage docs.
 
-Out of scope for now (may revisit): uTP, PEX, encryption (MSE),
+Out of scope for now (may revisit): uTP, encryption (MSE),
 web seeds, BitTorrent v2, TUI/GUI.

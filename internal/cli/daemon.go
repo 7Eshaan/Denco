@@ -13,8 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/7Eshaan/Denco/internal/config"
 	"github.com/7Eshaan/Denco/internal/engine"
 	"github.com/7Eshaan/Denco/internal/ipc"
+	"github.com/7Eshaan/Denco/internal/torrent"
 )
 
 // cmdDaemon runs the engine in the foreground until Ctrl-C, SIGTERM or
@@ -30,26 +32,17 @@ func cmdDaemon(e *env, args []string) int {
 // runDaemon is cmdDaemon with an explicit context, so tests can stop it.
 // stopping, if non-nil, is called when shutdown begins.
 func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int {
-	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
-	fs.SetOutput(e.stderr)
-	dir := fs.String("dir", defaultDownloadDir(), "default download directory")
-	port := fs.Uint("port", 6881, "TCP port for incoming peers (0 = random; falls back to random if busy)")
-	maxActive := fs.Int("max-active", 5, "torrents downloading at once (seeding ones don't count)")
-	verbose := fs.Bool("v", false, "debug logging (peers, trackers)")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	if fs.NArg() != 0 || *port > 65535 || *maxActive < 1 {
-		fmt.Fprintln(e.stderr, "usage: denco daemon [-dir DIR] [-port N] [-max-active N] [-v]")
-		return 2
-	}
 	fail := func(err error) int {
 		fmt.Fprintf(e.stderr, "denco: %v\n", err)
 		return 1
 	}
-	downloads, err := filepath.Abs(*dir)
+	cfg, err := e.loadConfig()
 	if err != nil {
 		return fail(err)
+	}
+	cfg, verbose, code := daemonFlags(e, cfg, args)
+	if code != 0 {
+		return code
 	}
 
 	// Only one daemon per home: both would own the same resume files.
@@ -59,17 +52,29 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 	}
 
 	level := slog.LevelInfo
-	if *verbose {
+	if verbose {
 		level = slog.LevelDebug
 	}
 	log := slog.New(slog.NewTextHandler(e.stderr, &slog.HandlerOptions{Level: level}))
 
+	stateDir := cfg.ResumeDir
+	if !cfg.ResumeEnabled {
+		// The engine always keeps state; give it a throwaway directory so
+		// nothing survives this run.
+		if stateDir, err = os.MkdirTemp("", "denco-noresume-*"); err != nil {
+			return fail(err)
+		}
+		defer os.RemoveAll(stateDir)
+	}
 	eng, err := engine.Open(engine.Config{
-		StateDir:    e.stateDir(),
-		DownloadDir: downloads,
-		ListenAddr:  fmt.Sprintf(":%d", *port),
-		MaxActive:   *maxActive,
-		Logger:      log,
+		StateDir:      stateDir,
+		DownloadDir:   cfg.DownloadDir,
+		ListenAddr:    fmt.Sprintf(":%d", cfg.ListenPort),
+		MaxActive:     cfg.MaxActiveDownloads,
+		DownloadLimit: cfg.DownloadLimit,
+		UploadLimit:   cfg.UploadLimit,
+		Session:       torrent.Config{MaxPeers: cfg.MaxConnectionsPerTorrent},
+		Logger:        log,
 	})
 	if err != nil {
 		return fail(err)
@@ -91,7 +96,12 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 
 	ov := eng.Overview()
 	fmt.Fprintf(e.stdout, "Denco daemon running (pid %d). %d torrents, peer port %d.\n", os.Getpid(), ov.Torrents, ov.ListenPort)
-	fmt.Fprintf(e.stdout, "Downloads go to %s by default. Stop with 'denco stop' or Ctrl-C.\n", downloads)
+	fmt.Fprintf(e.stdout, "Downloads go to %s by default. Limits: ↓ %s  ↑ %s.\n",
+		cfg.DownloadDir, config.DescribeRate(cfg.DownloadLimit), config.DescribeRate(cfg.UploadLimit))
+	for _, note := range daemonNotes(e, cfg) {
+		fmt.Fprintln(e.stdout, note)
+	}
+	fmt.Fprintln(e.stdout, "Stop with 'denco stop' or Ctrl-C.")
 
 	select {
 	case <-ctx.Done():
@@ -120,13 +130,69 @@ func removeDaemonFile(path, token string) {
 	}
 }
 
-// defaultDownloadDir is ~/Downloads/Denco (configurable in Phase 9).
-func defaultDownloadDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "Denco"
+// daemonFlagKeys maps daemon flags to the config settings they override.
+var daemonFlagKeys = map[string]string{
+	"dir":        "download_dir",
+	"port":       "listen_port",
+	"max-active": "max_active_downloads",
+	"max-peers":  "max_connections_per_torrent",
+	"down-limit": "download_limit",
+	"up-limit":   "upload_limit",
+}
+
+// daemonFlags parses the daemon's flags over cfg (config file values are
+// the defaults; flags given explicitly win). Values are validated by the
+// same rules as the config file.
+func daemonFlags(e *env, cfg config.Config, args []string) (config.Config, bool, int) {
+	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
+	fs.SetOutput(e.stderr)
+	def := func(key string) string { v, _ := cfg.Get(key); return v }
+	fs.String("dir", def("download_dir"), "default download directory")
+	fs.String("port", def("listen_port"), "TCP port for incoming peers (0 = random; a random one is used if busy)")
+	fs.String("max-active", def("max_active_downloads"), "torrents downloading at once (seeding ones don't count)")
+	fs.String("max-peers", def("max_connections_per_torrent"), "peer connections per torrent")
+	fs.String("down-limit", def("download_limit"), "total download limit, e.g. 2M or 500K (0 = unlimited)")
+	fs.String("up-limit", def("upload_limit"), "total upload limit (0 = unlimited)")
+	verbose := fs.Bool("v", false, "debug logging (peers, trackers)")
+	usageLine := "usage: denco daemon [-dir DIR] [-port N] [-max-active N] [-max-peers N] [-down-limit R] [-up-limit R] [-v]"
+	if err := fs.Parse(args); err != nil {
+		return cfg, false, 2
 	}
-	return filepath.Join(home, "Downloads", "Denco")
+	if fs.NArg() != 0 {
+		fmt.Fprintln(e.stderr, usageLine)
+		return cfg, false, 2
+	}
+	code := 0
+	fs.Visit(func(f *flag.Flag) {
+		key, ok := daemonFlagKeys[f.Name]
+		if !ok || code != 0 {
+			return
+		}
+		v := f.Value.String()
+		if f.Name == "dir" {
+			v, _ = filepath.Abs(v) // flags may be relative to where you are
+		}
+		if err := cfg.Set(key, v); err != nil {
+			fmt.Fprintf(e.stderr, "denco: -%s: %v\n%s\n", f.Name, err, usageLine)
+			code = 2
+		}
+	})
+	return cfg, *verbose, code
+}
+
+// daemonNotes explains settings that are on but can't do anything yet.
+func daemonNotes(e *env, cfg config.Config) []string {
+	var notes []string
+	if cfg.EnableDHT {
+		notes = append(notes, "Note: enable_dht is on, but DHT isn't available yet (Phase 11); trackers only.")
+	}
+	if cfg.EnablePEX {
+		notes = append(notes, "Note: enable_pex is on, but peer exchange isn't available yet (Phase 10b).")
+	}
+	if !cfg.ResumeEnabled {
+		notes = append(notes, "Note: resume_enabled is off: torrents are forgotten when the daemon stops.")
+	}
+	return notes
 }
 
 // cmdStop asks the daemon to stop and waits until it has.

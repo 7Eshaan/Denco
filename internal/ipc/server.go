@@ -51,6 +51,7 @@ func NewHandler(e *engine.Engine, token string, shutdown func(), log *slog.Logge
 	mux.HandleFunc("POST /v1/torrents/{ref}/pause", h.pause)
 	mux.HandleFunc("POST /v1/torrents/{ref}/resume", h.resume)
 	mux.HandleFunc("POST /v1/torrents/{ref}/remove", h.remove)
+	mux.HandleFunc("POST /v1/limits", h.limits)
 	mux.HandleFunc("POST /v1/shutdown", h.stop)
 	return requireToken(token, mux)
 }
@@ -131,6 +132,19 @@ func (h *handler) remove(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := h.e.Remove(r.PathValue("ref"), req.DeleteFiles)
 	reply(w, t, err)
+}
+
+func (h *handler) limits(w http.ResponseWriter, r *http.Request) {
+	var req LimitsRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.Download < 0 || req.Upload < 0 {
+		writeErr(w, &Error{Status: http.StatusBadRequest, Code: CodeInvalid, Message: "limits can't be negative"})
+		return
+	}
+	h.e.SetLimits(req.Download, req.Upload)
+	h.status(w, r)
 }
 
 func (h *handler) stop(w http.ResponseWriter, r *http.Request) {

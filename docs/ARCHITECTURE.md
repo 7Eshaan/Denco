@@ -37,12 +37,14 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 | `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (open storage → restore/recheck → Session + Saver → final save), Add/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview. `commands.go`, `view.go`. |
 | `internal/resume` | ✅ | `Store` (atomic save/load/list/delete of `<hash>.json` + `<hash>.torrent`), `Restore` (trust rules, partial recheck), `Saver` (periodic/no-op-skipping saves with lifetime totals). |
 | `internal/ipc` | ✅ | Daemon file (`Info`, atomic 0600 write), `NewHandler`/`Serve` (loopback HTTP API over an `*engine.Engine`, bearer-token auth, error→status mapping), `Client` (+ `Connect`, stale-file detection). |
-| `internal/config` | ⏳ | Config file parse, defaults, overrides. |
+| `internal/config` | ✅ | `Config` + `Defaults(home)`, the settings table (`Settings`, `Lookup`, `Get`/`Set` with validation), `Load`/`Parse` (strict, line numbers), in-place `SetInFile`/`UnsetInFile`, `Init`, `KeysInFile`, rate syntax (`ParseRate`/`FormatRate`). |
+| `internal/ratelimit` | ✅ | `Limiter`: token bucket shared by many goroutines; `WaitN(ctx, n)`, live `SetRate`; nil/0 = unlimited. |
 | `internal/dht` | ⏳ | BEP 5 DHT node. |
 | `internal/cli` | ✅ | Every command. `cli.go` (dispatch, usage, `$DENCO_HOME`), `daemon.go` (daemon, stop), `client.go` (add/list/info/files/peers/pause/resume/remove/status), `render.go` (tables/detail views), plus standalone `inspect.go` (inspect, magnet), `announce.go`, `probe.go`, `verify.go`, `download.go`. |
 
 Dependency direction (lower never imports higher):
-`bencode → metainfo/magnet → tracker/peer → pieces/storage → torrent → engine → ipc → cli → cmd`.
+`bencode → metainfo/magnet → tracker/peer → pieces/storage → torrent → engine → ipc → cli → cmd`;
+`ratelimit` (stdlib only) is used by `peer`, `torrent`, `engine`; `config` by `cli`.
 
 ## Key data types (implemented)
 
@@ -107,6 +109,9 @@ Dependency direction (lower never imports higher):
   downloading, stalled, seeding, queued, paused, error), sizes, pieces,
   rates, ETA, lifetime totals, peer/seed/leecher counts, tracker info, times.
 - `ipc.Client` methods mirror the engine; `ipc.Connect(ctx, daemonFile)`.
+- `engine.Config.DownloadLimit/UploadLimit` (bytes/s) and `Engine.SetLimits(down, up)`;
+  `peer.Options.ReadLimiter`, `torrent.Config.UploadLimiter` (`*ratelimit.Limiter`).
+- `config.Load(path, config.Defaults(home)) (Config, error)`; `cfg.Set(key, text)`.
 
 ## Data flow for a downloaded block
 
@@ -144,6 +149,11 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   snapshot mutex (sessions never call into the engine).
 - **ipc**: `net/http` server goroutines call the engine; `Serve` binds
   127.0.0.1 only.
+- **Rate limiting (D36):** two engine-wide `ratelimit.Limiter`s. Each
+  `peer.Conn` reader calls `WaitN` after every socket read (download);
+  each per-peer uploader calls `WaitN` before each block read (upload),
+  with a per-peer context so a disconnect ends the wait. `Conn` gained a
+  context cancelled on close for the same reason.
 - **pieces.Manager**: not thread-safe; owned by the session goroutine.
   `pieces.Recheck` uses up to 4 worker goroutines internally.
 
@@ -161,7 +171,14 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
 - **Daemon file:** `$DENCO_HOME/daemon.json` (0600):
   `{"addr":"127.0.0.1:<port>","token":"<64 hex>","pid":N}`. Written after the
   API is listening, removed after a clean shutdown (only if still ours).
-- Config file: Phase 9.
+- **Config file (D35):** `$DENCO_HOME/config.yaml`:
+  ```
+  # comment
+  download_dir: ~/Downloads/Denco
+  upload_limit: 500K        # trailing comment
+  resume_dir: "/path/with #hash"
+  ```
+  One `key: value` per line; keys from `config.Settings()`; strict.
 
 ## Wire / IPC formats
 
@@ -182,6 +199,8 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   `Authorization: Bearer <token>`. `GET /v1/status`, `GET|POST /v1/torrents`
   (POST body `{"torrent":"<base64 .torrent>","dir","existing","paused"}`),
   `GET /v1/torrents/{ref}[/files|/peers]`, `POST /v1/torrents/{ref}/pause|resume`,
-  `POST /v1/torrents/{ref}/remove {"delete_files":bool}` (→ torrent + `files_deleted`), `POST /v1/shutdown`.
+  `POST /v1/torrents/{ref}/remove {"delete_files":bool}` (→ torrent + `files_deleted`),
+  `POST /v1/limits {"download":B/s,"upload":B/s}` (→ status), `POST /v1/shutdown`.
+  Status now includes `max_peers`, `download_limit`, `upload_limit`.
   Errors: `{"error":"…","code":"not_found|ambiguous|duplicate|files_exist|invalid|busy|unauthorized|internal","id":N}`
   with 404/400/409/401/500. Full list in `internal/ipc/ipc.go`.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/peerid"
+	"github.com/7Eshaan/Denco/internal/ratelimit"
 )
 
 var testInfoHash = metainfo.Hash{0xde, 0xc0}
@@ -351,5 +352,42 @@ func TestTrySendFullQueue(t *testing.T) {
 	}
 	if c.TrySend(Choke()) {
 		t.Fatal("second send should report full queue")
+	}
+}
+
+func TestReadLimiterThrottlesAndStopsOnClose(t *testing.T) {
+	lim := ratelimit.New(1 << 20) // 1 MiB/s, burst 256 KiB
+	d, acc := pair(t, Options{PeerID: peerid.New()}, Options{PeerID: peerid.New(), ReadLimiter: lim})
+
+	// 48 blocks of 16 KiB = 768 KiB: about 0.5s beyond the burst.
+	block := make([]byte, BlockSize)
+	go func() {
+		for i := 0; i < 48; i++ {
+			d.Send(Piece(0, uint32(i*BlockSize), block))
+		}
+	}()
+	start := time.Now()
+	for i := 0; i < 48; i++ {
+		recv(t, acc)
+	}
+	if got := time.Since(start); got < 350*time.Millisecond {
+		t.Fatalf("768 KiB at 1 MiB/s arrived in %v; the limit wasn't applied", got)
+	}
+
+	// A reader stuck on a tiny limit must still shut down promptly.
+	lim.SetRate(1000)
+	go d.Send(Piece(0, 0, block))
+	time.Sleep(50 * time.Millisecond)
+	start = time.Now()
+	acc.Close()
+	select {
+	case <-acc.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close blocked")
+	}
+	for range acc.Incoming() { // closed once the reader exits
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("reader took %v to stop", time.Since(start))
 	}
 }

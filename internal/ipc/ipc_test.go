@@ -107,6 +107,13 @@ func TestAPIRoundTrip(t *testing.T) {
 		t.Fatalf("status = %+v, %v", st, err)
 	}
 
+	if st, err := c.SetLimits(ctx, 2_000_000, 0); err != nil || st.DownLimit != 2_000_000 || st.UpLimit != 0 {
+		t.Fatalf("set limits: %+v, %v", st, err)
+	}
+	if _, err := c.SetLimits(ctx, -1, 0); !errors.As(err, &apiErr) || apiErr.Code != CodeInvalid {
+		t.Fatalf("negative limit: %#v", err)
+	}
+
 	if _, err := c.Remove(ctx, "1", false); err != nil {
 		t.Fatal(err)
 	}
