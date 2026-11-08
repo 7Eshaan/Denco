@@ -235,8 +235,8 @@ func TestAnnounceErrors(t *testing.T) {
 			t.Fatalf("got %v", err)
 		}
 	})
-	t.Run("udp unsupported", func(t *testing.T) {
-		if _, err := c.Announce(ctx, "udp://tracker.example:80", baseRequest()); !errors.Is(err, ErrUnsupportedScheme) {
+	t.Run("wss unsupported", func(t *testing.T) {
+		if _, err := c.Announce(ctx, "wss://tracker.example/announce", baseRequest()); !errors.Is(err, ErrUnsupportedScheme) {
 			t.Fatalf("got %v", err)
 		}
 	})

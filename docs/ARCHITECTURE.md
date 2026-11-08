@@ -25,7 +25,7 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 | `internal/format` | ✅ | Human-readable sizes, speeds, durations for CLI output. |
 | `internal/magnet` | ✅ | Parse/print magnet URIs (xt hex+base32, dn, tr, x.pe). |
 | `internal/peerid` | ✅ | Generate our 20-byte peer ID (`-DN0001-…`); `ClientName` decodes other clients' IDs. |
-| `internal/tracker` | ✅ | `Client.Announce` (one HTTP/HTTPS announce) and `List` (BEP 12 tiers, concurrent, fallback + promote). UDP client (BEP 15) ⏳ Phase 5b. |
+| `internal/tracker` | ✅ | `Client.Announce` (one HTTP/HTTPS announce) and `List` (BEP 12 tiers, concurrent, fallback + promote). `Client` dispatches by scheme: HTTP(S) in `http.go`, UDP (BEP 15 + BEP 41) in `udp.go`. |
 | `internal/peer` | ✅ | Peer wire protocol: `Handshake`, `Message` codec + typed constructors/parsers, `Conn` (Dial/Accept, reader + writer goroutines, keep-alive, idle timeout). |
 | `internal/bitfield` | ✅ | Fixed-size piece set in wire format (high bit = piece 0); validated `FromBytes`. |
 | `internal/storage` | ✅ | `Layout` (OS-safe paths, sanitising, collisions, containment) and `Storage` (ReadAt/WriteAt across files, handle LRU, no-overwrite, ReadOnly, safe DeleteFiles). |
@@ -124,6 +124,10 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   [&trackerid=]`. Raw-byte params percent-encoded byte-wise (D15).
 - **Tracker response (incoming):** bencoded dict; `peers` as compact string
   (6 bytes/peer) or list of dicts; optional `peers6` (18 bytes/peer).
+- **UDP tracker (BEP 15):** big-endian binary datagrams. connect `[0x41727101980
+  u64][0 u32][tx u32]` → `[0][tx][conn_id u64]`; announce (98 bytes + BEP 41
+  options `[0x2][len][data]…`) → `[1][tx][interval][leechers][seeders][peers…]`;
+  error `[3][tx][message]`. Event codes: 0 none, 1 completed, 2 started, 3 stopped.
 - **Peer handshake:** `<19>"BitTorrent protocol"<8 reserved><20 info hash><20 peer id>`
   (68 bytes). Reserved bits we use: `[5]&0x10` extensions (BEP 10), `[7]&0x01` DHT.
 - **Peer messages:** `<uint32 BE length><uint8 id><payload>`; length 0 =

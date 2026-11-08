@@ -16,7 +16,7 @@ so older references stay valid.
 - [x] **Phase 4 — Storage & pieces.** Multi-file piece↔file mapping, safe path
       resolution (incl. Windows name sanitising), no-overwrite policy, piece
       hashing/verification, rarest-first picker, block requests.
-- [ ] **Phase 5 — Single-torrent engine.** Torrent session: tracker loop, peer
+- [x] **Phase 5 — Single-torrent engine.** Torrent session: tracker loop, peer
       pool, concurrent block downloads from many peers, endgame, reject bad
       pieces, reconnects. End-to-end test with an in-process tracker + seeder.
 - [ ] **Phase 5b — UDP trackers.** BEP 15 client (connect → announce, connection

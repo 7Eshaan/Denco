@@ -116,10 +116,10 @@ func TestAnnounceAllCancelled(t *testing.T) {
 }
 
 func TestAnnounceAllUnsupportedSkipped(t *testing.T) {
-	// Real Client: udp:// is rejected instantly and the http one is tried next.
+	// Real Client: wss:// is rejected instantly and the http one is tried next.
 	srv := serve(t, 200, func(url.Values) any { return map[string]any{"interval": 60} })
 	l := NewList(nil)
-	l.tiers = [][]string{{"udp://tracker.example:80", srv.URL}}
+	l.tiers = [][]string{{"wss://tracker.example/announce", srv.URL}}
 	res := l.AnnounceAll(context.Background(), &Client{}, baseRequest())
 	if res[0].URL != srv.URL {
 		t.Fatalf("result = %+v", res[0])

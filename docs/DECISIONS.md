@@ -228,3 +228,18 @@ One short entry per decision. Newest at the bottom. Format:
   - after completion: stop dialing (seeding behaviour is Phase 6).
 - **Why:** conventional values from mainstream clients; each rule is covered by
   an end-to-end test in `internal/torrent/session_test.go`.
+
+### D25 — UDP tracker client design (BEP 15 + BEP 41)
+- **Decision:** `tracker.UDPClient`, reached through `tracker.Client.Announce`
+  dispatching on URL scheme (so `List` and the session are unchanged). One
+  connected UDP socket per announce; connection IDs cached per `host:port` for
+  60s and shared process-wide (`defaultUDP`), so regular announces skip the
+  connect round trip. Retransmit after 15·2ⁿ s (n ≤ 8); in practice the
+  per-attempt context (15s in `List`) ends it sooner. A tracker error for a
+  *cached* ID triggers one fresh connect + retry (tracker restarts). Packets
+  with the wrong transaction ID are ignored. Peer entries are 6 bytes for an
+  IPv4 tracker socket, 18 for IPv6. URL path+query is sent as BEP 41 URLData.
+  ICMP "port unreachable" read errors fail the attempt immediately.
+- **Alternatives:** one shared UDP socket demultiplexing all trackers (fewer
+  sockets but more code: routing by transaction ID, lifetime management).
+- **Why:** simplest correct implementation; sockets are cheap and short-lived.

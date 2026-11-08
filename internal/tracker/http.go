@@ -1,9 +1,9 @@
 // Package tracker talks to BitTorrent trackers to find peers.
 //
 // Supported: HTTP/HTTPS trackers (BEP 3) with compact IPv4 peers (BEP 23),
-// compact IPv6 peers (BEP 7) and the older dictionary peer format.
-// UDP trackers (BEP 15) are not supported yet; Announce returns
-// ErrUnsupportedScheme for them so callers can skip to the next tracker.
+// compact IPv6 peers (BEP 7) and the older dictionary peer format, and UDP
+// trackers (BEP 15, udp.go). Other schemes (e.g. wss://) return
+// ErrUnsupportedScheme so callers can skip to the next tracker.
 //
 // This package only performs single announces and multi-tracker fallback
 // (List). Deciding *when* to announce (intervals, events) belongs to the
@@ -47,7 +47,7 @@ const (
 )
 
 var (
-	// ErrUnsupportedScheme is returned for tracker URLs we can't speak (udp://, wss://).
+	// ErrUnsupportedScheme is returned for tracker URLs we can't speak (e.g. wss://).
 	ErrUnsupportedScheme = errors.New("tracker: unsupported URL scheme")
 )
 
@@ -81,21 +81,38 @@ type Response struct {
 	Warning     string
 }
 
-// Client performs announces over HTTP(S). The zero value is usable.
+// Client announces to HTTP(S) and UDP trackers. The zero value is usable
+// and safe for concurrent use.
 type Client struct {
 	HTTP      *http.Client // nil means a client with a 30s timeout
 	UserAgent string       // sent as User-Agent; empty means "Denco/<version>"
+	UDP       *UDPClient   // nil means a shared default UDPClient
 }
 
-// Announce sends one announce to trackerURL.
+// defaultUDP is shared so UDP connection IDs are reused across torrents.
+var defaultUDP = &UDPClient{}
+
+// Announce sends one announce to trackerURL, choosing the protocol by scheme.
 func (c *Client) Announce(ctx context.Context, trackerURL string, req Request) (*Response, error) {
 	u, err := url.Parse(trackerURL)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: bad URL %q: %w", trackerURL, err)
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	switch u.Scheme {
+	case "http", "https":
+		return c.announceHTTP(ctx, u, req)
+	case "udp":
+		udp := c.UDP
+		if udp == nil {
+			udp = defaultUDP
+		}
+		return udp.Announce(ctx, trackerURL, req)
+	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedScheme, u.Scheme)
 	}
+}
+
+func (c *Client) announceHTTP(ctx context.Context, u *url.URL, req Request) (*Response, error) {
 	u.RawQuery = buildQuery(u.RawQuery, req)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
