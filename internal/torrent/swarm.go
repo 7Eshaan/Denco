@@ -71,6 +71,18 @@ func (w *swarm) add(addrs []netip.AddrPort) {
 	}
 }
 
+// addSome is add for less trusted sources (PEX): new addresses are only
+// taken while the swarm knows fewer than limit, so peers can't make it
+// grow without bound.
+func (w *swarm) addSome(addrs []netip.AddrPort, limit int) {
+	for _, a := range addrs {
+		if len(w.addrs) >= limit {
+			return
+		}
+		w.add([]netip.AddrPort{a})
+	}
+}
+
 // next returns up to n addresses ready to dial and marks them dialing.
 func (w *swarm) next(n int, now time.Time) []netip.AddrPort {
 	var out []netip.AddrPort

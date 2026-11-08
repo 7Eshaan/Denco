@@ -1,15 +1,14 @@
 # Progress
 
-**Current phase:** 10b — PEX · not started (Phase 10 committed as dc97f4f)
+**Current phase:** 10b — PEX · ✅ done, waiting for the user's commit
 
-**Next action:** start **Phase 10b — PEX** (D37): `ut_pex` (BEP 11) in
-`torrent/extensions.go` — advertise `"ut_pex": 2` (new `peer.ExtPEXID`),
-send `added`/`added.f`/`dropped` (+ `added6`/`dropped6`) about once a minute
-to peers that support it (≤ 50 added per message), feed received peers into
-the swarm (`swarm.add`), never for private torrents, only when
-`enable_pex` is on (plumb the config flag: daemon → engine.Config →
-torrent.Config). Rate-limit what we accept from one peer. Then drop the
-"not available" note for PEX.
+**Next action:** once the user has committed Phase 10b, tick it in
+`docs/ROADMAP.md` and start **Phase 11 — DHT** (BEP 5): plan it first
+(KRPC over UDP, routing table, get_peers/announce_peer, bootstrap nodes,
+persisted node cache, `enable_dht` plumbing, magnet without trackers) and
+show the user the plan before writing code. Compact peer encoding now
+exists in `tracker` and `peer/pex.go`; DHT will need it too (consider one
+shared helper then).
 
 ## Known issues
 - A magnet link with no trackers and no `x.pe` peers can't find anyone until
@@ -20,7 +19,9 @@ torrent.Config). Rate-limit what we accept from one peer. Then drop the
   timeout and cause peer churn (D36). Phase 12 candidate.
 - No NAT traversal (UPnP/NAT-PMP): incoming peers need a forwarded port.
   Planned for Phase 12.
-- DHT and PEX are config keys only so far (Phases 11 and 10b).
+- DHT is a config key only so far (Phase 11).
+- `denco download` (standalone tool) doesn't use extensions: no PEX or
+  metadata serving there; the daemon does both.
 - Resume: a file edited externally *during* a run that then crashed isn't
   detected (D27); `denco verify` checks manually.
 - Daemon runs in the foreground and logs to its terminal; no log file or
@@ -30,33 +31,38 @@ torrent.Config). Rate-limit what we accept from one peer. Then drop the
 - Linux/Windows: compiled + vetted, tests only *run* on macOS.
 
 ## Open questions for the user
+- `enable_pex` defaults to **false** (as in the spec's example config).
+  Mainstream clients default to on; it's safe (never for private
+  torrents). Switch the default to true?
 - Daemon start: explicit `denco daemon` (my recommendation; not explicitly
   confirmed). Auto-start from `denco add` is possible later.
 - UPnP/NAT-PMP in Phase 12, MSE encryption out of scope — OK?
 
-## Last test run (2026-11-08, small CLI fixes after Phase 10)
-- `go test -race -count=1 ./...` — all 18 packages pass; vet, gofmt and
-  linux/windows cross-compile clean
-- new `TestRenderStatusCountsEveryState` fails without its fix (checked)
-
-## Previous test run (2026-11-08, end of Phase 10)
-- first full run: **`metadata` TestFetchFromPeers hung in 3 of 31 runs** —
-  a real design bug (mixed-peer assembly banned honest peers alongside a
-  liar). Fetcher redesigned to per-peer assembly (D38); regression assert
-  added (honest peer never banned)
-- after the fix: `go test -race -count=1 ./...` — all 18 packages pass
-- `-race -count=10 -cpu=1,2,8` on `metadata`, `engine`, `torrent` (30 runs
-  each) and `-count=5 -cpu=1,2,8` on `peer`, `ipc`, `cli` — pass
-- mutation check: removing the fetcher→session peer handoff makes the
-  x.pe-only magnet test stall (that bug was found by the test first)
-- smoke test, two real daemons with separate homes: B added a magnet with
-  only the hash and A's address, got the metadata in ~17 ms, downloaded
-  3 files byte-identical to A's (re-run on the final build)
+## Last test run (2026-11-08, end of Phase 10b)
+- `go test -race -count=1 ./...` — all 18 packages pass
+- `-race -count=10 -cpu=1,2,8` on `torrent`, `metadata`, `engine` (30 runs
+  each) and `-count=5 -cpu=1,2,8` on `peer`, `cli`, `ipc` — pass; the PEX
+  tests alone again at `-count=10 -cpu=1,2,8` after the last test was added — pass
+- found while writing tests: (1) the fetcher hung up on a peer without
+  metadata before its PEX message arrived; (2) one global PEX round per
+  minute meant short-lived magnet peers never heard anything → per-peer
+  timing, first message right after the extension handshake (D41)
+- mutation checks — each makes a test fail: no self-exclusion, PEX for
+  private torrents, no receive throttle, no 50 cap, received peers ignored,
+  no dropped list, incoming peers advertised at their source port, timer
+  advanced when nothing was sent, no interval between messages, fetcher
+  dropping PEX-only peers, engine not passing `PEX` to the fetcher, seed
+  not skipping seeds, malformed message not dropping the peer
+- smoke test, three real daemons (separate homes, `enable_pex: true`): A
+  seeds; B gets a magnet naming only A (download limited to 100K so it
+  stays connected); C gets a magnet naming only B. C's log: "peers from
+  PEX … peer=:46882 added=1" → connected to A (:46881) → complete in a few
+  seconds. B and C byte-identical to A; `denco status` shows
+  "Peer exchange: on"; all three stopped cleanly
 - real config dir (`~/Library/Application Support/denco`) untouched
 - `go vet` (darwin, linux, windows) clean · gofmt clean
 - cross-compile linux/windows/darwin × amd64/arm64 — all build
-- coverage: metadata 89%, engine 88%, cli 82%, torrent 91%, peer 94%,
-  others 85–100%
+- coverage: peer 95%, torrent 92%, metadata 91%, engine 88%
 - external deps: none
 
 ## History
@@ -127,5 +133,12 @@ torrent.Config). Rate-limit what we accept from one peer. Then drop the
   session; IPC `magnet` in add, `no_metadata` error; `denco add` takes
   magnet links and HTTP(S) URLs (incl. redirects to magnets); "Fetching
   metadata" in list/info. Found and fixed: x.pe-only magnets stalled after
-  metadata; honest peers banned on bad metadata. D38–D40.
-
+  metadata; honest peers banned on bad metadata. D38–D40. Commit dc97f4f;
+  small CLI fixes in 44cd584.
+- **Phase 10b (2026-11-08):** BEP 11 `peer.PEX` codec; sessions advertise
+  `ut_pex` (not for private torrents), send added/dropped per peer (first
+  right after its extension handshake, then ≤ 1/min, ≤ 50 each), accept
+  ≤ 1 message per half interval and ≤ 50 addresses from a peer, PEX-grown
+  swarm capped at 2000; metadata fetcher receives PEX (keeps PEX-only
+  peers); `enable_pex` plumbed daemon → engine → session/fetcher;
+  "Peer exchange" row in `denco status`. D41.

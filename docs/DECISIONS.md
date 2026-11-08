@@ -502,3 +502,36 @@ One short entry per decision. Newest at the bottom. Format:
   the user's terminal; uses the user's own network environment (proxies set
   in their shell apply).
 
+### D41 — Peer exchange (BEP 11)
+- **Decision:** sessions advertise `ut_pex` (ID 2) when `enable_pex` is on
+  and the torrent isn't private (BEP 27: private swarms get peers only from
+  their tracker). Rules:
+  - **What we advertise:** connected peers that accept connections at a
+    known address — ones we dialed (flag `reachable`), and incoming ones
+    whose extension handshake gave a listening port (`p`); never the
+    recipient itself. Seeds carry the `seed` flag.
+  - **When:** per peer. The first message goes out right after that peer's
+    extension handshake, later ones at most once per `PEXInterval` (60s),
+    each listing what was added/dropped since the last one *sent to that
+    peer* (≤ 50 each; the rest follow later). If there is nothing new the
+    peer's timer isn't advanced, so news isn't held back for a minute.
+  - **What we accept:** from one peer, one message per half interval (more
+    frequent ones are ignored, not punished) and ≤ 50 addresses per
+    message; PEX can grow a torrent's swarm only to 2000 known addresses
+    (tracker peers are unlimited: we chose those sources). A seed skips
+    addresses flagged `seed`. A malformed message (not a dict) drops the peer.
+  - **Magnets:** the metadata fetcher also asks for `ut_pex`, but only
+    *receives* (privacy is unknown before the metadata arrives; receiving
+    leaks nothing). A peer with no metadata but with PEX — typically another
+    magnet user — is kept until its PEX message arrives (≤ RequestTimeout).
+    PEX peers join the fetcher's list, which seeds the download (D38).
+  - `denco status` shows "Peer exchange: on/off". The standalone
+    `denco download` tool doesn't speak extensions, so no PEX there.
+- **Alternatives:** one global round every minute (first version: a magnet
+  user who stays a few seconds never heard anything — found while writing
+  the fetcher test); advertising incoming peers at their source address
+  (ephemeral port, useless to others); sending PEX from the fetcher too.
+- **Why:** follows BEP 11 and libtorrent's limits (50 per message, one per
+  minute) while making the first message useful; caps keep a hostile peer
+  from flooding the swarm with fake addresses.
+

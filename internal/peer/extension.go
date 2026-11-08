@@ -12,11 +12,12 @@ import (
 // sender wants to *receive* them on. Later extended messages carry the
 // receiver's ID for that extension. https://www.bittorrent.org/beps/bep_0010.html
 
-// Extension names and the IDs Denco asks peers to use when sending them to
-// us. Phase 10b adds ut_pex here.
+// Extension names and the IDs Denco asks peers to use when sending them to us.
 const (
 	ExtMetadata   = "ut_metadata" // BEP 9
 	ExtMetadataID = 1
+	ExtPEX        = "ut_pex" // BEP 11 (pex.go)
+	ExtPEXID      = 2
 )
 
 // maxExtHandshake bounds the handshake we accept (real ones are < 1 KB).

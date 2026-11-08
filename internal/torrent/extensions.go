@@ -7,7 +7,8 @@ import (
 
 // BEP 10 extension messages. A session advertises ut_metadata (BEP 9) and
 // serves its info dict to peers that ask — that is how peers who only have
-// a magnet link get the torrent. Phase 10b adds ut_pex here.
+// a magnet link get the torrent. It also advertises ut_pex (pex.go) when
+// peer exchange is allowed for this torrent.
 
 // sendExtHandshake tells p which extensions we support, if both sides
 // set the extension bit.
@@ -15,8 +16,12 @@ func (s *Session) sendExtHandshake(p *peerState) {
 	if !s.cfg.PeerOpts.Extensions || !p.conn.Peer.SupportsExtensions() {
 		return
 	}
+	m := map[string]int{peer.ExtMetadata: peer.ExtMetadataID}
+	if s.pexEnabled() {
+		m[peer.ExtPEX] = peer.ExtPEXID
+	}
 	hs := peer.ExtHandshake{
-		M:            map[string]int{peer.ExtMetadata: peer.ExtMetadataID},
+		M:            m,
 		MetadataSize: len(s.mi.InfoBytes),
 		Version:      "Denco 0.0.1",
 		Port:         int(s.cfg.Port),
@@ -39,8 +44,12 @@ func (s *Session) onExtended(p *peerState, m *peer.Message) {
 			return
 		}
 		p.extMetadata = hs.M[peer.ExtMetadata]
+		p.extPEX = hs.M[peer.ExtPEX]
+		p.listenPort = hs.Port
 	case peer.ExtMetadataID:
 		s.onMetadataMessage(p, body)
+	case peer.ExtPEXID:
+		s.onPEX(p, body)
 	}
 	// Other IDs: extensions we didn't advertise; peers shouldn't send them.
 }

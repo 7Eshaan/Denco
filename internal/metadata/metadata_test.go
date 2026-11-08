@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -97,10 +98,11 @@ func TestAssembler(t *testing.T) {
 // --- fake peers ------------------------------------------------------------------------
 
 type fakeOpts struct {
-	meta     []byte // what it serves (nil = no metadata_size, no ut_metadata)
-	noExt    bool   // don't set the extension bit
-	reject   bool   // reject every request
-	silent   bool   // handshake, then never answer
+	meta     []byte           // what it serves (nil = no metadata_size, no ut_metadata)
+	noExt    bool             // don't set the extension bit
+	reject   bool             // reject every request
+	silent   bool             // handshake, then never answer
+	pex      []netip.AddrPort // sent in a ut_pex message right after the handshake
 	reqCount atomic.Int64
 }
 
@@ -127,11 +129,17 @@ func fakePeer(t *testing.T, hash metainfo.Hash, o *fakeOpts) netip.AddrPort {
 				defer c.Close()
 				const theirID = 7 // our (the fake's) ID for ut_metadata: anything but 1
 				hs := peer.ExtHandshake{M: map[string]int{}}
+				if o.pex != nil {
+					hs.M[peer.ExtPEX] = 9
+				}
 				if o.meta != nil {
 					hs.M[peer.ExtMetadata] = theirID
 					hs.MetadataSize = len(o.meta)
 				}
 				c.Send(peer.Extended(0, hs.Encode()))
+				if o.pex != nil { // on the ID Denco asks for; Denco ignores it if it didn't ask
+					c.Send(peer.Extended(peer.ExtPEXID, peer.PEX{Added: o.pex}.Encode()))
+				}
 				peerID := 0
 				for m := range c.Incoming() {
 					id, body, err := peer.ParseExtended(m)
@@ -278,5 +286,35 @@ func TestFetchRecoversFromWrongMetadata(t *testing.T) {
 	f.mu.Unlock()
 	if banned != 1 {
 		t.Fatalf("banned = %d, want the liar only", banned)
+	}
+}
+
+// A magnet whose only peer has no metadata, but knows (via PEX) a peer
+// that has it: found with PEX on, never found with it off.
+func TestFetchFindsPeersThroughPEX(t *testing.T) {
+	meta, hash := infoDict(t, "exchanged", 100)
+	good := &fakeOpts{meta: meta}
+	goodAddr := fakePeer(t, hash, good)
+	introducer := fakePeer(t, hash, &fakeOpts{pex: []netip.AddrPort{goodAddr}})
+
+	run := func(pex bool, timeout time.Duration) ([]byte, error, *Fetcher) {
+		cfg := testConfig()
+		cfg.PEX = pex
+		f := NewFetcher(hash, nil, []netip.AddrPort{introducer}, cfg)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		data, err := f.Run(ctx)
+		return data, err, f
+	}
+
+	if _, err, _ := run(false, 500*time.Millisecond); err == nil || good.reqCount.Load() != 0 {
+		t.Fatalf("PEX off: err=%v, requests to the PEX peer=%d; want a timeout and none", err, good.reqCount.Load())
+	}
+	got, err, f := run(true, 10*time.Second)
+	if err != nil || !bytes.Equal(got, meta) {
+		t.Fatalf("PEX on: err=%v", err)
+	}
+	if !slices.Contains(f.Peers(), goodAddr) {
+		t.Errorf("Peers() = %v; the PEX peer should be handed to the download", f.Peers())
 	}
 }

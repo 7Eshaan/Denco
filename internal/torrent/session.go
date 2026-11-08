@@ -16,6 +16,7 @@
 //	peers.go    – per-peer state and wire message handling (download side)
 //	upload.go   – serving requests and the choking algorithm
 //	extensions.go – BEP 10 extension handshake; serving metadata (BEP 9)
+//	pex.go      – peer exchange (BEP 11)
 //	listener.go – one TCP listener routing incoming peers to sessions
 //	swarm.go    – known addresses, dialing, backoff, bans
 //	announce.go – tracker announce loop
@@ -60,6 +61,10 @@ type Config struct {
 	// UploadsPaused starts the session with uploads paused (see SetUploadsPaused).
 	UploadsPaused bool
 
+	// PEX enables peer exchange (BEP 11) with peers that support it. It is
+	// never used for private torrents, whatever this says.
+	PEX bool
+
 	// UploadLimiter, if set, caps upload speed (shared by all sessions for
 	// a global limit). The download limit lives in PeerOpts.ReadLimiter.
 	UploadLimiter *ratelimit.Limiter
@@ -76,6 +81,7 @@ type Config struct {
 	AnnounceRetry   time.Duration // first retry after all trackers failed; default 1m
 	ChokeInterval   time.Duration // re-evaluate who is unchoked; default 10s
 	OptimisticEvery time.Duration // rotate the optimistic unchoke; default 30s
+	PEXInterval     time.Duration // how often PEX messages are sent; default 60s
 
 	banExactAddr bool // tests only: ban address:port, not the whole IP (see swarm)
 }
@@ -101,6 +107,7 @@ func (c Config) withDefaults() Config {
 	defD(&c.AnnounceRetry, time.Minute)
 	defD(&c.ChokeInterval, 10*time.Second)
 	defD(&c.OptimisticEvery, 30*time.Second)
+	defD(&c.PEXInterval, time.Minute)
 	if c.Announcer == nil {
 		c.Announcer = &tracker.Client{}
 	}
@@ -376,6 +383,7 @@ func (s *Session) loop(ctx context.Context) error {
 			}
 			s.checkTimeouts()
 			s.maybeRechoke(now)
+			s.maybeSendPEX(now)
 			s.maintain(ctx)
 			s.publish()
 		case ev := <-s.events:

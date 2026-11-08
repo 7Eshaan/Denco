@@ -11,7 +11,7 @@
 // Files:
 //
 //	metadata.go  – message encoding and the Assembler
-//	fetcher.go   – Fetcher: finds peers (trackers, magnet x.pe) and downloads the metadata
+//	fetcher.go   – Fetcher: finds peers (trackers, magnet x.pe, PEX) and downloads the metadata
 //
 // Serving metadata to others is done by torrent.Session, which has it.
 package metadata

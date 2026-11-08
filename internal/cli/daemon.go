@@ -73,7 +73,7 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 		MaxActive:     cfg.MaxActiveDownloads,
 		DownloadLimit: cfg.DownloadLimit,
 		UploadLimit:   cfg.UploadLimit,
-		Session:       torrent.Config{MaxPeers: cfg.MaxConnectionsPerTorrent},
+		Session:       torrent.Config{MaxPeers: cfg.MaxConnectionsPerTorrent, PEX: cfg.EnablePEX},
 		Logger:        log,
 	})
 	if err != nil {
@@ -185,9 +185,6 @@ func daemonNotes(e *env, cfg config.Config) []string {
 	var notes []string
 	if cfg.EnableDHT {
 		notes = append(notes, "Note: enable_dht is on, but DHT isn't available yet (Phase 11); trackers only.")
-	}
-	if cfg.EnablePEX {
-		notes = append(notes, "Note: enable_pex is on, but peer exchange isn't available yet (Phase 10b).")
 	}
 	if !cfg.ResumeEnabled {
 		notes = append(notes, "Note: resume_enabled is off: torrents are forgotten when the daemon stops.")

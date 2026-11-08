@@ -3,6 +3,8 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -11,6 +13,9 @@ import (
 	"time"
 
 	"github.com/7Eshaan/Denco/internal/magnet"
+	"github.com/7Eshaan/Denco/internal/metainfo"
+	"github.com/7Eshaan/Denco/internal/peer"
+	"github.com/7Eshaan/Denco/internal/peerid"
 	"github.com/7Eshaan/Denco/internal/resume"
 	"github.com/7Eshaan/Denco/internal/storage"
 )
@@ -180,5 +185,69 @@ func TestMagnetRespectsExistingFiles(t *testing.T) {
 	e2.AddMagnet(magnetURI(f, "", "", seedAddr), AddOptions{Existing: true})
 	if v := waitState(t, e2, "1", StateSeeding); v.Downloaded != 0 {
 		t.Errorf("downloaded %d bytes of data it already had", v.Downloaded)
+	}
+}
+
+// pexIntroducer is a peer without metadata whose only use is a PEX message
+// naming addrs — so a magnet pointing at it can only work through PEX.
+func pexIntroducer(t *testing.T, hash metainfo.Hash, addrs ...netip.AddrPort) netip.AddrPort {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			nc, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				c, err := peer.Accept(nc, func(h metainfo.Hash) bool { return h == hash },
+					peer.Options{PeerID: peerid.New(), Extensions: true})
+				if err != nil {
+					return
+				}
+				defer c.Close()
+				c.Send(peer.Extended(0, peer.ExtHandshake{M: map[string]int{peer.ExtPEX: 3}}.Encode()))
+				c.Send(peer.Extended(peer.ExtPEXID, peer.PEX{Added: addrs}.Encode()))
+				for range c.Incoming() {
+				}
+			}()
+		}
+	}()
+	return netip.MustParseAddrPort(ln.Addr().String())
+}
+
+// enable_pex reaches the magnet fetcher: a magnet whose only peer knows
+// the seed just by PEX completes with PEX on and stays stuck with it off.
+func TestMagnetFindsPeersThroughPEX(t *testing.T) {
+	f := newFixture(t, "exchanged", "", 16384, 5*16384+3)
+	seed := seedEngine(t, f)
+	intro := pexIntroducer(t, f.mi.InfoHash, seed.ln.Addr())
+	uri := magnetURI(f, "", "", intro.String())
+
+	for _, pex := range []bool{false, true} {
+		tmp := t.TempDir()
+		dl := filepath.Join(tmp, "dl")
+		cfg := testConfig(filepath.Join(tmp, "state"), dl)
+		cfg.Session.PEX = pex
+		e := openEngine(t, cfg)
+		if _, err := e.AddMagnet(uri, AddOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if !pex {
+			time.Sleep(time.Second)
+			if v, _ := e.Get("1"); v.State != StateMetadata {
+				t.Fatalf("PEX off: state %s, want still fetching metadata", v.State)
+			}
+			continue
+		}
+		waitState(t, e, "1", StateSeeding)
+		f.checkData(t, dl)
+		if ov := e.Overview(); !ov.PEX {
+			t.Error("Overview doesn't report PEX on")
+		}
 	}
 }

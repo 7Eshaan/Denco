@@ -34,7 +34,7 @@ type Config struct {
 	DownloadLimit            int64
 	UploadLimit              int64
 	EnableDHT                bool // accepted; DHT arrives in Phase 11
-	EnablePEX                bool // accepted; PEX arrives in Phase 10b
+	EnablePEX                bool // peer exchange (BEP 11); never for private torrents
 	ListenPort               int
 	ResumeEnabled            bool
 	ResumeDir                string
@@ -88,7 +88,7 @@ var settings = []Setting{
 	{Name: "enable_dht", Help: "find peers without trackers (DHT; not available until Phase 11)",
 		get: func(c *Config) string { return strconv.FormatBool(c.EnableDHT) },
 		set: func(c *Config, v string) error { return setBool(&c.EnableDHT, v) }},
-	{Name: "enable_pex", Help: "exchange peer lists with peers (PEX; not available until Phase 10b)",
+	{Name: "enable_pex", Help: "exchange peer lists with other peers (PEX); never used for private torrents",
 		get: func(c *Config) string { return strconv.FormatBool(c.EnablePEX) },
 		set: func(c *Config, v string) error { return setBool(&c.EnablePEX, v) }},
 	{Name: "listen_port", Help: "TCP port for incoming peers (0 = random); a random one is used if it's taken",

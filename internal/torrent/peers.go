@@ -34,9 +34,17 @@ type peerState struct {
 	uploaded int64               // payload bytes sent to them
 	upRate   rate                // our upload rate to them
 
-	// Extension protocol (extensions.go): the peer's message ID for
-	// ut_metadata, 0 if it doesn't support it (or hasn't said yet).
+	// Extension protocol (extensions.go): the peer's message IDs for
+	// ut_metadata and ut_pex, 0 if it doesn't support them (or hasn't said
+	// yet), and the listening port from its extension handshake.
 	extMetadata int
+	extPEX      int
+	listenPort  int
+
+	// Peer exchange (pex.go).
+	pexSent   map[netip.AddrPort]bool // addresses we have told it about
+	lastPEXIn time.Time               // when it last sent us a PEX message
+	nextPEX   time.Time               // when we may send it the next one
 
 	connectedAt time.Time
 }
@@ -51,6 +59,7 @@ func (s *Session) addPeer(ctx context.Context, c *peer.Conn) {
 		amChoking:   true,
 		pending:     make(map[peer.Block]bool),
 		served:      make(map[peer.Block]bool),
+		pexSent:     make(map[netip.AddrPort]bool),
 		uploadQ:     make(chan peer.Block, maxQueuedUploads),
 		connectedAt: time.Now(),
 	}

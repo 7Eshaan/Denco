@@ -20,6 +20,10 @@ type Config struct {
 	Announcer tracker.Announcer // default &tracker.Client{}
 	Port      uint16            // our peer port, reported to trackers and peers
 	Parallel  int               // peers talked to at once; default 10
+	// PEX asks peers for their peer lists (BEP 11) while fetching. We only
+	// receive: nothing is sent, so nothing leaks if the torrent turns out
+	// to be private (unknowable before the metadata arrives).
+	PEX bool
 	// Retry is how often trackers are asked again and failed peers retried
 	// (default 60s); RequestTimeout drops a peer that stops answering (20s).
 	Retry          time.Duration
@@ -169,7 +173,7 @@ func (f *Fetcher) Run(ctx context.Context) ([]byte, error) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				f.worker(ctx, a)
+				f.worker(ctx, a, found)
 				select {
 				case finished <- a:
 				case <-ctx.Done():
@@ -237,7 +241,7 @@ func (f *Fetcher) announceLoop(ctx context.Context, found chan<- []netip.AddrPor
 
 // worker downloads the whole metadata from one peer, until it is done, the
 // peer fails or turns out to be lying, or another worker finished first.
-func (f *Fetcher) worker(ctx context.Context, addr netip.AddrPort) {
+func (f *Fetcher) worker(ctx context.Context, addr netip.AddrPort, found chan<- []netip.AddrPort) {
 	c, err := peer.Dial(ctx, addr, f.hash, f.cfg.PeerOpts)
 	if err != nil {
 		f.log.Debug("metadata peer: dial failed", "peer", addr, "err", err)
@@ -247,7 +251,11 @@ func (f *Fetcher) worker(ctx context.Context, addr netip.AddrPort) {
 	if !c.Peer.SupportsExtensions() {
 		return
 	}
-	hs := peer.ExtHandshake{M: map[string]int{peer.ExtMetadata: peer.ExtMetadataID}, Version: "Denco 0.0.1", Port: int(f.cfg.Port)}
+	m := map[string]int{peer.ExtMetadata: peer.ExtMetadataID}
+	if f.cfg.PEX {
+		m[peer.ExtPEX] = peer.ExtPEXID
+	}
+	hs := peer.ExtHandshake{M: m, Version: "Denco 0.0.1", Port: int(f.cfg.Port)}
 	if !c.TrySend(peer.Extended(0, hs.Encode())) {
 		return
 	}
@@ -256,6 +264,10 @@ func (f *Fetcher) worker(ctx context.Context, addr netip.AddrPort) {
 	their := 0         // the peer's ID for ut_metadata
 	next := 0          // next piece to request
 	outstanding := 0
+	pexDone := false // one PEX message per peer is plenty for a short fetch
+	// pexOnly: the peer has no metadata but offers PEX, so we stay only to
+	// hear its peer list (bounded by RequestTimeout like any wait).
+	pexOnly := false
 	defer func() {
 		if asm != nil {
 			f.mu.Lock()
@@ -296,16 +308,29 @@ func (f *Fetcher) worker(ctx context.Context, addr netip.AddrPort) {
 				return
 			}
 			switch {
+			case id == peer.ExtPEXID && f.cfg.PEX && !pexDone:
+				pexDone = true
+				if !f.onPEX(ctx, body, found) || pexOnly {
+					return
+				}
+				continue
 			case id == 0 && asm == nil: // their extension handshake
 				h, err := peer.ParseExtHandshake(body)
 				if err != nil {
 					return
 				}
-				if their = h.M[peer.ExtMetadata]; their == 0 {
-					return // doesn't do ut_metadata
+				canPEX := f.cfg.PEX && h.M[peer.ExtPEX] != 0 && !pexDone
+				their = h.M[peer.ExtMetadata]
+				if their != 0 {
+					asm, err = NewAssembler(f.hash, h.MetadataSize)
 				}
-				if asm, err = NewAssembler(f.hash, h.MetadataSize); err != nil {
-					return // no (or an absurd) metadata size: it can't help
+				if their == 0 || err != nil { // no ut_metadata, or no (or an absurd) size
+					asm = nil
+					if canPEX {
+						pexOnly = true
+						continue
+					}
+					return
 				}
 				f.mu.Lock()
 				f.peers++
@@ -340,6 +365,26 @@ func (f *Fetcher) worker(ctx context.Context, addr netip.AddrPort) {
 			idle.Reset(f.cfg.RequestTimeout)
 		}
 	}
+}
+
+// onPEX passes up to 50 addresses from a peer's PEX message to Run. It
+// reports false if the message is malformed (the worker then gives up on
+// that peer).
+func (f *Fetcher) onPEX(ctx context.Context, body []byte, found chan<- []netip.AddrPort) bool {
+	msg, err := peer.ParsePEX(body)
+	if err != nil {
+		return false
+	}
+	addrs := msg.Added[:min(len(msg.Added), peer.MaxPEXPeers)]
+	if len(addrs) == 0 {
+		return true
+	}
+	select {
+	case found <- addrs:
+	case <-ctx.Done():
+	case <-f.done:
+	}
+	return true
 }
 
 func (f *Fetcher) isBanned(a netip.AddrPort) bool {

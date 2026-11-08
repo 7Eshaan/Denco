@@ -93,13 +93,17 @@ func TestDaemonUsesConfigAndFlagsOverride(t *testing.T) {
 
 	h := startDaemonArgs(t, home, "-down-limit", "1M", "-max-active", "3")
 	banner := h.out.String()
-	for _, want := range []string{dl, "↓ 1.0 MB/s", "↑ 300.0 KB/s", "enable_pex is on", "enable_dht is on"} {
+	for _, want := range []string{dl, "↓ 1.0 MB/s", "↑ 300.0 KB/s", "enable_dht is on"} {
 		if !strings.Contains(banner, want) {
 			t.Errorf("banner missing %q:\n%s", want, banner)
 		}
 	}
 	status := h.mustCmd("status")
-	for _, want := range []string{"Download dir:", dl, "Max downloading:", "3", "30 per torrent", "↓ 1.0 MB/s  ↑ 300.0 KB/s"} {
+	if strings.Contains(banner, "enable_pex") {
+		t.Errorf("banner still says PEX is unavailable:\n%s", banner)
+	}
+	for _, want := range []string{"Download dir:", dl, "Max downloading:", "3", "30 per torrent", "↓ 1.0 MB/s  ↑ 300.0 KB/s",
+		"Peer exchange:", "on (not for private torrents)"} {
 		if !strings.Contains(status, want) {
 			t.Errorf("status missing %q:\n%s", want, status)
 		}

@@ -270,6 +270,11 @@ func renderStatus(w io.Writer, st ipc.Status) {
 	row("Completed", fmt.Sprintf("%d of %d", st.Complete, st.Torrents))
 	row("Max downloading", fmt.Sprint(st.MaxActive))
 	row("Max peers", fmt.Sprintf("%d per torrent", st.MaxPeers))
+	pex := "off (enable_pex)"
+	if st.PEX {
+		pex = "on (not for private torrents)"
+	}
+	row("Peer exchange", pex)
 	row("Limits", fmt.Sprintf("↓ %s  ↑ %s", config.DescribeRate(st.DownLimit), config.DescribeRate(st.UpLimit)))
 	row("Speed", fmt.Sprintf("↓ %s  ↑ %s", format.Speed(st.DownloadRate), format.Speed(st.UploadRate)))
 	row("This session", fmt.Sprintf("↓ %s  ↑ %s", format.Bytes(st.Downloaded), format.Bytes(st.Uploaded)))
