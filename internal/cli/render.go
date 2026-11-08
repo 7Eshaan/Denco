@@ -256,10 +256,10 @@ func renderStatus(w io.Writer, st ipc.Status) {
 	row("Download dir", st.DownloadDir)
 	row("State dir", st.StateDir)
 	var counts []string
-	for _, s := range []engine.State{engine.StateDownloading, engine.StateStalled, engine.StateChecking,
+	for _, s := range []engine.State{engine.StateMetadata, engine.StateDownloading, engine.StateStalled, engine.StateChecking,
 		engine.StateSeeding, engine.StateQueued, engine.StatePaused, engine.StateError} {
 		if n := st.ByState[s]; n > 0 {
-			counts = append(counts, fmt.Sprintf("%d %s", n, s))
+			counts = append(counts, fmt.Sprintf("%d %s", n, strings.ToLower(stateLabel(s))))
 		}
 	}
 	summary := fmt.Sprint(st.Torrents)

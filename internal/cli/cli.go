@@ -37,7 +37,8 @@ Settings ($DENCO_HOME/config.yaml; no daemon needed):
   denco config get|unset <key> · init · path
 
 Managing torrents (needs a running daemon):
-  denco add [-dir DIR] [-existing] [-paused] <file.torrent>...   add torrents
+  denco add [-dir DIR] [-existing] [-paused] <torrent>...   add torrents: .torrent files,
+                                               magnet links or http(s) URLs of .torrent files
   denco list                                   list torrents (downloading, then completed)
   denco info <id>                              details of one torrent
   denco files <id>                             files of a torrent with progress

@@ -1,9 +1,8 @@
 # Progress
 
-**Current phase:** 10 — Magnets end-to-end · ✅ done, waiting for the user's commit
+**Current phase:** 10b — PEX · not started (Phase 10 committed as dc97f4f)
 
-**Next action:** once the user has committed Phase 10, tick it in
-`docs/ROADMAP.md` and start **Phase 10b — PEX** (D37): `ut_pex` (BEP 11) in
+**Next action:** start **Phase 10b — PEX** (D37): `ut_pex` (BEP 11) in
 `torrent/extensions.go` — advertise `"ut_pex": 2` (new `peer.ExtPEXID`),
 send `added`/`added.f`/`dropped` (+ `added6`/`dropped6`) about once a minute
 to peers that support it (≤ 50 added per message), feed received peers into
@@ -35,7 +34,12 @@ torrent.Config). Rate-limit what we accept from one peer. Then drop the
   confirmed). Auto-start from `denco add` is possible later.
 - UPnP/NAT-PMP in Phase 12, MSE encryption out of scope — OK?
 
-## Last test run (2026-11-08, end of Phase 10)
+## Last test run (2026-11-08, small CLI fixes after Phase 10)
+- `go test -race -count=1 ./...` — all 18 packages pass; vet, gofmt and
+  linux/windows cross-compile clean
+- new `TestRenderStatusCountsEveryState` fails without its fix (checked)
+
+## Previous test run (2026-11-08, end of Phase 10)
 - first full run: **`metadata` TestFetchFromPeers hung in 3 of 31 runs** —
   a real design bug (mixed-peer assembly banned honest peers alongside a
   liar). Fetcher redesigned to per-peer assembly (D38); regression assert

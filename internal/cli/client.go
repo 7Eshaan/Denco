@@ -51,7 +51,7 @@ func cmdAdd(e *env, args []string) int {
 		return 2
 	}
 	if fs.NArg() == 0 {
-		fmt.Fprintln(e.stderr, "usage: denco add [-dir DIR] [-existing] [-paused] <file.torrent>...")
+		fmt.Fprintln(e.stderr, "usage: denco add [-dir DIR] [-existing] [-paused] <file.torrent|magnet|url>...")
 		return 2
 	}
 	absDir := ""

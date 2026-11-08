@@ -312,3 +312,13 @@ func TestPeerStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderStatusCountsEveryState(t *testing.T) {
+	var b bytes.Buffer
+	st := ipc.Status{Overview: engine.Overview{Torrents: 3, StartedAt: time.Now(),
+		ByState: map[engine.State]int{engine.StateMetadata: 1, engine.StateDownloading: 2}}}
+	renderStatus(&b, st)
+	if want := "3 (1 fetching metadata, 2 downloading)"; !strings.Contains(b.String(), want) {
+		t.Errorf("missing %q in:\n%s", want, b.String())
+	}
+}

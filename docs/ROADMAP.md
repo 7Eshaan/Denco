@@ -34,7 +34,7 @@ so older references stay valid.
 - [x] **Phase 9 — Configuration.** Config file (flat `key: value`), defaults,
       flag overrides, `denco config get/set`, rate limiting (up/down),
       connection limits, max active downloads queue.
-- [ ] **Phase 10 — Magnets end-to-end.** Extension protocol (BEP 10),
+- [x] **Phase 10 — Magnets end-to-end.** Extension protocol (BEP 10),
       `ut_metadata` (BEP 9), metadata validation against info hash, `.torrent`
       from HTTP(S) URL.
 - [ ] **Phase 10b — PEX.** Peer exchange (BEP 11, `ut_pex` over the BEP 10
