@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/7Eshaan/Denco/internal/bitfield"
 	"github.com/7Eshaan/Denco/internal/format"
+	"github.com/7Eshaan/Denco/internal/ipc"
 	"github.com/7Eshaan/Denco/internal/magnet"
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/peer"
@@ -26,12 +27,12 @@ import (
 // cmdDownload is a foreground, single-torrent client: it listens for peers,
 // downloads, and with -seed keeps uploading afterwards. Progress is saved to
 // the resume store, so rerunning the same command continues where it left
-// off. The daemon (Phase 8) will replace it as the normal way to download,
-// but it stays useful for testing.
-func cmdDownload(args []string, stdout, stderr io.Writer) int {
+// off. The daemon is the normal way to download; this stays useful for
+// testing and one-off downloads.
+func cmdDownload(e *env, args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	return runDownload(ctx, args, stdout, stderr)
+	return runDownload(ctx, e, args)
 }
 
 type downloadOpts struct {
@@ -42,14 +43,21 @@ type downloadOpts struct {
 	seed      bool
 	verbose   bool
 	stateDir  string
+	stateSet  bool // -state given explicitly
 	saveEvery time.Duration
 }
 
 // runDownload is cmdDownload with an explicit context, so tests can stop it.
-func runDownload(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	o, torrentPath, code := parseDownloadFlags(args, stderr)
+func runDownload(ctx context.Context, e *env, args []string) int {
+	stdout, stderr := e.stdout, e.stderr
+	o, torrentPath, code := parseDownloadFlags(args, e.stateDir(), stderr)
 	if code != 0 {
 		return code
+	}
+	if !o.stateSet && daemonRunning(ctx, e) {
+		// Both would write the same resume files.
+		fmt.Fprintln(stderr, "denco: the daemon is running; use 'denco add' instead (or pass -state DIR)")
+		return 1
 	}
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "denco: %v\n", err)
@@ -156,12 +164,8 @@ func runDownload(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	}
 }
 
-func parseDownloadFlags(args []string, stderr io.Writer) (downloadOpts, string, int) {
+func parseDownloadFlags(args []string, defState string, stderr io.Writer) (downloadOpts, string, int) {
 	var o downloadOpts
-	defState, err := resume.DefaultDir()
-	if err != nil {
-		defState = ".denco-state"
-	}
 	fs := flag.NewFlagSet("download", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&o.dir, "dir", ".", "download directory (default: the saved one when resuming, else .)")
@@ -175,8 +179,11 @@ func parseDownloadFlags(args []string, stderr io.Writer) (downloadOpts, string, 
 		return o, "", 2
 	}
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "dir" {
+		switch f.Name {
+		case "dir":
 			o.dirSet = true
+		case "state":
+			o.stateSet = true
 		}
 	})
 	if fs.NArg() != 1 || o.port > 65535 || o.saveEvery <= 0 {
@@ -273,6 +280,14 @@ func openForDownload(ctx context.Context, mi *metainfo.MetaInfo, store *resume.S
 
 // listen opens the peer port, falling back to a random free port if the
 // requested one is taken (e.g. another client is running).
+// daemonRunning reports whether a daemon answers for this home directory.
+func daemonRunning(ctx context.Context, e *env) bool {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err := ipc.Connect(ctx, e.daemonFile())
+	return err == nil
+}
+
 func listen(port uint16, id peerid.ID, log *slog.Logger, stderr io.Writer) (*torrent.Listener, error) {
 	opts := peer.Options{PeerID: id}
 	ln, err := torrent.Listen(fmt.Sprintf(":%d", port), opts, log)

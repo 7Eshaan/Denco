@@ -25,7 +25,7 @@ so older references stay valid.
       URLs stop being skipped. Tests against an in-process UDP server.
 - [x] **Phase 6 — Uploading & seeding.** Serve requests, choking algorithm,
       incoming connections listener, seed after completion, upload stats.
-- [ ] **Phase 7 — Resume.** Persist per-torrent state (bitfield, options,
+- [x] **Phase 7 — Resume.** Persist per-torrent state (bitfield, options,
       stats), periodic + on-exit saves, crash-safe atomic writes, recheck on
       start when files changed.
 - [ ] **Phase 8 — Daemon, IPC, CLI.** Multi-torrent engine, daemon process,

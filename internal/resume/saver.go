@@ -30,6 +30,7 @@ type Saver struct {
 	baseDown int64
 	last     savedKey
 	hasLast  bool
+	saved    State // the last state written successfully
 }
 
 // savedKey lets Save skip writes when nothing has changed.
@@ -85,7 +86,25 @@ func (sv *Saver) Save(snap Snapshot, clean bool) error {
 		return err
 	}
 	sv.last, sv.hasLast = key, true
+	sv.saved = s
 	return nil
+}
+
+// SetPaused changes the paused flag recorded by the following saves.
+func (sv *Saver) SetPaused(paused bool) {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	if sv.state.Paused != paused {
+		sv.state.Paused = paused
+		sv.hasLast = false // force the next Save to write
+	}
+}
+
+// State returns the last state written successfully (zero before the first).
+func (sv *Saver) State() State {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	return sv.saved
 }
 
 // Run saves every interval (as unclean saves) until ctx is done.

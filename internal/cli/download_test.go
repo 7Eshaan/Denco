@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -26,16 +26,16 @@ import (
 	"github.com/7Eshaan/Denco/internal/resume"
 )
 
-// TestMain points the user config directory at a temp dir for the whole
-// package, so no test can ever write resume data into the real
-// ~/Library/Application Support/denco (or %AppData%, ~/.config) — even one
-// that forgets to pass -state.
+// TestMain points the user config directory (and DENCO_HOME) at a temp dir
+// for the whole package, so no test can ever write resume data or a daemon
+// file into the real ~/Library/Application Support/denco (or %AppData%,
+// ~/.config) — even one that forgets to pass -state or a home.
 func TestMain(m *testing.M) {
 	tmp, err := os.MkdirTemp("", "denco-cli-test-home-*")
 	if err != nil {
 		panic(err)
 	}
-	for _, k := range []string{"HOME", "XDG_CONFIG_HOME", "AppData"} {
+	for _, k := range []string{"HOME", "XDG_CONFIG_HOME", "AppData", "DENCO_HOME"} {
 		os.Setenv(k, tmp)
 	}
 	code := m.Run()
@@ -240,7 +240,7 @@ func TestDownloadResumesAfterInterrupt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan int, 1)
 	var out1, err1 syncBuffer // written by runDownload's goroutine, read here
-	go func() { done <- runDownload(ctx, args, &out1, &err1) }()
+	go func() { done <- runDownload(ctx, &env{home: tmp, stdout: &out1, stderr: &err1}, args) }()
 	deadline := time.Now().Add(15 * time.Second)
 	for half.served.Load() < 10 {
 		if time.Now().After(deadline) {
@@ -279,7 +279,7 @@ func TestDownloadResumesAfterInterrupt(t *testing.T) {
 	seeders = []netip.AddrPort{full.addr}
 	mu.Unlock()
 	var out2, err2 syncBuffer
-	if code := runDownload(context.Background(), args, &out2, &err2); code != 0 {
+	if code := runDownload(context.Background(), &env{home: tmp, stdout: &out2, stderr: &err2}, args); code != 0 {
 		t.Fatalf("resumed run exit = %d: %s", code, err2.String())
 	}
 	got, _ := os.ReadFile(filepath.Join(dl, "movie.bin"))

@@ -386,6 +386,37 @@ func TestSaverAccumulatesTotalsAndSkipsNoops(t *testing.T) {
 	}
 }
 
+func TestSaverPausedAndState(t *testing.T) {
+	f := newFixture(t, 3000)
+	store, _ := OpenStore(t.TempDir())
+	prev := f.state(true)
+	prev.ID = 7
+	sv := NewSaver(store, f.mi, f.layout, f.st, prev)
+	if sv.State().InfoHash != "" {
+		t.Fatal("State before the first save should be zero")
+	}
+	have := bitfield.New(f.mi.Info.NumPieces())
+	snap := Snapshot{Have: have}
+	if err := sv.Save(snap, false); err != nil {
+		t.Fatal(err)
+	}
+	// Same snapshot, but the paused flag changed: must be written.
+	sv.SetPaused(true)
+	if err := sv.Save(snap, false); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := store.Load(f.mi.InfoHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Paused || got.ID != 7 {
+		t.Fatalf("saved state = %+v, want paused with ID 7", got)
+	}
+	if st := sv.State(); !st.Paused || st.ID != 7 || !st.SavedAt.Equal(got.SavedAt) {
+		t.Fatalf("State() = %+v, want what was written", st)
+	}
+}
+
 func TestSaverRun(t *testing.T) {
 	f := newFixture(t, 2000)
 	store, _ := OpenStore(t.TempDir())

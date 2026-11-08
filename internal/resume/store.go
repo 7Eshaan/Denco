@@ -57,8 +57,19 @@ type State struct {
 	// in torrent order, to detect changes made while we weren't running.
 	Files []FileStamp `json:"files"`
 
-	// Options the user chose for this torrent (used by the daemon, Phase 8).
+	// Daemon bookkeeping (Phase 8). All optional, so states written by
+	// `denco download` load unchanged.
+	//
+	// ID is the short number users type (`denco pause 3`); 0 = not yet assigned.
+	ID int `json:"id,omitempty"`
+	// Paused: the user paused it; don't start it on daemon startup.
 	Paused bool `json:"paused,omitempty"`
+	// Fresh: added but never started. Any file already at its paths is not
+	// ours, so it must not be opened for writing unless Existing is set.
+	Fresh bool `json:"fresh,omitempty"`
+	// Existing: the user asked to reuse data already at the paths; it is
+	// hash-checked on the first start.
+	Existing bool `json:"existing,omitempty"`
 }
 
 // FileStamp is a file's size and mtime when the state was saved.

@@ -5,38 +5,41 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 ## Process model
 
 ```
- denco add/list/pause/...  ──JSON/HTTP (127.0.0.1 + token)──▶  denco daemon
-        (short-lived CLI)                                       │
-                                                                ├─ engine: N torrent sessions
-                                                                ├─ TCP listener (incoming peers)
-                                                                ├─ DHT node (UDP)
-                                                                └─ resume store (state dir)
+ denco add/list/pause/...  ──JSON/HTTP (127.0.0.1:<random> + token)──▶  denco daemon (foreground)
+        (short-lived CLI)        address+token from $DENCO_HOME/daemon.json   │
+                                                                               ├─ ipc server
+                                                                               └─ engine
+                                                                                  ├─ N torrents (run goroutine → Session + Saver)
+                                                                                  ├─ TCP listener (incoming peers, shared)
+                                                                                  ├─ resume store ($DENCO_HOME/resume)
+                                                                                  └─ DHT node (UDP, Phase 11)
 ```
 
-`denco inspect <file>` works without a daemon (pure parsing).
+`$DENCO_HOME` defaults to `os.UserConfigDir()/denco`. Standalone commands
+(`inspect`, `magnet`, `announce`, `probe`, `verify`, `download`) need no daemon.
 
 ## Package map
 
 | Package | Status | Responsibility |
 |---|---|---|
-| `cmd/denco` | ✅ (dev) | Entry point. One file per command: `inspect.go` (inspect, magnet), `announce.go` (+ shared `loadTarget`/`announceStarted`), `probe.go`, `verify.go`, `download.go` (foreground single-torrent download/seed with its own listener). Replaced by `internal/cli` in Phase 8. |
+| `cmd/denco` | ✅ | `main.go` only: calls `cli.Main`. |
 | `internal/bencode` | ✅ | Bencode decode/encode; raw byte spans of dict values (for info hash). |
 | `internal/metainfo` | ✅ | Parse + validate `.torrent`; info hash; file list with offsets; tracker tiers. |
 | `internal/format` | ✅ | Human-readable sizes, speeds, durations for CLI output. |
 | `internal/magnet` | ✅ | Parse/print magnet URIs (xt hex+base32, dn, tr, x.pe). |
 | `internal/peerid` | ✅ | Generate our 20-byte peer ID (`-DN0001-…`); `ClientName` decodes other clients' IDs. |
-| `internal/tracker` | ✅ | `Client.Announce` (one HTTP/HTTPS announce) and `List` (BEP 12 tiers, concurrent, fallback + promote). `Client` dispatches by scheme: HTTP(S) in `http.go`, UDP (BEP 15 + BEP 41) in `udp.go`. |
+| `internal/tracker` | ✅ | `Client.Announce` (one announce, HTTP(S) or UDP) and `List` (BEP 12 tiers, concurrent, fallback + promote). `Client` dispatches by scheme: HTTP(S) in `http.go`, UDP (BEP 15 + BEP 41) in `udp.go`. |
 | `internal/peer` | ✅ | Peer wire protocol: `Handshake`, `Message` codec + typed constructors/parsers, `Conn` (Dial/Accept, reader + writer goroutines, keep-alive, idle timeout). |
 | `internal/bitfield` | ✅ | Fixed-size piece set in wire format (high bit = piece 0); validated `FromBytes`. |
 | `internal/storage` | ✅ | `Layout` (OS-safe paths, sanitising, collisions, containment) and `Storage` (ReadAt/WriteAt across files, handle LRU, no-overwrite, ReadOnly, safe DeleteFiles). |
 | `internal/pieces` | ✅ | `Check`/`VerifyPiece`/`Recheck` (parallel hashing) and `Manager` (rarest-first, random-first, endgame, memory budget, block ownership). |
 | `internal/torrent` | ✅ | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/IP bans, request pipelining, snub detection, hash+write workers, announce loop, uploading (validation, cancel, per-peer uploader), tit-for-tat choker + optimistic unchoke, seeding, pause uploads, Stats/Peers. `Listener`: one TCP port routing incoming peers by info hash. |
-| `internal/engine` | ⏳ | Many sessions, limits, queueing, duplicate detection. |
+| `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (open storage → restore/recheck → Session + Saver → final save), Add/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview. `commands.go`, `view.go`. |
 | `internal/resume` | ✅ | `Store` (atomic save/load/list/delete of `<hash>.json` + `<hash>.torrent`), `Restore` (trust rules, partial recheck), `Saver` (periodic/no-op-skipping saves with lifetime totals). |
-| `internal/ipc` | ⏳ | Daemon HTTP API server + client. |
+| `internal/ipc` | ✅ | Daemon file (`Info`, atomic 0600 write), `NewHandler`/`Serve` (loopback HTTP API over an `*engine.Engine`, bearer-token auth, error→status mapping), `Client` (+ `Connect`, stale-file detection). |
 | `internal/config` | ⏳ | Config file parse, defaults, overrides. |
 | `internal/dht` | ⏳ | BEP 5 DHT node. |
-| `internal/cli` | ⏳ | Command parsing and table rendering. |
+| `internal/cli` | ✅ | Every command. `cli.go` (dispatch, usage, `$DENCO_HOME`), `daemon.go` (daemon, stop), `client.go` (add/list/info/files/peers/pause/resume/remove/status), `render.go` (tables/detail views), plus standalone `inspect.go` (inspect, magnet), `announce.go`, `probe.go`, `verify.go`, `download.go`. |
 
 Dependency direction (lower never imports higher):
 `bencode → metainfo/magnet → tracker/peer → pieces/storage → torrent → engine → ipc → cli → cmd`.
@@ -94,6 +97,16 @@ Dependency direction (lower never imports higher):
   `resume.NewSaver(store, mi, layout, storage, prev)` → `Save(Snapshot, clean)`,
   `Run(ctx, interval, snapshotFn, errFn)`.
 - `metainfo.MetaInfo.Raw` — original .torrent bytes (stored with resume data).
+- `engine.Open(Config{StateDir, DownloadDir, ListenAddr, MaxActive, SaveEvery,
+  Session torrent.Config, Logger}) *Engine`; `Add(raw, AddOptions{Dir,
+  Existing, Paused}) (Torrent, error)` (`*DuplicateError`, `storage.ErrExists`,
+  `metainfo.ErrInvalid`); `Pause/Resume/Get(ref)`, `Remove(ref, deleteFiles) (Removed{Torrent, FilesDeleted}, error)`,
+  `List()`, `Files(ref) []File`, `Peers(ref) []Peer`, `Overview()`, `Close()`.
+  `ref` = ID, `#ID` or ≥4-char info-hash prefix (`ErrNotFound`, `ErrAmbiguous`).
+- `engine.Torrent` — display snapshot: ID, name, dir, `State` (checking,
+  downloading, stalled, seeding, queued, paused, error), sizes, pieces,
+  rates, ETA, lifetime totals, peer/seed/leecher counts, tracker info, times.
+- `ipc.Client` methods mirror the engine; `ipc.Connect(ctx, daemonFile)`.
 
 ## Data flow for a downloaded block
 
@@ -123,6 +136,14 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   helper before returning.
 - **torrent.Listener**: 1 accept goroutine + ≤ 64 handshake goroutines; hands
   finished handshakes to a session via a mutex-guarded queue + wake event.
+- **engine.Engine** (D29): one mutex guards the torrent table and entry
+  fields; methods are called concurrently by IPC handlers. Per started
+  torrent: 1 run goroutine (owns storage, Session, Saver) + 2 helpers
+  (periodic saver, completion watcher), joined before the run exits.
+  `Close` cancels all runs and waits. Lock order: engine mutex → session
+  snapshot mutex (sessions never call into the engine).
+- **ipc**: `net/http` server goroutines call the engine; `Serve` binds
+  127.0.0.1 only.
 - **pieces.Manager**: not thread-safe; owned by the session goroutine.
   `pieces.Recheck` uses up to 4 worker goroutines internally.
 
@@ -134,8 +155,13 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   Default state dir `os.UserConfigDir()/denco/resume`. JSON fields: `version`,
   `info_hash`, `name`, `download_dir`, `pieces`, `have` (base64 bitfield),
   `uploaded`, `downloaded`, `added_at`, `completed_at`, `saved_at`, `clean`,
-  `files` ([{`size`, `mtime_ns`}] in torrent order), `paused`.
-- Config, IPC token: Phases 8–9.
+  `files` ([{`size`, `mtime_ns`}] in torrent order), and for the daemon
+  (all optional): `id`, `paused`, `fresh` (never started: files at its paths
+  aren't ours, D32), `existing` (reuse data, recheck on first start).
+- **Daemon file:** `$DENCO_HOME/daemon.json` (0600):
+  `{"addr":"127.0.0.1:<port>","token":"<64 hex>","pid":N}`. Written after the
+  API is listening, removed after a clean shutdown (only if still ours).
+- Config file: Phase 9.
 
 ## Wire / IPC formats
 
@@ -152,3 +178,10 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   (68 bytes). Reserved bits we use: `[5]&0x10` extensions (BEP 10), `[7]&0x01` DHT.
 - **Peer messages:** `<uint32 BE length><uint8 id><payload>`; length 0 =
   keep-alive. IDs 0–9 (BEP 3), 20 extended (BEP 10). Max 2 MiB incoming.
+- **Daemon API (D30):** HTTP/1.1 JSON on 127.0.0.1, header
+  `Authorization: Bearer <token>`. `GET /v1/status`, `GET|POST /v1/torrents`
+  (POST body `{"torrent":"<base64 .torrent>","dir","existing","paused"}`),
+  `GET /v1/torrents/{ref}[/files|/peers]`, `POST /v1/torrents/{ref}/pause|resume`,
+  `POST /v1/torrents/{ref}/remove {"delete_files":bool}` (→ torrent + `files_deleted`), `POST /v1/shutdown`.
+  Errors: `{"error":"…","code":"not_found|ambiguous|duplicate|files_exist|invalid|busy|unauthorized|internal","id":N}`
+  with 404/400/409/401/500. Full list in `internal/ipc/ipc.go`.

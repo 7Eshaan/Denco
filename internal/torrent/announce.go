@@ -29,6 +29,9 @@ func (s *Session) announceLoop(ctx context.Context) {
 	event := tracker.EventStarted
 	completedPending := !s.startedComplete // only report a completion we witnessed
 	completed := s.completed
+	if s.startedComplete {
+		completed = nil // already closed: it would cut every first interval short
+	}
 	failures := 0
 	anyStarted := false
 	completedSent := false

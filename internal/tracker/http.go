@@ -131,6 +131,12 @@ func (c *Client) announceHTTP(ctx context.Context, u *url.URL, req Request) (*Re
 	}
 	resp, err := hc.Do(httpReq)
 	if err != nil {
+		// *url.Error repeats the whole announce URL (info hash, peer ID…);
+		// the host prefix below is all a user needs.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
 		return nil, fmt.Errorf("tracker %s: %w", u.Host, err)
 	}
 	defer resp.Body.Close()

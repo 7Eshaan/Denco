@@ -302,6 +302,32 @@ func TestAlreadyCompleteWithNoSeedReturnsImmediately(t *testing.T) {
 	}
 }
 
+// A torrent that is complete from the start announces "started" once, not
+// "started" followed by an immediate regular announce (regression: the
+// already-closed Completed channel used to cut the first interval short).
+func TestStartedCompleteAnnouncesOnce(t *testing.T) {
+	f := makeTorrent(t, pl, 2*pl)
+	have := bitfield.New(2)
+	have.SetAll()
+	tr := newTracker(t)
+	r := start(t, f.withTracker(t, tr.srv.URL), t.TempDir(), have, testConfig(), true)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(tr.eventLog()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no announce")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(300 * time.Millisecond) // many ticks; the tracker asked for 60s
+	if ev := tr.eventLog(); len(ev) != 1 || ev[0] != "started" {
+		t.Fatalf("announces = %q, want just [started]", ev)
+	}
+	r.stopAndWait(t)
+	if ev := tr.eventLog(); len(ev) != 2 || ev[1] != "stopped" {
+		t.Fatalf("announces = %q, want [started stopped]", ev)
+	}
+}
+
 func TestSeedDropsOtherSeeds(t *testing.T) {
 	f := makeTorrent(t, pl, 2*pl)
 	have := bitfield.New(2)

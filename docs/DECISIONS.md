@@ -120,6 +120,8 @@ One short entry per decision. Newest at the bottom. Format:
   least 60s. UDP trackers return `ErrUnsupportedScheme` and are skipped.
 - **Why:** each rule fixes a real-world interop or abuse case; UDP trackers
   (BEP 15) come in Phase 5b behind the same `Announcer` interface (D16).
+- **Superseded in part:** since Phase 5b, `udp://` is supported (D25); only
+  other schemes (e.g. `wss://`) return `ErrUnsupportedScheme`.
 
 ### D16 — Add UDP trackers (BEP 15) as Phase 5b
 - **Decision:** (user-approved 2026-11-08) implement UDP tracker support right
@@ -303,3 +305,95 @@ One short entry per decision. Newest at the bottom. Format:
   is only for data Denco has no state for. A saved state for a *different* dir
   than an explicit `-dir` is ignored (fresh start there).
 - **Why:** "run the same command again" is the least surprising UX.
+
+### D29 — Engine: one run goroutine per started torrent; pause = stop
+- **Decision:** `engine.Engine` keeps a table of torrents under one mutex.
+  Starting a torrent spawns a goroutine that owns *everything* for that run:
+  opens storage, trusts/re-checks saved pieces (`resume.Restore`, full
+  recheck on mismatch or for `-existing`), runs a `torrent.Session` with a
+  `resume.Saver`, and on exit makes the final clean save and closes storage.
+  **Pause** cancels that run (state `paused=true` saved); **resume** starts
+  a fresh run from the saved state. A run that fails (e.g. disk error) leaves
+  the torrent in `error` until the user resumes it (= retry).
+  **Queue:** at most `MaxActive` (default 5) *incomplete* torrents run;
+  complete ones always run (seeding) and don't take a slot. The queue is
+  re-evaluated on every add/pause/resume/remove/completion/run exit, in ID order.
+- **Alternatives:** make `Session` restartable/pausable in place; keep
+  storage open for paused torrents.
+- **Why:** `Session.Run` is single-use by design (D23); stopping and
+  restarting reuses the already-tested resume path, holds no file handles
+  for paused/queued torrents, and keeps the engine small. The cost — a
+  paused torrent re-announces "started" on resume — is normal client behaviour.
+
+### D30 — Daemon IPC details
+- **Decision:** the daemon serves the JSON API (see ARCHITECTURE) on a
+  *random* port of 127.0.0.1 and writes `{addr, token, pid}` to
+  `<denco home>/daemon.json` (0600). Clients send `Authorization: Bearer
+  <token>`, compared in constant time. `.torrent` files are sent as bytes,
+  so the daemon never reads client paths (relative `-dir` is made absolute by
+  the CLI). One daemon per home: `denco daemon` refuses if one answers, and
+  `denco download` refuses (unless `-state` is given) because both would
+  write the same resume files. A daemon file nobody answers at is "stale" and
+  treated as no daemon. `denco stop` waits until the daemon file is gone
+  (the daemon removes it after all torrents have saved and announced
+  "stopped"). The daemon runs in the foreground; the user starts it. No
+  auto-spawn for now: detaching a process portably needs OS-specific code.
+  (Proposed to the user 2026-11-08 as the default; they said to start
+  Phase 8 without choosing otherwise — revisit if they prefer auto-start.)
+  The first Ctrl-C/SIGTERM starts a clean shutdown and then gives the
+  signals back to the OS, so a second Ctrl-C quits immediately — safe,
+  because resume data survives a hard stop (D27).
+- **Alternatives:** fixed API port (collides, needs config); Unix sockets
+  (D3); auto-starting the daemon from `denco add`.
+- **Why:** stdlib only, identical on all OSes; the token file's permissions
+  limit control to the user who started the daemon, and the token also stops
+  web pages from driving the API via the browser.
+
+### D31 — Torrent IDs
+- **Decision:** each torrent gets a small number when added, stored in its
+  resume state (`id`), so `denco pause 3` always means the same torrent,
+  across restarts and after others are removed. New ID = highest + 1.
+  States without an ID (made by `denco download`) get IDs on daemon start,
+  in the order they were added. Commands also accept `#3` and an info-hash
+  prefix of ≥ 4 hex chars (ambiguous prefixes are an error).
+- **Known cost:** removing the highest-numbered torrent lets the next add
+  reuse its number. Accepted; a persisted counter file isn't worth it yet.
+- **Why:** list positions shift when torrents are removed, which makes
+  scripted or quickly typed commands hit the wrong torrent.
+
+### D32 — Which files a torrent owns
+- **Decision:** a newly added torrent is `fresh` (saved in its state). While
+  fresh, its storage is opened *without* `AllowExisting`, so a file that
+  appeared at its path after `add` makes it fail with an error instead of
+  being overwritten. `add` itself refuses if target files exist, unless
+  `-existing` (then the first start hash-checks them). After the first
+  successful open the files are the torrent's own (`fresh=false`).
+  `remove -delete` deletes files only for torrents that own them (not fresh,
+  or fresh with `-existing`), via `storage.DeleteFiles` (D21). `Remove`
+  returns `FilesDeleted`, so the CLI says "nothing deleted" instead of
+  claiming a deletion that didn't happen (found in review).
+- **Why:** the "never overwrite unrelated files" rule must hold even for
+  torrents that sit in the queue for days before they start.
+
+### D33 — CLI layout and defaults
+- **Decision:** all commands moved from `cmd/denco` to `internal/cli`
+  (`cmd/denco/main.go` is 10 lines). Denco's own files live in `$DENCO_HOME`,
+  default `os.UserConfigDir()/denco` (resume data in `resume/`, daemon file;
+  config file in Phase 9). Default download dir `~/Downloads/Denco` (a
+  dedicated folder, so nothing collides with other clients' data;
+  configurable in Phase 9). `denco list` shows two tables — incomplete, then
+  completed — with the same columns (spec: "show completed and incomplete
+  torrents separately"). `pause`/`resume` accept `all`; `remove` doesn't, on
+  purpose. Magnets/URLs in `add` are rejected with a pointer to Phase 10.
+- **Why:** one package for all commands keeps them consistent;
+  `DENCO_HOME` lets tests (and users running two instances) isolate state.
+
+### D34 — Fix: complete-at-start torrents announced twice
+- **Context:** found while smoke-testing the daemon. `announceLoop` waited on
+  the session's `Completed()` channel to send `completed` early; for a
+  torrent that *started* complete that channel is already closed, so the
+  first wait ended at once and a second announce followed "started"
+  immediately. Trackers may penalise announcing too often.
+- **Decision:** don't watch `Completed()` when the session started complete.
+  Regression test: `TestStartedCompleteAnnouncesOnce` (fails without the fix).
+
