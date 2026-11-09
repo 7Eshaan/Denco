@@ -138,9 +138,11 @@ func TestDaemonWorkflow(t *testing.T) {
 	tmp := t.TempDir()
 	home, dl := filepath.Join(tmp, "home"), filepath.Join(tmp, "downloads")
 
-	// Without a daemon, client commands explain what to do.
+	// Without a daemon and with auto_start off, client commands explain
+	// what to do (auto-start itself: autostart_test.go).
 	noDaemon := &daemonHarness{t: t, home: home}
-	if code, _, errOut := noDaemon.cmd("list"); code != 1 || !strings.Contains(errOut, "denco daemon") {
+	noDaemon.mustCmd("config", "set", "auto_start", "false")
+	if code, _, errOut := noDaemon.cmd("list"); code != 1 || !strings.Contains(errOut, "denco start") || !strings.Contains(errOut, "denco daemon") {
 		t.Fatalf("list without daemon: %d %q", code, errOut)
 	}
 

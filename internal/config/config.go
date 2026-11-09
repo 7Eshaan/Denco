@@ -47,6 +47,7 @@ type Config struct {
 	SeedRatio                float64       // stop seeding at this upload/download ratio; 0 = no limit
 	SeedTime                 time.Duration // stop seeding after this much seeding; 0 = no limit
 	LogFile                  string        // the daemon logs here instead of the terminal; "" = terminal
+	AutoStart                bool          // commands start the daemon in the background when it isn't running
 }
 
 // DefaultDHTBootstrap is the default dht_bootstrap. A variable so tests can
@@ -75,6 +76,7 @@ func Defaults(home string) Config {
 		PortForwarding:           DefaultPortForwarding,
 		ResumeEnabled:            true,
 		ResumeDir:                filepath.Join(home, "resume"),
+		AutoStart:                true,
 	}
 }
 
@@ -137,6 +139,9 @@ var settings = []Setting{
 	{Name: "resume_dir", Help: "where resume data is kept",
 		get: func(c *Config) string { return c.ResumeDir },
 		set: func(c *Config, v string) error { return setPath(&c.ResumeDir, v) }},
+	{Name: "auto_start", Help: "commands like add and list start the daemon in the background when it isn't running",
+		get: func(c *Config) string { return strconv.FormatBool(c.AutoStart) },
+		set: func(c *Config, v string) error { return setBool(&c.AutoStart, v) }},
 	{Name: "log_file", Help: "the daemon writes its log here instead of the terminal (kept under ~20 MB); none = terminal",
 		get: func(c *Config) string {
 			if c.LogFile == "" {

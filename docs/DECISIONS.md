@@ -875,3 +875,30 @@ One short entry per decision. Newest at the bottom. Format:
   still has its own 128 MiB cap); writing blocks straight to disk instead
   of buffering whole pieces.
 
+### D52 — The daemon starts by itself (auto-start)
+- **Decision:** any command that needs the daemon (`add`, `list`, `info`,
+  `files`, `peers`, `pause`, `resume`, `seed`, `remove`, `status`) starts
+  it in the background when none is running; `denco start [daemon flags]`
+  does it explicitly; `denco daemon` still runs in the foreground. Setting
+  `auto_start` (default `true`); `false` restores the old "start it
+  yourself" message. `denco stop` never starts one ("isn't running").
+  Resolves the open question from D30.
+- **How:** the CLI re-runs its own executable (`os.Executable()`) as
+  `denco daemon` with `DENCO_HOME` set, detached — a new session on
+  Unix (`Setsid`), `DETACHED_PROCESS` + new process group on Windows
+  (`detach_unix.go` / `detach_windows.go`) — so closing the terminal or
+  Ctrl-C doesn't reach it. Its stdout/stderr go to `<home>/daemon.out`
+  (a file, not a pipe: a pipe would break when the CLI exits); its log
+  goes to `log_file`, or `<home>/daemon.log` if that is `none`. The CLI
+  waits up to 30 s for the daemon to answer; if it exits first, the
+  error shows the end of `daemon.out` (e.g. a bad config line).
+  The start notice goes to stderr so stdout stays the command's output.
+- **One daemon only:** `<home>/autostart.lock` (created with `O_EXCL`)
+  lets one `denco` start the daemon while others wait for it; a lock older
+  than 35 s (its `denco` was killed) is ignored.
+- **Tests:** `env.spawn` runs the daemon in-process; the real spawner
+  refuses inside a test binary (`testing.Testing()`), which would
+  otherwise start a copy of itself.
+- **Not done:** starting at login (launchd/systemd/Task Scheduler) — the
+  README shows how; a `denco service install` could automate it later.
+

@@ -27,13 +27,33 @@ import (
 func connect(ctx context.Context, e *env) (*ipc.Client, int) {
 	c, err := ipc.Connect(ctx, e.daemonFile())
 	if errors.Is(err, ipc.ErrNoDaemon) {
-		fmt.Fprintln(e.stderr, "denco: the daemon is not running. Start it with: denco daemon")
-		return nil, 1
+		return autoStart(ctx, e)
 	}
 	if err != nil {
 		fmt.Fprintf(e.stderr, "denco: %v\n", err)
 		return nil, 1
 	}
+	return c, 0
+}
+
+// autoStart starts the daemon in the background for a command that needs
+// it, unless auto_start is off (D52).
+func autoStart(ctx context.Context, e *env) (*ipc.Client, int) {
+	cfg, err := e.loadConfig()
+	if err != nil {
+		fmt.Fprintf(e.stderr, "denco: %v\n", err)
+		return nil, 1
+	}
+	if !cfg.AutoStart {
+		fmt.Fprintln(e.stderr, "denco: the daemon is not running. Start it with 'denco start' (background) or 'denco daemon' (this terminal).")
+		return nil, 1
+	}
+	c, err := startBackground(ctx, e, cfg, nil)
+	if err != nil {
+		fmt.Fprintf(e.stderr, "denco: the daemon is not running and couldn't be started: %v\n", err)
+		return nil, 1
+	}
+	describeStarted(ctx, e, e.stderr, c, cfg, nil) // stderr: keep stdout for the command's own output
 	return c, 0
 }
 

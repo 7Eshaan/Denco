@@ -228,9 +228,14 @@ func cmdStop(e *env, args []string) int {
 		return 2
 	}
 	ctx := context.Background()
-	c, code := connect(ctx, e)
-	if c == nil {
-		return code
+	c, err := ipc.Connect(ctx, e.daemonFile()) // never starts one (D52)
+	if errors.Is(err, ipc.ErrNoDaemon) {
+		fmt.Fprintln(e.stdout, "The daemon isn't running.")
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(e.stderr, "denco: %v\n", err)
+		return 1
 	}
 	if err := c.Shutdown(ctx); err != nil {
 		fmt.Fprintf(e.stderr, "denco: %v\n", err)

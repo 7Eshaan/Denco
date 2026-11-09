@@ -1,13 +1,12 @@
 # Progress
 
-**Current phase:** after Phase 12 — lower memory per torrent (D51) · ✅ done,
-waiting for the user's commit. The roadmap's phases are all done.
+**Current phase:** after Phase 12 — daemon auto-start (D52) · ✅ done,
+waiting for the user's commit.
 
-**Next action:** after the commit, tick Phase 12 in `docs/ROADMAP.md` if
-the user hasn't. Open: the user checks port forwarding at home
-(`denco status`, D50). Candidates for later: one memory budget shared by
-all torrents, daemon auto-start, out-of-scope items (uTP, MSE, web seeds,
-v2, TUI).
+**Next action:** after the commit: open items are the user's check of
+port forwarding at home (D50), one memory budget shared by all torrents
+(D51), `denco service install` for start-at-login (D52), and the
+out-of-scope list (uTP, MSE, web seeds, v2, TUI).
 
 ## Known issues
 - A finished torrent (seed limit reached) stays finished when limits are
@@ -50,36 +49,32 @@ v2, TUI).
   detected (D27); `denco verify` checks manually.
 - Resume JSON writes `"completed_at": "0001-01-01T00:00:00Z"` for
   incomplete torrents (`omitempty` doesn't apply to time.Time). Harmless.
-- Daemon runs in the foreground (no auto-start yet, D30); `log_file` /
-  `-log` sends its log to a file (D48). Started with `&` from a script it
-  ignores Ctrl-C.
+- Commands start the daemon in the background (D52); nothing starts it at
+  login yet (README shows launchd/systemd/Task Scheduler). Windows
+  detaching is compiled and vetted, not run.
 - Config changes other than speed limits need a daemon restart.
 - Removing the highest-numbered torrent lets the next add reuse its ID (D31).
 - Linux/Windows: compiled + vetted, tests only *run* on macOS.
 
 ## Open questions for the user
-- Daemon start: explicit `denco daemon` (my recommendation; not explicitly
-  confirmed). Auto-start from `denco add` is possible later.
 - MSE encryption stays out of scope? (UPnP/NAT-PMP: confirmed, done in 12d.)
 
-## Last test run (2026-11-09, lower memory per torrent, D51)
-- `go test -race -count=1 ./...` — all 21 packages pass
-- stress `-race -cpu=1,2,8`: `torrent`, `engine` ×5 (15 runs each),
-  `pieces` ×10 (30 runs) — pass. The first stress run failed once: my new
-  simulation test had a too-tight time limit and random tie-breaking
-  (4 MiB case 563 ticks > 520); fixed by seeding it and setting the limit
-  from 20 seeds (D51), then 30/30 passes
+## Last test run (2026-11-09, daemon auto-start, D52)
+- `go test -race -count=1 ./...` — all 21 packages pass; stress
+  `-race -count=5 -cpu=1,2,8` `cli`, `config` (15 runs each) — pass
 - `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
   linux/windows/darwin × amd64/arm64 — all build
-- new tests: `TestPeersFinishTheirOwnPieces` (replaces
-  `TestFinishActivePiecesFirst`, which encoded the old rule),
-  `TestOrphanedPieceIsAdopted`, `TestHelpsOthersWhenBudgetIsFull`,
-  `TestSimulatedSwarmMemory` (peak memory and time bounds). Mutation
-  checks: 3 of 3 caught (old rule back, no orphan adoption, never help
-  others)
-- real download, Debian 13.7 netinst 792.7 MB (public network, scratch
-  home): 3 m 15 s, SHA-256 matches; unverified data 1–8 MB (was ~112 MB);
-  daemon RSS ≤ 102 MB (was ~290 MB)
+- new tests (`autostart_test.go`, daemon in-process via `env.spawn`): a
+  command starts the daemon (notice on stderr, default log file), the next
+  finds it; 6 concurrent commands start one daemon, lock removed; `start`
+  with its own `-log` (found a bug: the message showed the default log
+  path) and "already running"; a daemon failing at start shows its output;
+  `stop` and `auto_start: false` never start one; a stale lock is ignored.
+  Mutation checks: 7 of 7 caught
+- real binary, scratch home: `denco list` started the daemon in 0.11 s;
+  its parent is PID 1 and it leads its own session (`Ss`); `status` found
+  it; `start` → already running; `stop`, then `stop` → isn't running; no
+  process left
 - external deps: none
 
 ## History
@@ -205,3 +200,5 @@ v2, TUI).
   one-line errors). D50.
 - **After Phase 12 (2026-11-09):** lower memory per torrent — peers finish
   their own pieces, orphaned pieces adopted (D51); swarm simulation test.
+- **After Phase 12 (2026-11-09):** daemon auto-start — `denco start`,
+  commands start a detached background daemon, `auto_start` (D52).

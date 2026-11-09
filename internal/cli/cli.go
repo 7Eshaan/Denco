@@ -29,6 +29,8 @@ Daemon (keeps torrents running in the background):
   denco daemon [-v] [flags]                    run the daemon (Ctrl-C or 'denco stop' to quit);
                                                flags (-dir -port -max-active -max-peers -down-limit
                                                -up-limit -seed-ratio -seed-time -log) override the config
+  denco start [flags]                          start the daemon in the background (same flags);
+                                               other commands do this by themselves (auto_start)
   denco stop                                   stop the daemon (torrents resume on next start)
 
 Settings ($DENCO_HOME/config.yaml; no daemon needed):
@@ -36,7 +38,7 @@ Settings ($DENCO_HOME/config.yaml; no daemon needed):
   denco config set <key> <value>               change one (speed and seed limits apply at once)
   denco config get|unset <key> · init · path
 
-Managing torrents (needs a running daemon):
+Managing torrents (starts the daemon in the background if it isn't running):
   denco add [-dir DIR] [-existing] [-paused] <torrent>...   add torrents: .torrent files,
                                                magnet links or http(s) URLs of .torrent files
             [-skip FILES | -only FILES]        choose files by number (see 'denco inspect'),
@@ -78,6 +80,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 type env struct {
 	home           string // Denco's own files: resume data, daemon file
 	stdout, stderr io.Writer
+	spawn          spawnFunc // starts a background daemon; nil = a real process (autostart.go)
 }
 
 func (e *env) daemonFile() string { return filepath.Join(e.home, ipc.DaemonFile) }
@@ -120,6 +123,8 @@ func runEnv(e *env, args []string) int {
 	switch args[0] {
 	case "daemon":
 		return cmdDaemon(e, rest)
+	case "start":
+		return cmdStart(e, rest)
 	case "stop":
 		return cmdStop(e, rest)
 	case "add":

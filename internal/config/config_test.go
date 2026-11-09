@@ -70,6 +70,7 @@ func TestParse(t *testing.T) {
 		EnablePEX:                false,
 		ListenPort:               51413,
 		PortForwarding:           true, // not in the file: the default
+		AutoStart:                true,
 		ResumeEnabled:            false,
 		ResumeDir:                dl + " #1",
 	}

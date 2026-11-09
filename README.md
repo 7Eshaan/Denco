@@ -26,8 +26,8 @@ ID  NAME                             SIZE      PROGRESS  STATUS       DOWN      
 - **Seeding controls:** ratio and time limits, per-torrent seed on/off,
   pause uploads only
 - **Port forwarding** on your router with UPnP or NAT-PMP
-- Queue (`max_active_downloads`), automatic retry of failed torrents,
-  optional log file
+- The daemon starts by itself when you run a command; queue
+  (`max_active_downloads`), automatic retry of failed torrents, log file
 - Safe by design: paths from a torrent never escape the download folder, and
   Denco never overwrites files it didn't create
 
@@ -45,20 +45,17 @@ Put the binary somewhere on your `PATH` (or use `go install ./cmd/denco`).
 
 ## Quick start
 
-Start the daemon in its own terminal (it runs in the foreground):
-
-```sh
-denco daemon
-```
-
-In another terminal:
-
 ```sh
 denco add ~/Downloads/some.torrent          # or a magnet link, or an https:// URL
 denco list                                  # what's going on
 denco info 1                                # details of torrent #1
 denco stop                                  # stop the daemon (progress is saved)
 ```
+
+The first command starts the daemon in the background (it keeps running
+after you close the terminal; its log is `daemon.log` in Denco's home).
+`denco stop` stops it. To watch it work instead, run `denco daemon` in a
+terminal of its own — it stays in the foreground until Ctrl-C.
 
 Downloads go to `~/Downloads/Denco` unless you say otherwise
 (`denco add -dir DIR …` or the `download_dir` setting). Torrents carry on
@@ -70,12 +67,13 @@ where they left off when the daemon starts again.
 
 | Command | What it does |
 |---|---|
-| `denco daemon [-v] [flags]` | Run the daemon. Flags `-dir -port -max-active -max-peers -down-limit -up-limit -seed-ratio -seed-time -log` override the config for this run; `-v` logs peers and trackers. |
+| `denco start [flags]` | Start the daemon in the background (other commands do this by themselves). |
+| `denco daemon [-v] [flags]` | Run the daemon in this terminal. Flags `-dir -port -max-active -max-peers -down-limit -up-limit -seed-ratio -seed-time -log` override the config for this run (`start` takes them too); `-v` logs peers and trackers. |
 | `denco stop` | Stop the daemon; every torrent is saved and trackers are told. |
 | `denco status` | Overall status: ports, port forwarding, DHT, limits, speeds. |
 
-**Torrents** (need a running daemon; `<id>` is the number from `denco list`
-or the start of the info hash)
+**Torrents** (they start the daemon if it isn't running; `<id>` is the
+number from `denco list` or the start of the info hash)
 
 | Command | What it does |
 |---|---|
@@ -130,7 +128,8 @@ denco config init                  # write a commented file with every setting
 | `enable_dht`, `enable_pex` | `true` | Find peers without trackers / exchange peer lists. |
 | `dht_bootstrap` | public routers | DHT entry points; `none` = only remembered nodes. |
 | `resume_enabled`, `resume_dir` | `true`, `<home>/resume` | Remember torrents across restarts. |
-| `log_file` | `none` | Log to this file instead of the terminal (kept under ~20 MB). |
+| `log_file` | `none` | Log to this file instead of the terminal (kept under ~20 MB). A daemon started in the background logs to `<home>/daemon.log` when this is `none`. |
+| `auto_start` | `true` | Commands start the daemon in the background when it isn't running. |
 
 ### Where Denco keeps things
 
@@ -160,8 +159,10 @@ under System Settings › Privacy & Security › Local Network.
 
 ## Running the daemon at login
 
-`denco daemon` stays in the foreground, so any service manager can run it.
-Set a log file so its output goes somewhere useful:
+Commands start the daemon when needed, but torrents only seed while it
+runs. To have it running from login, let your system start `denco daemon`
+(it stays in the foreground, which service managers expect), with a log
+file:
 
 ```sh
 denco config set log_file ~/denco.log

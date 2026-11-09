@@ -5,7 +5,7 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 ## Process model
 
 ```
- denco add/list/pause/...  ──JSON/HTTP (127.0.0.1:<random> + token)──▶  denco daemon (foreground)
+ denco add/list/pause/...  ──JSON/HTTP (127.0.0.1:<random> + token)──▶  denco daemon (foreground, or detached by `start`/auto-start)
         (short-lived CLI)        address+token from $DENCO_HOME/daemon.json   │
                                                                                ├─ ipc server
                                                                                └─ engine
@@ -15,7 +15,11 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
                                                                                   └─ DHT node (UDP, same port number; state in resume/dht.json)
 ```
 
-`$DENCO_HOME` defaults to `os.UserConfigDir()/denco`. Standalone commands
+`$DENCO_HOME` defaults to `os.UserConfigDir()/denco`. If no daemon answers,
+a client command starts one (D52): it runs its own executable as
+`denco daemon` detached (new session / no console), output to
+`daemon.out`, log to `daemon.log` unless `log_file` is set, serialised by
+`autostart.lock`. Standalone commands
 (`inspect`, `magnet`, `announce`, `probe`, `verify`, `download`) need no daemon.
 
 ## Package map
@@ -43,7 +47,7 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 | `internal/dht` | ✅ | BEP 5 DHT node (D42): `Server` (UDP socket, reader goroutine answering ping/find_node/get_peers/announce_peer, queries matched by tid **and** source address, per-second query cap, verify-before-adding), iterative `lookup` (α=4, K=8), `GetPeers(ctx, hash, port)` (+ announce), routing table (160 k-buckets, replace bad/failing nodes), tokens (rotating secret), peer store (30-min TTL, caps), `dht.json` state (ID + ≤ 200 good nodes). IPv4 only. |
 | `internal/portmap` | ✅ | Router port forwarding (D49): `Mapper` (`Start(Config)`, `Status`, `External`, `Close` removes the mappings) runs one goroutine: find a router, map, renew at half the lease, look again every 10 min if none answered or it refused. NAT-PMP client (`natpmp.go`, RFC 6886), UPnP IGD client (`upnp.go`: SSDP search, device description, SOAP Add/Delete/GetExternalIPAddress), default gateway lookup (`gateway*.go`: `/proc/net/route` on Linux, `route -n get default` on macOS, else first host of our subnet). |
 | `internal/compact` | ✅ | Compact peer addresses (6/18 bytes) shared by `tracker`, `peer` (PEX) and `dht`. |
-| `internal/cli` | ✅ | Every command. `cli.go` (dispatch, usage, `$DENCO_HOME`), `daemon.go` (daemon, stop), `client.go` (add/list/info/files/peers/pause/resume/remove/status), `render.go` (tables/detail views), `files.go` (`files` + skip/want, file-number lists), `logfile.go` (daemon log file with rotation, D48), plus standalone `inspect.go` (inspect, magnet), `announce.go`, `probe.go`, `verify.go`, `download.go`. |
+| `internal/cli` | ✅ | Every command. `cli.go` (dispatch, usage, `$DENCO_HOME`), `daemon.go` (daemon, stop), `autostart.go` (`denco start`, auto-start of a detached background daemon, D52; `detach_unix.go`/`detach_windows.go`), `client.go` (add/list/info/files/peers/pause/resume/remove/status), `render.go` (tables/detail views), `files.go` (`files` + skip/want, file-number lists), `logfile.go` (daemon log file with rotation, D48), plus standalone `inspect.go` (inspect, magnet), `announce.go`, `probe.go`, `verify.go`, `download.go`. |
 
 Dependency direction (lower never imports higher):
 `bencode → metainfo/magnet → tracker/peer → pieces/storage → torrent → engine → ipc → cli → cmd`;
