@@ -191,7 +191,3 @@ GOOS=windows go build ./...   # cross-compile check
 
 Tests never use the internet or your real files: trackers, peers, routers and
 DHT nodes are all simulated on loopback.
-
-Design notes: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (packages, data
-flow, formats), [`docs/DECISIONS.md`](docs/DECISIONS.md) (why things are the
-way they are), [`docs/ROADMAP.md`](docs/ROADMAP.md).
