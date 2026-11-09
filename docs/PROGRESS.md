@@ -28,9 +28,11 @@ out-of-scope list (uTP, MSE, web seeds, v2, TUI).
   remote clients might time out on us (D46). Download side fixed.
 - Failed torrents' retry state isn't saved; after a daemon restart they
   simply start again (D47).
-- Port forwarding on the user's real router: UPnP found (no NAT-PMP); the
-  first try failed (501 / EOF); fixed per D50 but the fix is **not yet
-  confirmed** on that router. Earlier notes:
+- Port forwarding on the user's real router: UPnP found (no NAT-PMP). After
+  the D50 fixes the `EOF` is gone, but the router answers 501 to every
+  AddPortMapping, permanent leases included (seen 2026-11-09 during the
+  user's Linux Mint download) — UPnP mapping is most likely disabled in
+  the router's settings; Denco reports it correctly. Earlier notes:
 - Port forwarding (D49) is tested only against fake routers on loopback.
   A read-only probe of the user's router from the dev environment found the
   gateway (192.168.1.1, both via `route` and by the Windows-path guess);

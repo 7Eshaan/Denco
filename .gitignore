@@ -50,3 +50,7 @@ $RECYCLE.BIN/
 # Shared project settings (.claude/settings.json) may be committed;
 # personal overrides stay local.
 .claude/settings.local.json
+
+# ---- Other Claude stuff ------------------------------------------------
+/CLAUDE.md
+/docs/
