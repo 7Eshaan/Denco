@@ -769,3 +769,51 @@ One short entry per decision. Newest at the bottom. Format:
 - **Why:** running the daemon under launchd/systemd/a login item needs its
   log somewhere; one backup keeps the latest history without unbounded
   growth. Auto-start of the daemon itself is still an open question.
+
+### D49 — Port forwarding (NAT-PMP, UPnP IGD), Phase 12d
+- **Decision:** a new `internal/portmap` package, standard library only,
+  driven by the engine when `port_forwarding` is on (**default on**, like
+  mainstream clients). It forwards the peer port (TCP) and the DHT port
+  (UDP).
+  - **Order:** NAT-PMP first (one round trip to the gateway, ~2 s at most
+    when nothing answers), then UPnP (SSDP search, 2 s of answers). PCP
+    (RFC 6887) isn't spoken; PCP routers answer NAT-PMP requests.
+  - **Gateway:** the standard library can't find it. Linux reads
+    `/proc/net/route`, macOS runs `/sbin/route -n get default`
+    (build-tagged files); elsewhere (Windows), or if that fails, we guess
+    the first host of our subnet (`192.168.1.1` for `192.168.1.23/24`). A
+    wrong guess only costs the NAT-PMP timeout; UPnP doesn't need the
+    gateway address.
+  - **Leases:** NAT-PMP asks 7200 s, UPnP 3600 s, both renewed at half the
+    lease granted; a router that only takes permanent UPnP mappings
+    (error 725) gets lease 0, re-added every 30 min. Mappings are removed
+    when the daemon stops (≤ 2 s wait).
+  - **Port differs:** we ask for external = internal. If the router
+    grants another port (NAT-PMP may), or UPnP says the port is forwarded
+    to another device (718, then up to 3 random ports ≥ 49152), sessions
+    announce the router's port: `torrent.Config.PublicPort` feeds the
+    tracker `port`, DHT `announce_peer` and the BEP 10 `p` field. The BEP 5
+    PORT message still carries our local DHT port.
+  - **Failure:** nothing found or refused → shown in `denco status` with
+    the reason, looked for again every 10 min (a laptop changes networks);
+    renewal failure → the same.
+  - **Safety:** anything on the LAN can answer an SSDP search, so we only
+    send HTTP to the IP that answered (description, `URLBase` and control
+    URL must all point at it), plain HTTP, no redirects, responses capped
+    at 256 KiB. The mapping's internal client is our own LAN address.
+  - **Tests:** fake NAT-PMP and UPnP routers on loopback; every test
+    points `Gateway`/`SSDPAddr` at them. `config.DefaultPortForwarding` is
+    turned off in the CLI tests so no daemon there talks to the real router.
+- **Why:** behind a home NAT, nobody can connect to us without a forwarded
+  port, which halves the peers we can reach and hurts seeding and the DHT.
+  The two protocols cover nearly all home routers; both are small enough to
+  write with `net`, `net/http` and `encoding/xml`.
+  - **Found while testing:** a stop during a renewal lost track of the
+    mappings in place (they stayed until their lease ran out) — fixed,
+    `TestCloseDuringRenewalRemovesMappings` fails without it; and a stop
+    didn't wake a pending NAT-PMP read (up to the full retry wait) — the
+    read is now interrupted. On macOS a failed multicast send hints at the
+    Local Network privacy setting.
+- **Not done:** IPv6 (no NAT there; a firewall pinhole would need PCP or
+  UPnP IGD:2's `AddPinhole`); watching for a network change between
+  renewals (the next renewal or the 10-min retry notices).

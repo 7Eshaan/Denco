@@ -12,6 +12,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/engine"
 	"github.com/7Eshaan/Denco/internal/format"
 	"github.com/7Eshaan/Denco/internal/ipc"
+	"github.com/7Eshaan/Denco/internal/portmap"
 )
 
 // Rendering of the daemon's data for the terminal. Pure functions of their
@@ -64,6 +65,43 @@ func retryText(t engine.Torrent) string {
 	in := max(time.Until(t.RetryAt), 0)
 	return fmt.Sprintf("retrying by itself in %s (attempt %d); 'denco resume %d' retries now",
 		format.Duration(in.Round(time.Second)), t.Retries+1, t.ID)
+}
+
+// portMapText describes port forwarding for `denco status`. port is our
+// peer port; st is nil when port_forwarding is off.
+func portMapText(st *portmap.Status, port uint16) string {
+	if st == nil {
+		return "off (port_forwarding); incoming peers need port " + strconv.Itoa(int(port)) + " forwarded by hand"
+	}
+	again := ""
+	if !st.NextTry.IsZero() {
+		again = fmt.Sprintf(" (looking again in %s)", format.Duration(max(time.Until(st.NextTry), 0).Round(time.Second)))
+	}
+	switch st.State {
+	case portmap.Mapped:
+		var ports []string
+		for _, m := range st.Mappings {
+			p := fmt.Sprintf("%s %d", m.Proto, m.External)
+			if m.External != m.Internal {
+				p += fmt.Sprintf("→%d", m.Internal)
+			}
+			ports = append(ports, p)
+		}
+		s := fmt.Sprintf("%s via router %s: %s", st.Method, st.Gateway, strings.Join(ports, ", "))
+		if st.ExternalIP != "" {
+			s += "; public address " + st.ExternalIP
+		}
+		if st.Err != "" {
+			s += "; some ports failed: " + st.Err
+		}
+		return s
+	case portmap.NotFound:
+		return fmt.Sprintf("no UPnP or NAT-PMP router found; forward port %d by hand for incoming peers%s", port, again)
+	case portmap.Failed:
+		return fmt.Sprintf("router %s (%s) refused: %s%s", st.Gateway, st.Method, st.Err, again)
+	default:
+		return "looking for your router (UPnP / NAT-PMP)…"
+	}
 }
 
 // ratioText shows a share ratio with two decimals, "-" when unknown.
@@ -321,6 +359,7 @@ func renderStatus(w io.Writer, st ipc.Status) {
 	row := func(k, v string) { fmt.Fprintf(tw, "%s:\t%s\n", k, v) }
 	row("Daemon", fmt.Sprintf("running (pid %d), up %s", st.PID, format.Duration(time.Since(st.StartedAt))))
 	row("Peer port", fmt.Sprint(st.ListenPort))
+	row("Port forwarding", portMapText(st.PortMap, st.ListenPort))
 	row("Download dir", st.DownloadDir)
 	row("State dir", st.StateDir)
 	var counts []string

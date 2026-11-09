@@ -7,6 +7,7 @@ import (
 
 	"github.com/7Eshaan/Denco/internal/bitfield"
 	"github.com/7Eshaan/Denco/internal/metainfo"
+	"github.com/7Eshaan/Denco/internal/portmap"
 	"github.com/7Eshaan/Denco/internal/storage"
 	"github.com/7Eshaan/Denco/internal/torrent"
 )
@@ -113,24 +114,25 @@ type Peer struct {
 
 // Overview is the whole client's status.
 type Overview struct {
-	StartedAt   time.Time     `json:"started_at"`
-	ListenPort  uint16        `json:"listen_port"`
-	DownloadDir string        `json:"download_dir"`
-	StateDir    string        `json:"state_dir"`
-	MaxActive   int           `json:"max_active"`
-	MaxPeers    int           `json:"max_peers"`      // per torrent
-	DownLimit   int64         `json:"download_limit"` // bytes/s, 0 = unlimited
-	UpLimit     int64         `json:"upload_limit"`
-	PEX         bool          `json:"pex"` // peer exchange on (never used for private torrents)
-	DHT         bool          `json:"dht"` // DHT node running
-	DHTPort     uint16        `json:"dht_port,omitempty"`
-	DHTNodes    int           `json:"dht_nodes"`      // in its routing table
-	DHTGood     int           `json:"dht_good_nodes"` // of which answered recently
-	SeedRatio   float64       `json:"seed_ratio"`     // global seeding limits; 0 = none
-	SeedTime    time.Duration `json:"seed_time"`
-	Torrents    int           `json:"torrents"`
-	ByState     map[State]int `json:"by_state"`
-	Complete    int           `json:"complete"`
+	StartedAt   time.Time       `json:"started_at"`
+	ListenPort  uint16          `json:"listen_port"`
+	DownloadDir string          `json:"download_dir"`
+	StateDir    string          `json:"state_dir"`
+	MaxActive   int             `json:"max_active"`
+	MaxPeers    int             `json:"max_peers"`      // per torrent
+	DownLimit   int64           `json:"download_limit"` // bytes/s, 0 = unlimited
+	UpLimit     int64           `json:"upload_limit"`
+	PEX         bool            `json:"pex"` // peer exchange on (never used for private torrents)
+	DHT         bool            `json:"dht"` // DHT node running
+	DHTPort     uint16          `json:"dht_port,omitempty"`
+	DHTNodes    int             `json:"dht_nodes"`                 // in its routing table
+	DHTGood     int             `json:"dht_good_nodes"`            // of which answered recently
+	PortMap     *portmap.Status `json:"port_forwarding,omitempty"` // nil = off
+	SeedRatio   float64         `json:"seed_ratio"`                // global seeding limits; 0 = none
+	SeedTime    time.Duration   `json:"seed_time"`
+	Torrents    int             `json:"torrents"`
+	ByState     map[State]int   `json:"by_state"`
+	Complete    int             `json:"complete"`
 
 	DownloadRate int64 `json:"download_rate"`
 	UploadRate   int64 `json:"upload_rate"`
@@ -228,6 +230,10 @@ func (e *Engine) Overview() Overview {
 	if e.dht != nil {
 		ds := e.dht.Stats()
 		o.DHT, o.DHTPort, o.DHTNodes, o.DHTGood = true, e.dht.Port(), ds.Nodes, ds.GoodNodes
+	}
+	if e.portmap != nil {
+		st := e.portmap.Status()
+		o.PortMap = &st
 	}
 	for _, t := range e.byID {
 		if t.removing {

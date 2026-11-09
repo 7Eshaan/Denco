@@ -40,6 +40,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/peerid"
 	"github.com/7Eshaan/Denco/internal/pieces"
+	"github.com/7Eshaan/Denco/internal/portmap"
 	"github.com/7Eshaan/Denco/internal/ratelimit"
 	"github.com/7Eshaan/Denco/internal/resume"
 	"github.com/7Eshaan/Denco/internal/storage"
@@ -69,6 +70,11 @@ type Config struct {
 	SeedRatio      float64
 	SeedTime       time.Duration
 	SeedCheckEvery time.Duration
+	// PortForward asks the router to forward the peer port (TCP) and the
+	// DHT port (UDP) via NAT-PMP or UPnP (D49). PortMap holds discovery
+	// overrides for tests; its Ports and Logger are set by the engine.
+	PortForward bool
+	PortMap     portmap.Config
 	// RetryBase / RetryMax: a torrent that failed is retried after
 	// RetryBase, doubling up to RetryMax (D47). Defaults 1 min and 1 h.
 	RetryBase, RetryMax time.Duration
@@ -89,8 +95,9 @@ type Engine struct {
 	started time.Time
 	down    *ratelimit.Limiter // shared by every connection
 	up      *ratelimit.Limiter
-	pacer   *torrent.Pacer // paces every session under the download limit (D46)
-	dht     *dht.Server    // nil when DHT is off
+	pacer   *torrent.Pacer  // paces every session under the download limit (D46)
+	dht     *dht.Server     // nil when DHT is off
+	portmap *portmap.Mapper // nil when port forwarding is off
 
 	mu        sync.Mutex
 	seedRatio float64       // current limits (Config values, then SetSeedLimits)
@@ -208,6 +215,9 @@ func Open(cfg Config) (*Engine, error) {
 			return nil, err
 		}
 	}
+	if cfg.PortForward {
+		e.startPortMap()
+	}
 	if err := e.load(); err != nil {
 		e.closeShared()
 		return nil, err
@@ -216,6 +226,27 @@ func Open(cfg Config) (*Engine, error) {
 	e.scheduleLocked()
 	e.mu.Unlock()
 	return e, nil
+}
+
+// startPortMap asks the router to forward our peer and DHT ports.
+func (e *Engine) startPortMap() {
+	pc := e.cfg.PortMap
+	pc.Ports = []portmap.Port{{Proto: portmap.TCP, Internal: e.ln.Port()}}
+	if e.dht != nil {
+		pc.Ports = append(pc.Ports, portmap.Port{Proto: portmap.UDP, Internal: e.dht.Port()})
+	}
+	pc.Logger = e.log
+	e.portmap = portmap.Start(pc)
+}
+
+// publicPort is the TCP port the router forwards to our peer port, or 0
+// if it doesn't (then the peer port itself is announced).
+func (e *Engine) publicPort() uint16 {
+	if e.portmap == nil {
+		return 0
+	}
+	ext, _ := e.portmap.External(portmap.TCP, e.ln.Port())
+	return ext
 }
 
 // listen opens the peer port, falling back to a random one if it's taken
@@ -254,6 +285,9 @@ func openDHT(cfg Config, port uint16, log *slog.Logger) (*dht.Server, error) {
 
 // closeShared closes what all torrents share, once none is running.
 func (e *Engine) closeShared() {
+	if e.portmap != nil {
+		e.portmap.Close() // removes the router's mappings
+	}
 	if e.dht != nil {
 		e.dht.Close() // saves its routing table for the next start
 	}
@@ -497,6 +531,7 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 	cfg := e.cfg.Session
 	cfg.PeerID, cfg.Port, cfg.Logger, cfg.NoSeed = e.peerID, e.ln.Port(), e.log, false
 	cfg.PeerOpts, cfg.UploadLimiter, cfg.Pacer = e.peerOpts(), e.up, e.pacer
+	cfg.PublicPort = e.publicPort
 	if e.dht != nil { // only when set: a nil *dht.Server in the interface isn't nil
 		cfg.DHT = e.dht
 	}

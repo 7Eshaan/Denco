@@ -34,7 +34,7 @@ func (s *Session) dhtLoop(ctx context.Context) {
 	failures := 0
 	for {
 		lctx, cancel := context.WithTimeout(ctx, dhtLookupTimeout)
-		peers, err := s.cfg.DHT.GetPeers(lctx, s.mi.InfoHash, s.cfg.Port)
+		peers, err := s.cfg.DHT.GetPeers(lctx, s.mi.InfoHash, s.port())
 		cancel()
 		if ctx.Err() != nil {
 			return

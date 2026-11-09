@@ -41,6 +41,7 @@ type Config struct {
 	DHTBootstrap             string // comma-separated host:port routers; "" = none
 	EnablePEX                bool   // peer exchange (BEP 11); never for private torrents
 	ListenPort               int
+	PortForwarding           bool // ask the router to forward ListenPort (UPnP / NAT-PMP)
 	ResumeEnabled            bool
 	ResumeDir                string
 	SeedRatio                float64       // stop seeding at this upload/download ratio; 0 = no limit
@@ -51,6 +52,10 @@ type Config struct {
 // DefaultDHTBootstrap is the default dht_bootstrap. A variable so tests can
 // clear it: no test may contact the public routers.
 var DefaultDHTBootstrap = strings.Join(dht.DefaultBootstrap, ",")
+
+// DefaultPortForwarding is port_forwarding's default. A variable so tests
+// can turn it off: no test may talk to the real router.
+var DefaultPortForwarding = true
 
 // Defaults returns the settings used when the file doesn't set them.
 // home is the denco home directory (resume data lives under it).
@@ -67,6 +72,7 @@ func Defaults(home string) Config {
 		DHTBootstrap:             DefaultDHTBootstrap,
 		EnablePEX:                true, // like mainstream clients; private torrents never use it
 		ListenPort:               6881,
+		PortForwarding:           DefaultPortForwarding,
 		ResumeEnabled:            true,
 		ResumeDir:                filepath.Join(home, "resume"),
 	}
@@ -122,6 +128,9 @@ var settings = []Setting{
 	{Name: "listen_port", Help: "TCP port for incoming peers (0 = random); a random one is used if it's taken",
 		get: func(c *Config) string { return strconv.Itoa(c.ListenPort) },
 		set: func(c *Config, v string) error { return setInt(&c.ListenPort, v, 0, 65535) }},
+	{Name: "port_forwarding", Help: "ask your router to forward listen_port (UPnP / NAT-PMP), so peers can connect to you",
+		get: func(c *Config) string { return strconv.FormatBool(c.PortForwarding) },
+		set: func(c *Config, v string) error { return setBool(&c.PortForwarding, v) }},
 	{Name: "resume_enabled", Help: "remember torrents and progress across daemon restarts",
 		get: func(c *Config) string { return strconv.FormatBool(c.ResumeEnabled) },
 		set: func(c *Config, v string) error { return setBool(&c.ResumeEnabled, v) }},

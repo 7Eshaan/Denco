@@ -50,6 +50,9 @@ import (
 type Config struct {
 	PeerID peerid.ID // required; must match the Listener's
 	Port   uint16    // port reported to trackers (the Listener's port)
+	// PublicPort, if set, gives the port peers on the internet reach us
+	// on (the router may forward a different one, D49); 0 means use Port.
+	PublicPort func() uint16
 
 	MaxPeers     int // connected (incl. incoming) + dialing; default 50
 	DialParallel int // simultaneous dial attempts; default 10

@@ -24,7 +24,7 @@ func (s *Session) sendExtHandshake(p *peerState) {
 		M:            m,
 		MetadataSize: len(s.mi.InfoBytes),
 		Version:      "Denco 0.0.1",
-		Port:         int(s.cfg.Port),
+		Port:         int(s.port()),
 		ReqQ:         maxQueuedUploads,
 	}
 	s.sendTo(p, peer.Extended(0, hs.Encode()))

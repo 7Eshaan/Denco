@@ -1,11 +1,13 @@
 # Progress
 
-**Current phase:** 12c — Robustness · ✅ done, waiting for the user's commit
+**Current phase:** 12d — Port forwarding (NAT-PMP / UPnP) · ✅ done, waiting for the user's commit
 
-**Next action:** once the user has committed 12c, tick it in
-`docs/ROADMAP.md`, then ask the user whether **12d — NAT traversal**
-(UPnP / NAT-PMP, stdlib only) is in scope; if not, go to **12e — Docs &
-real-world testing**.
+**Next action:** once the user has committed 12d, tick it in
+`docs/ROADMAP.md` and start **12e — Docs & real-world testing** (README /
+usage docs; a full real download, which touches the public network and
+needs the user's go-ahead). Before that, ideally the user tries
+`denco daemon` + `denco status` at home to see port forwarding against
+their real router (see Known issues).
 
 ## Known issues
 - A finished torrent (seed limit reached) stays finished when limits are
@@ -23,8 +25,15 @@ real-world testing**.
   remote clients might time out on us (D46). Download side fixed.
 - Failed torrents' retry state isn't saved; after a daemon restart they
   simply start again (D47).
-- No NAT traversal (UPnP/NAT-PMP): incoming peers need a forwarded port.
-  12d, if the user confirms it is in scope.
+- Port forwarding (D49) is tested only against fake routers on loopback.
+  A read-only probe of the user's router from the dev environment found the
+  gateway (192.168.1.1, both via `route` and by the Windows-path guess);
+  NAT-PMP got no answer (the router most likely doesn't speak it) and the
+  UPnP multicast search could not be sent there ("no route to host" — the
+  same from Python, so a macOS Local Network permission / sandbox limit of
+  that environment, not Denco). A real mapping hasn't been made yet.
+- No IPv6 port forwarding / pinholes; the BEP 5 PORT message carries the
+  local DHT port even if the router forwards another one (D49).
 - DHT: IPv4 only (no BEP 32); no BEP 42 secure node IDs. Behind NAT without
   a forwarded port the routing table fills slowly. Two DHT nodes alone
   (no tracker, no third node) take minutes to find each other.
@@ -44,43 +53,32 @@ real-world testing**.
 ## Open questions for the user
 - Daemon start: explicit `denco daemon` (my recommendation; not explicitly
   confirmed). Auto-start from `denco add` is possible later.
-- UPnP/NAT-PMP (12d) in scope? MSE encryption stays out of scope?
+- MSE encryption stays out of scope? (UPnP/NAT-PMP: confirmed, done in 12d.)
 
-## Last test run (2026-11-09, end of Phase 12c)
-- `go test -race -count=1 ./...` — all 20 packages pass
-- stress `-race -cpu=1,2,8`: `engine`, `torrent` ×10 (30 runs each);
-  `peer`, `ratelimit`, `cli`, `config`, `pieces`, `metadata` ×5 (15 each)
-  — all pass, no failures
-- **D36 reproduced before fixing** (`TestLowDownloadLimitDoesNotSnubPeers`,
-  8 peers on one 64 KB/s limit): peers dropped and redialed, 257 blocks sent
-  for a 24-block torrent, 11/24 pieces after 30 s. Each fix was then shown
-  necessary in turn: paced timeout alone → no snub drops at 500 ms but still
-  churn; plus fair limiter → still ~10× duplicates; plus endgame off → done
-  in ~6 s, every peer connected once
-- **found while fixing:** the limiter starved readers (new
-  `TestFairAcrossGoroutines`: old code 10/10 fail, new 60/60 pass with
-  `-race -cpu=1,2,8`); `peer.Conn` dropped a throttled peer mid-message as
-  idle (`TestThrottledReadIsNotIdle`, failed before the fix)
-- new tests also: `TestPacer`; `TestRetryDelay`,
-  `TestFailedTorrentRetriesByItself`, `TestPermanentErrorIsNotRetried`;
-  `TestLogFileRotates`, `TestDaemonLogsToFile`, `TestRetryText`,
-  `TestLogFileSetting`
-- `Pause` now clears a failed torrent's shown error (found by the retry
-  test: a paused torrent still showed "Error")
-- mutation checks — 12 of 13 make a test fail: snub timeout / pipeline not
-  scaled; endgame under a limit; peer count never reported; stopped session
-  leaking its pacer share (no test covered it at first — added); no idle
-  deadline; permanent errors retried; no retry; user resume not resetting
-  failures; no backoff; log never rotated; log file ignored. **Survived
-  (equivalent):** `pause` not cancelling the retry timer — the timer does
-  nothing once `pause` has cleared the error
-- smoke test, two real daemons + loopback tracker, scratch homes: B with
-  `-log FILE -down-limit 100K` and its download folder blocked by a file →
-  "retrying by itself in 1m 0s (attempt 2)"; block removed → retried
-  automatically at the minute, 1 MB done in ~9 s (≈ the limit), 3 files
-  byte-identical; log only in the file. Real config dir untouched
+## Last test run (2026-11-09, end of Phase 12d)
+- `go test -race -count=1 ./...` — all 21 packages pass (new: `portmap`)
+- stress `-race -count=5 -cpu=1,2,8`: `portmap`, `engine`, `torrent`,
+  `cli`, `config` (15 runs each) — all pass
 - `go vet` (darwin, linux, windows) clean · gofmt clean
 - cross-compile linux/windows/darwin × amd64/arm64 — all build
+- new tests: fake NAT-PMP + UPnP routers on loopback — map/renew/remove,
+  router's other external port, refusal, not found → found later, UPnP
+  permanent-lease fallback (725), conflict (718) → another port, only
+  talking to the device that answered (3 cases), NAT-PMP → UPnP fallback,
+  gateway parsing (Linux, macOS, subnet guess); engine: tracker told the
+  router's port, DHT port mapped, mappings removed on Close; status text;
+  `port_forwarding` setting
+- **found while testing:** stopping during a renewal left the mappings on
+  the router (`TestCloseDuringRenewalRemovesMappings` fails without the
+  fix); a stop didn't interrupt a pending NAT-PMP read (6 s → 1 s)
+- mutation checks — 13 of 13 caught (public port ignored, DHT port not
+  mapped, no removal, no renewal, no rediscovery, foreign host allowed,
+  no 725 fallback, no conflict retry, router's port ignored, result code
+  ignored, UDP sent as TCP, status row missing — no test covered it at
+  first, added — and the stop-mid-renewal bug)
+- read-only probe of the real router (no mapping made): gateway found;
+  NAT-PMP no answer; UPnP multicast blocked in the dev environment (see
+  Known issues)
 - external deps: none
 
 ## History
@@ -197,3 +195,6 @@ real-world testing**.
   automatic retry of failed torrents with backoff (D47, `engine/retry.go`;
   `pause` clears the error); daemon log file with rotation (D48,
   `log_file`, `-log`).
+- **Phase 12d (2026-11-09):** `portmap` (NAT-PMP, UPnP IGD, gateway lookup),
+  engine `PortForward` + public port to trackers/DHT/BEP 10, `port_forwarding`
+  setting, status row. D49.

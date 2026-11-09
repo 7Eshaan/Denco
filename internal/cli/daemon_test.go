@@ -219,7 +219,7 @@ func TestDaemonWorkflow(t *testing.T) {
 	}
 
 	status := h.mustCmd("status")
-	for _, want := range []string{"Torrents:", "3 (", "Completed:", "1 of 3", "Peer port:"} {
+	for _, want := range []string{"Torrents:", "3 (", "Completed:", "1 of 3", "Peer port:", "Port forwarding:", "off (port_forwarding)"} {
 		if !strings.Contains(status, want) {
 			t.Errorf("status missing %q:\n%s", want, status)
 		}

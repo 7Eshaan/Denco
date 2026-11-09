@@ -69,6 +69,7 @@ func TestParse(t *testing.T) {
 		DHTBootstrap:             "10.0.0.1:6881,example.org:25401",
 		EnablePEX:                false,
 		ListenPort:               51413,
+		PortForwarding:           true, // not in the file: the default
 		ResumeEnabled:            false,
 		ResumeDir:                dl + " #1",
 	}
@@ -321,5 +322,15 @@ func TestLogFileSetting(t *testing.T) {
 	}
 	if err := c.Set("log_file", "NONE"); err != nil || c.LogFile != "" {
 		t.Errorf("log_file none: %q, %v", c.LogFile, err)
+	}
+}
+
+func TestPortForwardingSetting(t *testing.T) {
+	c := Defaults(t.TempDir())
+	if v, _ := c.Get("port_forwarding"); v != "true" || !c.PortForwarding {
+		t.Errorf("default port_forwarding = %q", v)
+	}
+	if err := c.Set("port_forwarding", "off"); err != nil || c.PortForwarding {
+		t.Errorf("port_forwarding off: %v, %v", c.PortForwarding, err)
 	}
 }

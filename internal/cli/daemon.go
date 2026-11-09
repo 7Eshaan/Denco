@@ -85,6 +85,7 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 		UploadLimit:   cfg.UploadLimit,
 		Session:       torrent.Config{MaxPeers: cfg.MaxConnectionsPerTorrent, PEX: cfg.EnablePEX},
 		EnableDHT:     cfg.EnableDHT,
+		PortForward:   cfg.PortForwarding,
 		SeedRatio:     cfg.SeedRatio,
 		SeedTime:      cfg.SeedTime,
 		DHTBootstrap:  cfg.DHTRouters(),
@@ -117,6 +118,9 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 	fmt.Fprintf(e.stdout, "Downloads go to %s by default. Limits: ↓ %s  ↑ %s. Seeding: %s.\n",
 		cfg.DownloadDir, config.DescribeRate(cfg.DownloadLimit), config.DescribeRate(cfg.UploadLimit),
 		describeSeedLimits(cfg.SeedRatio, cfg.SeedTime))
+	if ov.PortMap != nil {
+		fmt.Fprintln(e.stdout, "Asking your router to forward the peer port (UPnP / NAT-PMP); 'denco status' shows the result.")
+	}
 	if cfg.LogFile != "" {
 		fmt.Fprintf(e.stdout, "Logging to %s.\n", cfg.LogFile)
 	}

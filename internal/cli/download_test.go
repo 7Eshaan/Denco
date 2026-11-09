@@ -42,6 +42,8 @@ func TestMain(m *testing.M) {
 	// No test may contact the public DHT routers: daemons here start with
 	// DHT on (the default) but no routers, so they stay silent.
 	config.DefaultDHTBootstrap = ""
+	// Nor talk to the real router (UPnP multicast, NAT-PMP).
+	config.DefaultPortForwarding = false
 	code := m.Run()
 	os.RemoveAll(tmp)
 	os.Exit(code)

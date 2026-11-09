@@ -98,11 +98,21 @@ func isClosed(ch <-chan struct{}) bool {
 	}
 }
 
+// port is the port we tell trackers, the DHT and peers to reach us on.
+func (s *Session) port() uint16 {
+	if s.cfg.PublicPort != nil {
+		if p := s.cfg.PublicPort(); p != 0 {
+			return p
+		}
+	}
+	return s.cfg.Port
+}
+
 func (s *Session) announceRequest(key uint32, ev tracker.Event) tracker.Request {
 	return tracker.Request{
 		InfoHash:   s.mi.InfoHash,
 		PeerID:     s.cfg.PeerID,
-		Port:       s.cfg.Port,
+		Port:       s.port(),
 		Uploaded:   s.uploaded.Load(),
 		Downloaded: s.downloaded.Load(),
 		Left:       s.left.Load(),

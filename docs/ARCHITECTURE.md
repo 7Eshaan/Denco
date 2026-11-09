@@ -35,12 +35,13 @@ Status markers: ✅ implemented · 🚧 in progress · ⏳ planned.
 | `internal/storage` | ✅ | `Layout` (OS-safe paths, sanitising, collisions, containment) and `Storage` (ReadAt/WriteAt across files, handle LRU, no-overwrite, ReadOnly, safe DeleteFiles). |
 | `internal/pieces` | ✅ | `Check`/`VerifyPiece`/`Recheck` (parallel hashing), `Manager` (rarest-first, random-first, endgame, memory budget, block ownership, wanted-pieces mask), `Wanted`/`SkipSet` (file selection → pieces, D44). |
 | `internal/torrent` | ✅ | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/IP bans, request pipelining, snub detection, hash+write workers, announce loop, uploading (validation, cancel, per-peer uploader), tit-for-tat choker + optimistic unchoke, seeding, pause uploads, peer exchange (`pex.go`, D41), file selection (`SetWanted`, partial seeds, D44), pacing under a download limit (`pace.go`: `Pacer`, scaled snub timeout and pipeline, D46), Stats/Peers. `Listener`: one TCP port routing incoming peers by info hash. |
-| `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (magnet: fetch metadata → open storage → restore/recheck → Session + Saver → final save), Add/AddMagnet/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview, `SetLimits`, `SetFilesWanted` (D44), seeding controls in `seeding.go` (`SetUploadsPaused`, `SetSeedMode`, `SetSeedLimits`, ratio, per-run seeding watcher, finished state; D45), automatic retry of failed torrents (`retry.go`, D47), one `torrent.Pacer` for all sessions. `commands.go`, `view.go`, `magnet.go`. |
+| `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (magnet: fetch metadata → open storage → restore/recheck → Session + Saver → final save), Add/AddMagnet/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview, `SetLimits`, `SetFilesWanted` (D44), seeding controls in `seeding.go` (`SetUploadsPaused`, `SetSeedMode`, `SetSeedLimits`, ratio, per-run seeding watcher, finished state; D45), automatic retry of failed torrents (`retry.go`, D47), one `torrent.Pacer` for all sessions, an optional `portmap.Mapper` for the peer (TCP) and DHT (UDP) ports (D49). `commands.go`, `view.go`, `magnet.go`. |
 | `internal/resume` | ✅ | `Store` (atomic save/load/list/delete of `<hash>.json` + `<hash>.torrent`), `Restore` (trust rules, partial recheck), `Saver` (periodic/no-op-skipping saves with lifetime totals). |
 | `internal/ipc` | ✅ | Daemon file (`Info`, atomic 0600 write), `NewHandler`/`Serve` (loopback HTTP API over an `*engine.Engine`, bearer-token auth, error→status mapping), `Client` (+ `Connect`, stale-file detection). |
 | `internal/config` | ✅ | `Config` + `Defaults(home)`, the settings table (`Settings`, `Lookup`, `Get`/`Set` with validation), `Load`/`Parse` (strict, line numbers), in-place `SetInFile`/`UnsetInFile`, `Init`, `KeysInFile`, rate syntax (`ParseRate`/`FormatRate`). |
 | `internal/ratelimit` | ✅ | `Limiter`: token bucket shared by many goroutines; `WaitN(ctx, n)` as a first-come-first-served reservation (D46), live `SetRate`; nil/0 = unlimited. |
 | `internal/dht` | ✅ | BEP 5 DHT node (D42): `Server` (UDP socket, reader goroutine answering ping/find_node/get_peers/announce_peer, queries matched by tid **and** source address, per-second query cap, verify-before-adding), iterative `lookup` (α=4, K=8), `GetPeers(ctx, hash, port)` (+ announce), routing table (160 k-buckets, replace bad/failing nodes), tokens (rotating secret), peer store (30-min TTL, caps), `dht.json` state (ID + ≤ 200 good nodes). IPv4 only. |
+| `internal/portmap` | ✅ | Router port forwarding (D49): `Mapper` (`Start(Config)`, `Status`, `External`, `Close` removes the mappings) runs one goroutine: find a router, map, renew at half the lease, look again every 10 min if none answered or it refused. NAT-PMP client (`natpmp.go`, RFC 6886), UPnP IGD client (`upnp.go`: SSDP search, device description, SOAP Add/Delete/GetExternalIPAddress), default gateway lookup (`gateway*.go`: `/proc/net/route` on Linux, `route -n get default` on macOS, else first host of our subnet). |
 | `internal/compact` | ✅ | Compact peer addresses (6/18 bytes) shared by `tracker`, `peer` (PEX) and `dht`. |
 | `internal/cli` | ✅ | Every command. `cli.go` (dispatch, usage, `$DENCO_HOME`), `daemon.go` (daemon, stop), `client.go` (add/list/info/files/peers/pause/resume/remove/status), `render.go` (tables/detail views), `files.go` (`files` + skip/want, file-number lists), `logfile.go` (daemon log file with rotation, D48), plus standalone `inspect.go` (inspect, magnet), `announce.go`, `probe.go`, `verify.go`, `download.go`. |
 
@@ -50,7 +51,8 @@ Dependency direction (lower never imports higher):
 `compact` by `tracker`, `peer`, `dht`; `dht` (uses `bencode`, `compact`, `metainfo`) by `engine` and
 `config` (default routers) — sessions and fetchers see it only through small interfaces
 (`torrent.PeerFinder`, `metadata.PeerFinder`);
-`metadata` (uses `peer`, `tracker`) by `torrent` (serving) and `engine` (fetching).
+`metadata` (uses `peer`, `tracker`) by `torrent` (serving) and `engine` (fetching);
+`portmap` (stdlib only) by `engine` (and `cli` for its status type).
 
 ## Key data types (implemented)
 
@@ -112,6 +114,14 @@ Dependency direction (lower never imports higher):
 - Robustness (D46–D48): `torrent.NewPacer(lim)`, `torrent.Config.Pacer`;
   `pieces.Manager.SetEndgame(bool)`; `engine.Config.RetryBase/RetryMax`,
   `Torrent.RetryAt/Retries`; `config.Config.LogFile` (`log_file`).
+- Port forwarding (D49): `portmap.Start(Config{Ports, Gateway, NATPMPPort,
+  SSDPAddr, NoNATPMP, NoUPnP, Logger}) *Mapper`; `Status()` → `Status{State
+  (searching|mapped|not_found|failed), Method, Gateway, ExternalIP,
+  Mappings, Err, NextTry}`; `External(proto, internal)`. `engine.Config.
+  PortForward/PortMap`; `Overview.PortMap *portmap.Status` (nil = off);
+  `torrent.Config.PublicPort func() uint16` (the router's external TCP port,
+  told to trackers, the DHT and in the BEP 10 handshake);
+  `config.Config.PortForwarding` (`port_forwarding`), `config.DefaultPortForwarding`.
 - Seeding (D45): `engine.Config.SeedRatio/SeedTime/SeedCheckEvery`;
   `Engine.SetUploadsPaused(ref, bool)`, `SetSeedMode(ref, "on"|"off"|"default")`
   (`ErrBadSeedMode`), `SetSeedLimits(ratio, d)`; `Resume` → `ErrSeedLimit` for a
@@ -205,6 +215,11 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   each per-peer uploader calls `WaitN` before each block read (upload),
   with a per-peer context so a disconnect ends the wait. `Conn` gained a
   context cancelled on close for the same reason.
+- **portmap.Mapper** (D49): 1 goroutine per engine (when on): discover →
+  map → sleep until half the lease → renew; `Close` (from the engine's
+  `closeShared`) cancels it and waits while it deletes the mappings
+  (≤ 2 s). `Status`/`External` read a snapshot under a mutex; sessions call
+  `External` through `torrent.Config.PublicPort` (no engine lock).
 - **pieces.Manager**: not thread-safe; owned by the session goroutine.
   `pieces.Recheck` uses up to 4 worker goroutines internally.
 
@@ -278,6 +293,19 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   rotated every 5 min, previous one accepted.
 - **Peer wire PORT (BEP 5):** id 9, 2-byte DHT port; sent after the
   bitfield/extension handshake to peers that set the DHT reserved bit.
+- **NAT-PMP (RFC 6886):** UDP to gateway:5351. External address `[0][0]` →
+  `[0][128][result u16][epoch u32][ip 4]`; map `[0][1=UDP|2=TCP][0 u16]
+  [internal u16][suggested external u16][lifetime u32]` → `[0][128+op]
+  [result][epoch][internal][external][lifetime]`; lifetime 0 deletes. We ask
+  7200 s; sent again after 250 ms, 500 ms, 1 s.
+- **UPnP IGD:** SSDP `M-SEARCH * HTTP/1.1` to 239.255.255.250:1900 (ST
+  InternetGatewayDevice:1/:2, WANIPConnection:1) → `LOCATION` of the device
+  description XML → `WANIPConnection:2/1` or `WANPPPConnection:1`
+  `controlURL` → SOAP POST (`SOAPAction: "<service>#<action>"`):
+  `AddPortMapping` (lease 3600 s; 0 if the router answers 725),
+  `DeletePortMapping`, `GetExternalIPAddress`. Faults: `UPnPError/errorCode`
+  (718 conflict → retry with a random port ≥ 49152). Only HTTP to the IP that
+  answered the search; no redirects; bodies ≤ 256 KiB.
 - **Daemon API (D30):** HTTP/1.1 JSON on 127.0.0.1, header
   `Authorization: Bearer <token>`. `GET /v1/status`, `GET|POST /v1/torrents`
   (POST body `{"torrent":"<base64 .torrent>" | "magnet":"magnet:?…","dir","existing","paused","skip":[i…]}`),
@@ -287,6 +315,7 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   `POST /v1/seed-limits {"ratio":float,"time":ns}` (→ status), `POST /v1/torrents/{ref}/pause|resume`,
   `POST /v1/torrents/{ref}/remove {"delete_files":bool}` (→ torrent + `files_deleted`),
   `POST /v1/limits {"download":B/s,"upload":B/s}` (→ status), `POST /v1/shutdown`.
-  Status now includes `max_peers`, `download_limit`, `upload_limit`.
+  Status now includes `max_peers`, `download_limit`, `upload_limit`, and
+  `port_forwarding` (`portmap.Status`, absent when off).
   Errors: `{"error":"…","code":"not_found|ambiguous|duplicate|files_exist|invalid|busy|no_metadata|seed_limit|unauthorized|internal","id":N}`
   with 404/400/409/401/500. Full list in `internal/ipc/ipc.go`.
