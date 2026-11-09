@@ -391,3 +391,26 @@ func TestReadLimiterThrottlesAndStopsOnClose(t *testing.T) {
 		t.Fatalf("reader took %v to stop", time.Since(start))
 	}
 }
+
+// Time we spend waiting on our own download limit isn't the peer being
+// idle: the idle timeout covers socket reads only (D46). Before the fix
+// one message slower to read than IdleTimeout dropped the peer.
+func TestThrottledReadIsNotIdle(t *testing.T) {
+	lim := ratelimit.New(100_000) // burst 32 KiB; then 100 KB/s
+	// The sender keeps the line busy (keep-alives every 50 ms), so the only
+	// way to time out is counting our throttling as the peer's silence.
+	d, acc := pair(t, Options{PeerID: peerid.New(), KeepAliveInterval: 50 * time.Millisecond},
+		Options{PeerID: peerid.New(), ReadLimiter: lim, IdleTimeout: 200 * time.Millisecond})
+	big := make([]byte, 400_000) // ≈ 3.7 s to read at the limit
+	go d.Send(Piece(0, 0, big))
+	m := recv(t, acc)
+	if _, _, data, err := ParsePiece(m); err != nil || len(data) != len(big) {
+		t.Fatalf("got %v, %v", m, err)
+	}
+	time.Sleep(300 * time.Millisecond) // keep-alives only: still alive
+	select {
+	case <-acc.Done():
+		t.Fatalf("connection closed: %v", acc.Err())
+	default:
+	}
+}

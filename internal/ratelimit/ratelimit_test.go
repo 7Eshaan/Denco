@@ -101,3 +101,36 @@ func TestContextCancelsWait(t *testing.T) {
 		t.Fatalf("err = %v after %v", err, time.Since(start))
 	}
 }
+
+// Many goroutines sharing a limit must each get a fair share: a peer
+// starved by the others looks like it is snubbing us (D46).
+func TestFairAcrossGoroutines(t *testing.T) {
+	const workers, chunk = 8, 16 << 10
+	l := New(800_000) // ≈ 100 KB/s each
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	var mu sync.Mutex
+	got := make([]int, workers)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for l.WaitN(ctx, chunk) == nil {
+				mu.Lock()
+				got[w] += chunk
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	total := 0
+	for _, n := range got {
+		total += n
+	}
+	for w, n := range got {
+		if n < total/workers*3/4 {
+			t.Errorf("worker %d got %d bytes of %d (fair share %d): starved", w, n, total, total/workers)
+		}
+	}
+}

@@ -47,7 +47,7 @@ so older references stay valid.
   - [x] **12a — File selection.** Skip / re-want files (`add -skip/-only`,
         `denco files <id> skip|want`), only wanted pieces downloaded,
         partial-seed completion, persisted in resume data.
-  - [ ] **12b — Seeding controls.** Per-torrent pause uploads / stop
+  - [x] **12b — Seeding controls.** Per-torrent pause uploads / stop
         seeding, ratio display, optional `seed_ratio` / `seed_time` limits.
   - [ ] **12c — Robustness.** Snub timeout scaled to speed limits (D36),
         automatic retry of failed torrents with backoff, optional daemon

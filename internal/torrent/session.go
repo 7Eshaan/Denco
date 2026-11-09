@@ -75,6 +75,9 @@ type Config struct {
 	// UploadLimiter, if set, caps upload speed (shared by all sessions for
 	// a global limit). The download limit lives in PeerOpts.ReadLimiter.
 	UploadLimiter *ratelimit.Limiter
+	// Pacer, if set, adapts the snub timeout and request pipeline to the
+	// download limit (PeerOpts.ReadLimiter) shared with other sessions (D46).
+	Pacer *Pacer
 
 	Announcer tracker.Announcer // default &tracker.Client{}
 	Pieces    pieces.Config
@@ -168,7 +171,8 @@ type Session struct {
 	downRate rate
 	upRate   rate
 	tracker  trackerInfo
-	dhtPeers int // peers the last DHT lookup found
+	dhtPeers int   // peers the last DHT lookup found
+	paced    int64 // our share of Pacer's peer count
 	choke    chokeState
 
 	snapMu sync.Mutex
@@ -347,6 +351,8 @@ func (s *Session) Run(ctx context.Context) error {
 	err := s.loop(ctx)
 
 	cancel()
+	s.cfg.Pacer.add(-s.paced) // these peers no longer share the limit
+	s.paced = 0
 	s.extraMu.Lock()
 	s.running = false
 	leftover := s.incoming
@@ -451,6 +457,7 @@ func (s *Session) loop(ctx context.Context) error {
 				p.upRate.tick()
 				s.fillRequests(p) // safety net: never leave an unchoked peer idle
 			}
+			s.updatePace()
 			s.checkTimeouts()
 			s.maybeRechoke(now)
 			s.maybeSendPEX(now)

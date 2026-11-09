@@ -4,8 +4,8 @@
 //
 // It is a token bucket: tokens (bytes) refill at the rate, up to a burst of
 // a quarter second's worth (at least 32 KiB, so a 16 KiB block always fits).
-// WaitN takes n tokens, going into debt if needed, and waits until the
-// debt is repaid. Callers take tokens *after* moving data, which is simple
+// WaitN takes n tokens, going into debt if needed, and waits until its
+// share of the debt is repaid (first come, first served). Callers take tokens *after* moving data, which is simple
 // and keeps the long-run rate exact.
 //
 // A nil *Limiter, or a rate of 0, means unlimited. SetRate may be called at
@@ -70,6 +70,12 @@ func (l *Limiter) setLocked(bytesPerSec int64, now time.Time) {
 
 // WaitN accounts for n bytes and blocks until the rate allows them. It
 // returns early with ctx's error if ctx ends first.
+//
+// It works like a reservation: the bytes are taken at once, and the wait
+// is fixed now from the debt already queued ahead of this call. So callers
+// are served in the order they asked — no goroutine can starve the others
+// by asking again the moment it is let through (DECISIONS D46). A rate
+// change forgives the debt and lets waiters go.
 func (l *Limiter) WaitN(ctx context.Context, n int) error {
 	if l == nil || n <= 0 {
 		return nil
@@ -81,26 +87,23 @@ func (l *Limiter) WaitN(ctx context.Context, n int) error {
 	}
 	l.refillLocked(time.Now())
 	l.tokens -= float64(n)
-	for {
-		if l.rate == 0 || l.tokens >= 0 {
-			l.mu.Unlock()
-			return nil
-		}
-		wait := time.Duration(-l.tokens / l.rate * float64(time.Second))
-		changed := l.changed
+	if l.tokens >= 0 {
 		l.mu.Unlock()
+		return nil
+	}
+	wait := time.Duration(-l.tokens / l.rate * float64(time.Second))
+	changed := l.changed
+	l.mu.Unlock()
 
-		t := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return ctx.Err()
-		case <-changed: // re-plan with the new rate
-			t.Stop()
-		case <-t.C:
-		}
-		l.mu.Lock()
-		l.refillLocked(time.Now())
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-changed: // SetRate forgave the debt
+		return nil
+	case <-t.C:
+		return nil
 	}
 }
 

@@ -263,20 +263,22 @@ func (c *Conn) fail(err error) {
 
 func (c *Conn) readLoop() {
 	defer close(c.in)
-	var src io.Reader = countingReader{c.nc, &c.bytesRead}
+	// The idle deadline is re-armed before every socket read, not once per
+	// message: time spent waiting on our own download limit (between
+	// reads) must not count as the peer being silent (D46).
+	var src io.Reader = countingReader{deadlineReader{c.nc, c.opts.IdleTimeout}, &c.bytesRead}
 	if c.opts.ReadLimiter != nil {
 		src = limitedReader{src, c.opts.ReadLimiter, c.ctx}
 	}
 	r := bufio.NewReaderSize(src, 32*1024)
 	for {
-		c.nc.SetReadDeadline(time.Now().Add(c.opts.IdleTimeout))
 		m, err := ReadMessage(r)
 		if err != nil {
 			c.fail(c.readErr(err))
 			return
 		}
 		if m == nil {
-			continue // keep-alive: the deadline reset above is all it's for
+			continue // keep-alive: its read re-armed the deadline, all it's for
 		}
 		select {
 		case c.in <- m:
@@ -366,6 +368,17 @@ func (cr countingReader) Read(p []byte) (int, error) {
 	n, err := cr.r.Read(p)
 	cr.n.Add(int64(n))
 	return n, err
+}
+
+// deadlineReader gives every read idle time to wait for data.
+type deadlineReader struct {
+	nc   net.Conn
+	idle time.Duration
+}
+
+func (d deadlineReader) Read(p []byte) (int, error) {
+	d.nc.SetReadDeadline(time.Now().Add(d.idle))
+	return d.nc.Read(p)
 }
 
 // limitedReader charges every read to a rate limiter, pausing after reads

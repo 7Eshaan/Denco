@@ -69,6 +69,9 @@ type Config struct {
 	SeedRatio      float64
 	SeedTime       time.Duration
 	SeedCheckEvery time.Duration
+	// RetryBase / RetryMax: a torrent that failed is retried after
+	// RetryBase, doubling up to RetryMax (D47). Defaults 1 min and 1 h.
+	RetryBase, RetryMax time.Duration
 	// Session is the template for every torrent session (timeouts, peer
 	// limits, announcer). PeerID, Port, Logger, NoSeed and the rate
 	// limiters are set by the engine.
@@ -86,7 +89,8 @@ type Engine struct {
 	started time.Time
 	down    *ratelimit.Limiter // shared by every connection
 	up      *ratelimit.Limiter
-	dht     *dht.Server // nil when DHT is off
+	pacer   *torrent.Pacer // paces every session under the download limit (D46)
+	dht     *dht.Server    // nil when DHT is off
 
 	mu        sync.Mutex
 	seedRatio float64       // current limits (Config values, then SetSeedLimits)
@@ -121,7 +125,13 @@ type entry struct {
 	finished      bool   // stopped seeding (limit or mode off); not restarted on its own
 
 	removing bool  // Remove is waiting for the run goroutine
-	err      error // why it last stopped; cleared by Resume
+	err      error // why it last stopped; cleared by Resume or a retry
+
+	// Automatic retry (retry.go): failures in a row, when the next try is
+	// due, and its timer.
+	retries    int
+	retryAt    time.Time
+	retryTimer *time.Timer
 
 	// Set while the run goroutine is alive.
 	running  bool
@@ -160,6 +170,12 @@ func Open(cfg Config) (*Engine, error) {
 	if cfg.SeedCheckEvery <= 0 {
 		cfg.SeedCheckEvery = 5 * time.Second
 	}
+	if cfg.RetryBase <= 0 {
+		cfg.RetryBase = time.Minute
+	}
+	if cfg.RetryMax <= 0 {
+		cfg.RetryMax = time.Hour
+	}
 	if cfg.Session.MaxPeers <= 0 {
 		cfg.Session.MaxPeers = 50 // same default as torrent.Config; set here so Overview can show it
 	}
@@ -182,7 +198,8 @@ func Open(cfg Config) (*Engine, error) {
 	}
 	e := &Engine{
 		cfg: cfg, log: log, store: store, ln: ln, peerID: id, started: time.Now(), down: down, up: up,
-		byID: map[int]*entry{}, byHash: map[metainfo.Hash]*entry{}, nextID: 1,
+		pacer: torrent.NewPacer(down),
+		byID:  map[int]*entry{}, byHash: map[metainfo.Hash]*entry{}, nextID: 1,
 		seedRatio: cfg.SeedRatio, seedTime: cfg.SeedTime,
 	}
 	if cfg.EnableDHT {
@@ -325,6 +342,7 @@ func (e *Engine) Close() error {
 		e.mu.Lock()
 		e.closed = true
 		for _, t := range e.byID {
+			t.stopRetryLocked(false)
 			if t.running {
 				t.cancel()
 			}
@@ -438,13 +456,14 @@ func (e *Engine) startLocked(t *entry) {
 	t.err = nil
 	t.seeded.Store(0)
 	state := t.state // copy: the run goroutine works from this
+	started := time.Now()
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
 		defer close(t.done)
 		defer cancel()
 		res := e.run(ctx, t, state)
-		e.finish(ctx, t, res)
+		e.finish(ctx, t, res, time.Since(started))
 	}()
 }
 
@@ -477,7 +496,7 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 
 	cfg := e.cfg.Session
 	cfg.PeerID, cfg.Port, cfg.Logger, cfg.NoSeed = e.peerID, e.ln.Port(), e.log, false
-	cfg.PeerOpts, cfg.UploadLimiter = e.peerOpts(), e.up
+	cfg.PeerOpts, cfg.UploadLimiter, cfg.Pacer = e.peerOpts(), e.up, e.pacer
 	if e.dht != nil { // only when set: a nil *dht.Server in the interface isn't nil
 		cfg.DHT = e.dht
 	}
@@ -590,7 +609,7 @@ func (e *Engine) prepare(ctx context.Context, t *entry, state resume.State) (*st
 }
 
 // finish records the outcome of a run and lets the queue move on.
-func (e *Engine) finish(ctx context.Context, t *entry, r runResult) {
+func (e *Engine) finish(ctx context.Context, t *entry, r runResult, ranFor time.Duration) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	t.running, t.checking, t.sess, t.saver, t.snapshot, t.cancel = false, false, nil, nil, nil, nil
@@ -606,8 +625,7 @@ func (e *Engine) finish(ctx context.Context, t *entry, r runResult) {
 	e.finished.up += r.up
 	e.finished.down += r.down
 	if r.err != nil && ctx.Err() == nil {
-		t.err = r.err
-		e.log.Error("torrent stopped", "torrent", t.name(), "err", r.err)
+		e.failedLocked(t, r.err, ranFor)
 	}
 	// A choice made before the session started (or after its final save)
 	// isn't in the saved state yet.

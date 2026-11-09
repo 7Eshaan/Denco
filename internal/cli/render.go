@@ -56,6 +56,16 @@ func short(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
+// retryText says what happens next to a failed torrent.
+func retryText(t engine.Torrent) string {
+	if t.RetryAt.IsZero() {
+		return fmt.Sprintf("needs you: fix the problem, then 'denco resume %d'", t.ID)
+	}
+	in := max(time.Until(t.RetryAt), 0)
+	return fmt.Sprintf("retrying by itself in %s (attempt %d); 'denco resume %d' retries now",
+		format.Duration(in.Round(time.Second)), t.Retries+1, t.ID)
+}
+
 // ratioText shows a share ratio with two decimals, "-" when unknown.
 func ratioText(r float64) string {
 	if r < 0 {
@@ -137,7 +147,7 @@ func renderList(w io.Writer, list []engine.Torrent) {
 	}
 	for _, t := range list {
 		if t.Error != "" {
-			fmt.Fprintf(w, "\n#%d failed: %s\n  ('denco resume %d' retries)\n", t.ID, t.Error, t.ID)
+			fmt.Fprintf(w, "\n#%d failed: %s\n  %s\n", t.ID, t.Error, retryText(t))
 		}
 	}
 }
@@ -153,6 +163,7 @@ func renderInfo(w io.Writer, t engine.Torrent) {
 	row("Status", stateLabel(t.State))
 	if t.Error != "" {
 		row("Error", t.Error)
+		row("Retry", retryText(t))
 	}
 	row("Info hash", t.InfoHash)
 	row("Location", t.Dir)

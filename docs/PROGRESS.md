@@ -1,11 +1,11 @@
 # Progress
 
-**Current phase:** 12b — Seeding controls · ✅ done, waiting for the user's commit
+**Current phase:** 12c — Robustness · ✅ done, waiting for the user's commit
 
-**Next action:** once the user has committed 12b, tick it in
-`docs/ROADMAP.md`, then start **12c — Robustness** (snub timeout scaled to
-speed limits (D36), automatic retry of failed torrents with backoff,
-optional daemon log file).
+**Next action:** once the user has committed 12c, tick it in
+`docs/ROADMAP.md`, then ask the user whether **12d — NAT traversal**
+(UPnP / NAT-PMP, stdlib only) is in scope; if not, go to **12e — Docs &
+real-world testing**.
 
 ## Known issues
 - A finished torrent (seed limit reached) stays finished when limits are
@@ -19,8 +19,10 @@ optional daemon log file).
   no test that fails without the code (D44).
 - Fetching metadata uses its own connections; the download then reconnects
   to the same peers (D38) — one extra handshake per peer, once per magnet.
-- Low download/upload limits shared by many peers can trip the 60s snub
-  timeout and cause peer churn (D36). Planned for 12c.
+- Upload side of D36 not changed: at the 1 KB/s minimum upload limit,
+  remote clients might time out on us (D46). Download side fixed.
+- Failed torrents' retry state isn't saved; after a daemon restart they
+  simply start again (D47).
 - No NAT traversal (UPnP/NAT-PMP): incoming peers need a forwarded port.
   12d, if the user confirms it is in scope.
 - DHT: IPv4 only (no BEP 32); no BEP 42 secure node IDs. Behind NAT without
@@ -32,8 +34,9 @@ optional daemon log file).
   detected (D27); `denco verify` checks manually.
 - Resume JSON writes `"completed_at": "0001-01-01T00:00:00Z"` for
   incomplete torrents (`omitempty` doesn't apply to time.Time). Harmless.
-- Daemon runs in the foreground and logs to its terminal; no log file or
-  auto-start yet (D30). Started with `&` from a script it ignores Ctrl-C.
+- Daemon runs in the foreground (no auto-start yet, D30); `log_file` /
+  `-log` sends its log to a file (D48). Started with `&` from a script it
+  ignores Ctrl-C.
 - Config changes other than speed limits need a daemon restart.
 - Removing the highest-numbered torrent lets the next add reuse its ID (D31).
 - Linux/Windows: compiled + vetted, tests only *run* on macOS.
@@ -43,38 +46,39 @@ optional daemon log file).
   confirmed). Auto-start from `denco add` is possible later.
 - UPnP/NAT-PMP (12d) in scope? MSE encryption stays out of scope?
 
-## Last test run (2026-11-09, end of Phase 12b)
+## Last test run (2026-11-09, end of Phase 12c)
 - `go test -race -count=1 ./...` — all 20 packages pass
-- stress `-race -cpu=1,2,8`: `torrent` ×10 (30 runs) pass; `cli`, `ipc`,
-  `resume`, `config`, `peer` ×5 (15 each) pass. **`engine` failed 12 of 30
-  at first:** `TestSeedTimeCountsOnlyUnpausedSeeding` — a run's seeding time
-  was saved truncated to whole seconds (0.3 s → 0), which also blanked the
-  "why finished" note. Now rounded up when saved (D45); then `engine` ×10
-  (30 runs) passes, and `resume`, `cli` ×5 again pass
-- new tests: `TestRatio`, `TestSeedStopReason`,
-  `TestSeedRatioLimitFinishesAndPersists`, `TestSeedOffStopsOnCompletion`,
-  `TestUploadsPausedPerTorrent`, `TestSeedTimeCountsOnlyUnpausedSeeding`
-  (engine ↔ engine); `TestSeedSettings` (config); `TestSaverSeedingTimeAndFlags`;
-  `TestAPISeeding`; `TestSeedingCommands`, `TestDaemonSeedFlags` (daemon + CLI)
-- **found by the new tests:** `resume` on a torrent that was finished but
-  still shutting down silently did nothing (exit 0) — it now applies the
-  same limit check whether or not the run has exited (test added for both)
-- mutation checks — each makes a test fail (16/16): ratio ignoring data
-  already on disk; seeding time counting paused uploads; `finished` or
-  `uploads_paused` not saved; session started without uploads paused;
-  uploads pause not applied live; Resume ignoring limits; `seed off` not
-  stopping a seeding torrent at once; mode `on` not overriding limits;
-  schedule restarting finished torrents (first survived: the restart test
-  re-supplied the limit — now restarts with no limits); `seed_time`
-  ignored; lifetime seeding time not accumulated; `config set seed_*` not
-  applied live; daemon flags / engine config limits not passed on (no test
-  covered the daemon → engine wiring — added)
-- smoke test, two real daemons + loopback tracker, scratch homes, DHT off:
-  A `pause -uploads` → B 0% after 3 s with A connected; `resume -uploads` →
-  B complete, 3 files byte-identical; A (seed_ratio 1) → Finished at ratio
-  1.00, still Finished after a daemon restart, `resume` refused with the
-  hint, `seed on` → Seeding; B `seed off` → Finished, saved as
-  `"seed": "off", "finished": true`. Real config dir untouched
+- stress `-race -cpu=1,2,8`: `engine`, `torrent` ×10 (30 runs each);
+  `peer`, `ratelimit`, `cli`, `config`, `pieces`, `metadata` ×5 (15 each)
+  — all pass, no failures
+- **D36 reproduced before fixing** (`TestLowDownloadLimitDoesNotSnubPeers`,
+  8 peers on one 64 KB/s limit): peers dropped and redialed, 257 blocks sent
+  for a 24-block torrent, 11/24 pieces after 30 s. Each fix was then shown
+  necessary in turn: paced timeout alone → no snub drops at 500 ms but still
+  churn; plus fair limiter → still ~10× duplicates; plus endgame off → done
+  in ~6 s, every peer connected once
+- **found while fixing:** the limiter starved readers (new
+  `TestFairAcrossGoroutines`: old code 10/10 fail, new 60/60 pass with
+  `-race -cpu=1,2,8`); `peer.Conn` dropped a throttled peer mid-message as
+  idle (`TestThrottledReadIsNotIdle`, failed before the fix)
+- new tests also: `TestPacer`; `TestRetryDelay`,
+  `TestFailedTorrentRetriesByItself`, `TestPermanentErrorIsNotRetried`;
+  `TestLogFileRotates`, `TestDaemonLogsToFile`, `TestRetryText`,
+  `TestLogFileSetting`
+- `Pause` now clears a failed torrent's shown error (found by the retry
+  test: a paused torrent still showed "Error")
+- mutation checks — 12 of 13 make a test fail: snub timeout / pipeline not
+  scaled; endgame under a limit; peer count never reported; stopped session
+  leaking its pacer share (no test covered it at first — added); no idle
+  deadline; permanent errors retried; no retry; user resume not resetting
+  failures; no backoff; log never rotated; log file ignored. **Survived
+  (equivalent):** `pause` not cancelling the retry timer — the timer does
+  nothing once `pause` has cleared the error
+- smoke test, two real daemons + loopback tracker, scratch homes: B with
+  `-log FILE -down-limit 100K` and its download folder blocked by a file →
+  "retrying by itself in 1m 0s (attempt 2)"; block removed → retried
+  automatically at the minute, 1 MB done in ~9 s (≈ the limit), 3 files
+  byte-identical; log only in the file. Real config dir untouched
 - `go vet` (darwin, linux, windows) clean · gofmt clean
 - cross-compile linux/windows/darwin × amd64/arm64 — all build
 - external deps: none
@@ -185,3 +189,11 @@ optional daemon log file).
   seeding time (`seed_seconds`, paused uploads excluded), per-torrent
   pause uploads (`pause/resume -uploads`), RATIO in `list`, seeding rows
   in `info`/`status`. New IPC routes `/uploads`, `/seed`, `/v1/seed-limits`.
+
+- **Phase 12b commit:** f2be1d2.
+- **Phase 12c (2026-11-09):** pacing under a download limit (D46:
+  `torrent.Pacer`, scaled snub timeout and pipeline, endgame off, fair
+  `ratelimit` reservations, per-read idle deadline in `peer.Conn`);
+  automatic retry of failed torrents with backoff (D47, `engine/retry.go`;
+  `pause` clears the error); daemon log file with rotation (D48,
+  `log_file`, `-log`).

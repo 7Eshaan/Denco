@@ -43,6 +43,7 @@ type Manager struct {
 
 	maxActive   int
 	randomFirst int
+	noEndgame   bool // SetEndgame(false): never request a block twice
 	rng         *rand.Rand
 }
 
@@ -239,7 +240,7 @@ func (m *Manager) NextRequests(p PeerKey, peerHas *bitfield.Bitfield, n int) []p
 		take(idx, m.start(idx), false)
 	}
 	// 3. Endgame.
-	if len(out) < n && m.inEndgame() {
+	if len(out) < n && !m.noEndgame && m.inEndgame() {
 		for _, idx := range m.activeIndexes() {
 			if len(out) >= n {
 				break
@@ -251,6 +252,11 @@ func (m *Manager) NextRequests(p PeerKey, peerHas *bitfield.Bitfield, n int) []p
 	}
 	return out
 }
+
+// SetEndgame turns endgame duplicate requests on (the default) or off.
+// Under a download limit they only compete with each other for our own
+// bandwidth: the session turns them off (DECISIONS D46).
+func (m *Manager) SetEndgame(on bool) { m.noEndgame = !on }
 
 // inEndgame: every missing piece is active or pending, and every block of
 // every active piece has been requested.

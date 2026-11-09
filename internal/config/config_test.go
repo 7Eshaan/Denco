@@ -307,3 +307,19 @@ func TestSeedSettings(t *testing.T) {
 		t.Errorf("get seed_time = %q", v)
 	}
 }
+
+func TestLogFileSetting(t *testing.T) {
+	c := Defaults(t.TempDir())
+	if v, _ := c.Get("log_file"); v != "none" || c.LogFile != "" {
+		t.Errorf("default log_file = %q", v)
+	}
+	if err := c.Set("log_file", "~/denco.log"); err != nil || !filepath.IsAbs(c.LogFile) {
+		t.Errorf("log_file ~/denco.log: %q, %v", c.LogFile, err)
+	}
+	if err := c.Set("log_file", "relative.log"); err == nil {
+		t.Error("a relative log_file must be refused")
+	}
+	if err := c.Set("log_file", "NONE"); err != nil || c.LogFile != "" {
+		t.Errorf("log_file none: %q, %v", c.LogFile, err)
+	}
+}

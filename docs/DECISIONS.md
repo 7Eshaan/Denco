@@ -706,3 +706,66 @@ One short entry per decision. Newest at the bottom. Format:
 - **Why:** covers the spec's "stop seeding", "pause uploads", "display
   seeding status / uploaded data" with a small state machine; every rule
   has a test that fails without it (mutation-checked).
+
+### D46 — Pacing downloads under a limit (fixes D36), Phase 12c
+- **Context:** reproduced first: 8 peers sharing a 64 KB/s limit (snub
+  timeout scaled to 500 ms in the test) — peers were dropped and redialed
+  over and over, the seeders sent **257 blocks for a 24-block torrent**,
+  and after 30 s only 11 of 24 pieces had arrived. Four causes, each fixed:
+  1. **Snub timeout:** a `torrent.Pacer` (one per engine, shared by all
+     sessions) knows the download limit and how many peers we are
+     downloading from (each session reports its unchoked+interested peers
+     every tick, and removes them when it stops). The timeout becomes
+     max(`RequestTimeout`, 3 × one block's time at the fair share), capped
+     at 10 min.
+  2. **Pipeline:** requests per peer = 5 s of its fair share (≥ 2, ≤ 32):
+     deep queues under a low limit only make blocks arrive minutes later.
+  3. **Endgame off under a limit** (`pieces.Manager.SetEndgame`): duplicate
+     requests compete for *our own* bandwidth, and the cancels arrive after
+     the data is already on the wire. A peer that really died is still
+     dropped by the paced timeout and its blocks re-requested.
+  4. **Fair limiter:** `ratelimit.WaitN` was unfair — a waiter re-checked
+     the *global* balance after waking, so a reader that had just been let
+     through could read again at once and starve the others (one test run:
+     a goroutine got 0 bytes). It now works as a reservation: the wait is
+     fixed at call time from the debt queued ahead of it, first come first
+     served. Long-run rate and `SetRate` behaviour are unchanged.
+  Also: **`peer.Conn`'s idle deadline is re-armed before every socket read**
+  instead of once per message, so our own throttling between reads no
+  longer counts as the peer being silent (a throttled 400 KB message was
+  dropped as "idle timeout").
+  After: same test completes in ~6 s (the limit's minimum), every peer
+  connected once, ≤ 32 blocks sent.
+- **Not changed:** the *upload* side. Remote clients time out on us only
+  if a block takes them minutes; with 4+1 unchoke slots even 1 KB/s gives
+  each ~200 B/s — borderline only at the 1 KB/s minimum. Revisit if seen.
+- **Alternatives:** counting partial bytes as progress (needs reader-level
+  piece accounting; peers sending only keep-alives/haves would never time
+  out); per-torrent limits (not in the spec).
+
+### D47 — Automatic retry of failed torrents, Phase 12c
+- **Decision:** a run that ends with an error is retried on its own after
+  1 min, doubling up to 1 h (`engine.Config.RetryBase/RetryMax`), until it
+  works or the user acts. Not for errors a retry can't fix:
+  `storage.ErrExists` (someone else's files — D32), `ErrUnsafePath`,
+  `metainfo.ErrInvalid`; those wait for the user as before. A run that
+  lasted ≥ 10 min before failing resets the delay. `resume` = the user's
+  retry (now, failures forgotten); `pause` cancels the retry and clears the
+  shown error (paused is the user's latest word); `remove`/`Close` cancel
+  it. Shown as "retrying by itself in 2m (attempt 3); 'denco resume 3'
+  retries now", or "needs you: fix the problem, then 'denco resume 3'".
+  Not saved: after a daemon restart a failed torrent simply starts again,
+  which is the same as a retry.
+- **Why:** spec 3 "handle failed downloads and retry"; a full disk or an
+  unplugged drive shouldn't need the user to notice and type `resume`.
+
+### D48 — Daemon log file, Phase 12c
+- **Decision:** `log_file` setting / `denco daemon -log FILE` (`none` =
+  terminal, the default). The log then goes *only* to the file (appended);
+  the startup lines still print. At 10 MB the file is renamed to
+  `<name>.1` (replacing the previous one) and a new one started, so at
+  most ~20 MB. A writer with its own mutex, stdlib only; on Windows the
+  old `.1` is removed and the file closed before renaming.
+- **Why:** running the daemon under launchd/systemd/a login item needs its
+  log somewhere; one backup keeps the latest history without unbounded
+  growth. Auto-start of the daemon itself is still an open question.

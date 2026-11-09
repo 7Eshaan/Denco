@@ -28,7 +28,7 @@ const usage = `denco — a BitTorrent client
 Daemon (keeps torrents running in the background):
   denco daemon [-v] [flags]                    run the daemon (Ctrl-C or 'denco stop' to quit);
                                                flags (-dir -port -max-active -max-peers -down-limit
-                                               -up-limit -seed-ratio -seed-time) override the config
+                                               -up-limit -seed-ratio -seed-time -log) override the config
   denco stop                                   stop the daemon (torrents resume on next start)
 
 Settings ($DENCO_HOME/config.yaml; no daemon needed):

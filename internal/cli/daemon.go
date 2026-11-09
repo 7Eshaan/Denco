@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -55,7 +56,16 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 	if verbose {
 		level = slog.LevelDebug
 	}
-	log := slog.New(slog.NewTextHandler(e.stderr, &slog.HandlerOptions{Level: level}))
+	logOut := e.stderr
+	if cfg.LogFile != "" {
+		lf, err := openLogFile(cfg.LogFile, maxLogSize)
+		if err != nil {
+			return fail(err)
+		}
+		defer lf.Close()
+		logOut = lf
+	}
+	log := slog.New(slog.NewTextHandler(logOut, &slog.HandlerOptions{Level: level}))
 
 	stateDir := cfg.ResumeDir
 	if !cfg.ResumeEnabled {
@@ -107,6 +117,9 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 	fmt.Fprintf(e.stdout, "Downloads go to %s by default. Limits: ↓ %s  ↑ %s. Seeding: %s.\n",
 		cfg.DownloadDir, config.DescribeRate(cfg.DownloadLimit), config.DescribeRate(cfg.UploadLimit),
 		describeSeedLimits(cfg.SeedRatio, cfg.SeedTime))
+	if cfg.LogFile != "" {
+		fmt.Fprintf(e.stdout, "Logging to %s.\n", cfg.LogFile)
+	}
 	for _, note := range daemonNotes(e, cfg) {
 		fmt.Fprintln(e.stdout, note)
 	}
@@ -149,6 +162,7 @@ var daemonFlagKeys = map[string]string{
 	"up-limit":   "upload_limit",
 	"seed-ratio": "seed_ratio",
 	"seed-time":  "seed_time",
+	"log":        "log_file",
 }
 
 // daemonFlags parses the daemon's flags over cfg (config file values are
@@ -166,8 +180,9 @@ func daemonFlags(e *env, cfg config.Config, args []string) (config.Config, bool,
 	fs.String("up-limit", def("upload_limit"), "total upload limit (0 = unlimited)")
 	fs.String("seed-ratio", def("seed_ratio"), "stop seeding at this ratio, e.g. 2.0 (0 = no limit)")
 	fs.String("seed-time", def("seed_time"), "stop seeding after this long, e.g. 24h or 2d (0 = no limit)")
+	fs.String("log", def("log_file"), "write the log to this file instead of the terminal (none = terminal)")
 	verbose := fs.Bool("v", false, "debug logging (peers, trackers)")
-	usageLine := "usage: denco daemon [-dir DIR] [-port N] [-max-active N] [-max-peers N] [-down-limit R] [-up-limit R] [-seed-ratio X] [-seed-time D] [-v]"
+	usageLine := "usage: denco daemon [-dir DIR] [-port N] [-max-active N] [-max-peers N] [-down-limit R] [-up-limit R] [-seed-ratio X] [-seed-time D] [-log FILE] [-v]"
 	if err := fs.Parse(args); err != nil {
 		return cfg, false, 2
 	}
@@ -182,7 +197,7 @@ func daemonFlags(e *env, cfg config.Config, args []string) (config.Config, bool,
 			return
 		}
 		v := f.Value.String()
-		if f.Name == "dir" {
+		if (f.Name == "dir" || f.Name == "log") && !strings.EqualFold(v, "none") {
 			v, _ = filepath.Abs(v) // flags may be relative to where you are
 		}
 		if err := cfg.Set(key, v); err != nil {

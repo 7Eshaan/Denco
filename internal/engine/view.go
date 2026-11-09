@@ -29,16 +29,20 @@ const (
 // Torrent is a snapshot of one torrent for display. Byte counts are
 // payload bytes; Downloaded/Uploaded are lifetime totals.
 type Torrent struct {
-	ID          int    `json:"id"`
-	InfoHash    string `json:"info_hash"`
-	Name        string `json:"name"`
-	Dir         string `json:"dir"` // download directory
-	State       State  `json:"state"`
-	Error       string `json:"error,omitempty"`
-	Complete    bool   `json:"complete"`
-	Private     bool   `json:"private"`
-	Files       int    `json:"files"`
-	PieceLength int64  `json:"piece_length"`
+	ID       int    `json:"id"`
+	InfoHash string `json:"info_hash"`
+	Name     string `json:"name"`
+	Dir      string `json:"dir"` // download directory
+	State    State  `json:"state"`
+	Error    string `json:"error,omitempty"`
+	// RetryAt: when a failed torrent is retried on its own (zero = it
+	// isn't; it waits for the user); Retries: failures in a row (D47).
+	RetryAt     time.Time `json:"retry_at,omitempty"`
+	Retries     int       `json:"retries,omitempty"`
+	Complete    bool      `json:"complete"`
+	Private     bool      `json:"private"`
+	Files       int       `json:"files"`
+	PieceLength int64     `json:"piece_length"`
 	// HasMetadata is false for a magnet link whose metadata hasn't arrived;
 	// sizes, pieces and files are then unknown (zero). MetaHave/MetaTotal
 	// count metadata pieces while fetching.
@@ -271,7 +275,7 @@ func (e *Engine) viewLocked(t *entry) Torrent {
 		}
 		switch {
 		case t.err != nil:
-			v.State, v.Error = StateError, t.err.Error()
+			v.State, v.Error, v.RetryAt, v.Retries = StateError, t.err.Error(), t.retryAt, t.retries
 		case t.paused:
 			v.State = StatePaused
 		case t.running:
@@ -307,7 +311,7 @@ func (e *Engine) viewLocked(t *entry) Torrent {
 
 	switch {
 	case t.err != nil:
-		v.State, v.Error = StateError, t.err.Error()
+		v.State, v.Error, v.RetryAt, v.Retries = StateError, t.err.Error(), t.retryAt, t.retries
 	case t.paused:
 		v.State = StatePaused // even while it is still shutting down
 	case t.finished:

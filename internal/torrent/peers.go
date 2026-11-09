@@ -256,13 +256,14 @@ func (s *Session) fillRequests(p *peerState) {
 	if p.peerChoking || !p.amInterested {
 		return
 	}
-	room := s.cfg.RequestQueue - len(p.pending)
+	room := s.pipeline() - len(p.pending)
 	if room <= 0 {
 		return
 	}
 	if len(p.pending) == 0 {
 		p.lastProgress = time.Now() // start the timeout clock
 	}
+	s.m.SetEndgame(s.cfg.Pacer.PerPeer() == 0) // no duplicates under a download limit (D46)
 	for _, b := range s.m.NextRequests(p.addr, p.has, room) {
 		p.pending[b] = true
 		s.sendTo(p, peer.Request(b))
@@ -273,8 +274,9 @@ func (s *Session) fillRequests(p *peerState) {
 // freeing their blocks for other peers.
 func (s *Session) checkTimeouts() {
 	now := time.Now()
+	timeout := s.requestTimeout()
 	for _, p := range s.peers {
-		if len(p.pending) > 0 && now.Sub(p.lastProgress) > s.cfg.RequestTimeout {
+		if len(p.pending) > 0 && now.Sub(p.lastProgress) > timeout {
 			s.drop(p, "request timeout")
 		}
 	}

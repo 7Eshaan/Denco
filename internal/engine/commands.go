@@ -128,6 +128,10 @@ func (e *Engine) Pause(ref string) (Torrent, error) {
 	if err != nil {
 		return Torrent{}, err
 	}
+	// Paused is the user's latest word: no retry, and no stale error shown
+	// (resuming retries anyway).
+	t.stopRetryLocked(false)
+	t.err = nil
 	if !t.paused {
 		t.paused = true
 		if t.running {
@@ -159,6 +163,7 @@ func (e *Engine) Resume(ref string) (Torrent, error) {
 		}
 	}
 	if t.paused || t.err != nil || t.finished {
+		t.stopRetryLocked(true) // the user's retry; earlier failures are forgotten
 		t.paused, t.err, t.finished = false, nil, false
 		if !t.running {
 			e.persistLocked(t)
@@ -191,6 +196,7 @@ func (e *Engine) Remove(ref string, deleteFiles bool) (Removed, error) {
 	}
 	view := e.viewLocked(t)
 	t.removing = true
+	t.stopRetryLocked(false)
 	running, done := t.running, t.done
 	if running {
 		t.cancel()
