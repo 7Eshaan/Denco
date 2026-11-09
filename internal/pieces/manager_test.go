@@ -135,18 +135,48 @@ func TestRandomFirstSpreadsPicks(t *testing.T) {
 	}
 }
 
-func TestFinishActivePiecesFirst(t *testing.T) {
+// Each peer finishes the pieces it started; others start their own, so a
+// piece doesn't wait on blocks from many peers (D51).
+func TestPeersFinishTheirOwnPieces(t *testing.T) {
 	_, info := testTorrent(t, 16384*4, 16384*4*3) // 3 pieces × 4 blocks
 	m := NewManager(info, nil, Config{})
 	a := m.NextRequests(peerA, full(3), 1)
 	b := m.NextRequests(peerB, full(3), 3)
 	for _, blk := range b {
-		if blk.Index != a[0].Index {
-			t.Fatalf("peer B started piece %d instead of finishing %d", blk.Index, a[0].Index)
+		if blk.Index == a[0].Index {
+			t.Fatalf("peer B took piece %d, which peer A is downloading", blk.Index)
 		}
 	}
-	if m.ActivePieces() != 1 {
-		t.Fatalf("active = %d", m.ActivePieces())
+	for _, blk := range m.NextRequests(peerA, full(3), 3) {
+		if blk.Index != a[0].Index {
+			t.Fatalf("peer A started piece %d before finishing %d", blk.Index, a[0].Index)
+		}
+	}
+}
+
+// A partly downloaded piece whose peer left is finished by someone else
+// before anything new is started.
+func TestOrphanedPieceIsAdopted(t *testing.T) {
+	data, info := testTorrent(t, 16384*4, 16384*4*3)
+	m := NewManager(info, nil, Config{})
+	reqs := m.NextRequests(peerA, full(3), 2)
+	deliver(m, peerA, data, info, reqs[0])
+	m.PeerRequestsDropped(peerA) // A disconnects
+	for _, blk := range m.NextRequests(peerB, full(3), 3) {
+		if blk.Index != reqs[0].Index {
+			t.Fatalf("peer B started piece %d instead of adopting %d", blk.Index, reqs[0].Index)
+		}
+	}
+}
+
+// When the memory budget allows no new piece, peers help with others'.
+func TestHelpsOthersWhenBudgetIsFull(t *testing.T) {
+	_, info := testTorrent(t, 16384*4, 16384*4*20)        // 20 pieces × 4 blocks
+	m := NewManager(info, nil, Config{MaxActiveBytes: 1}) // floor of 4 pieces
+	m.NextRequests(peerA, full(20), 4*4-2)                // 4 pieces, 2 blocks left
+	got := m.NextRequests(peerB, full(20), 5)
+	if len(got) != 2 || m.ActivePieces() != 4 {
+		t.Fatalf("peer B got %d blocks, %d pieces active; want the 2 left in A's pieces", len(got), m.ActivePieces())
 	}
 }
 

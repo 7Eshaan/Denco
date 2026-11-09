@@ -198,10 +198,13 @@ func (m *Manager) addAvail(b *bitfield.Bitfield, d int) {
 // --- requesting -----------------------------------------------------------------
 
 // NextRequests returns up to n blocks to request from peer p, which has the
-// pieces in peerHas. Order of preference:
-//  1. unrequested blocks of pieces already active (finish what we started),
-//  2. blocks of a newly started piece (rarest first),
-//  3. endgame: blocks already requested from *other* peers, when nothing
+// pieces in peerHas. Order of preference (DECISIONS D51):
+//  1. unrequested blocks of pieces p already works on, or that nobody
+//     works on any more (so each piece comes mostly from one peer and
+//     finishes at that peer's pace, instead of waiting on many),
+//  2. blocks of a newly started piece (rarest first, within the budget),
+//  3. unrequested blocks of other peers' pieces,
+//  4. endgame: blocks already requested from *other* peers, when nothing
 //     else is left to ask for.
 func (m *Manager) NextRequests(p PeerKey, peerHas *bitfield.Bitfield, n int) []peer.Block {
 	var out []peer.Block
@@ -222,13 +225,14 @@ func (m *Manager) NextRequests(p PeerKey, peerHas *bitfield.Bitfield, n int) []p
 		}
 	}
 
-	// 1. Continue active pieces, in index order for determinism.
+	// 1. Continue pieces this peer is already working on, and adopt pieces
+	//    nobody is working on any more (their peer left or choked us).
 	for _, idx := range m.activeIndexes() {
 		if len(out) >= n {
 			return out
 		}
-		if peerHas.Has(idx) {
-			take(idx, m.active[idx], false)
+		if a := m.active[idx]; peerHas.Has(idx) && (a.worksOn(p) || a.orphaned()) {
+			take(idx, a, false)
 		}
 	}
 	// 2. Start new pieces.
@@ -239,7 +243,17 @@ func (m *Manager) NextRequests(p PeerKey, peerHas *bitfield.Bitfield, n int) []p
 		}
 		take(idx, m.start(idx), false)
 	}
-	// 3. Endgame.
+	// 3. Help with other peers' pieces (memory budget reached, or nothing
+	//    new this peer has).
+	for _, idx := range m.activeIndexes() {
+		if len(out) >= n {
+			return out
+		}
+		if peerHas.Has(idx) {
+			take(idx, m.active[idx], false)
+		}
+	}
+	// 4. Endgame.
 	if len(out) < n && !m.noEndgame && m.inEndgame() {
 		for _, idx := range m.activeIndexes() {
 			if len(out) >= n {
@@ -340,6 +354,33 @@ func (m *Manager) start(idx int) *active {
 	}
 	m.active[idx] = a
 	return a
+}
+
+// worksOn: p has blocks of this piece requested or delivered.
+func (a *active) worksOn(p PeerKey) bool {
+	if a.contributors[p] {
+		return true
+	}
+	for _, b := range a.blocks {
+		if slices.Contains(b.owners, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// orphaned: data has arrived but no block is requested from anyone, so
+// nobody would finish the piece unless someone adopts it.
+func (a *active) orphaned() bool {
+	if a.received == 0 {
+		return false // an empty idle piece is abandoned instead (abandonIdle)
+	}
+	for _, b := range a.blocks {
+		if len(b.owners) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) block(idx, bi int) peer.Block {

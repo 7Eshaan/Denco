@@ -1,13 +1,13 @@
 # Progress
 
-**Current phase:** 12e — Docs & real-world testing · ✅ done, waiting for the user's commit.
-That completes Phase 12 and the roadmap.
+**Current phase:** after Phase 12 — lower memory per torrent (D51) · ✅ done,
+waiting for the user's commit. The roadmap's phases are all done.
 
-**Next action:** after the commit, tick Phase 12 in `docs/ROADMAP.md`.
-Then: the user runs `denco daemon` + `denco status` at home to see whether
-the 501 fallback (D50) gets a real UPnP mapping on their router. Further
-work is open — candidates: lower memory per torrent (D50), daemon
-auto-start, out-of-scope items (uTP, MSE, web seeds, v2, TUI).
+**Next action:** after the commit, tick Phase 12 in `docs/ROADMAP.md` if
+the user hasn't. Open: the user checks port forwarding at home
+(`denco status`, D50). Candidates for later: one memory budget shared by
+all torrents, daemon auto-start, out-of-scope items (uTP, MSE, web seeds,
+v2, TUI).
 
 ## Known issues
 - A finished torrent (seed limit reached) stays finished when limits are
@@ -21,8 +21,10 @@ auto-start, out-of-scope items (uTP, MSE, web seeds, v2, TUI).
   no test that fails without the code (D44).
 - Fetching metadata uses its own connections; the download then reconnects
   to the same peers (D38) — one extra handshake per peer, once per magnet.
-- Memory: partly downloaded pieces can use up to 128 MB per active torrent
-  (seen: ~290 MB RSS at ~4.5 MB/s with 46 seeds, D50).
+- Memory: partly downloaded pieces are capped at 128 MiB per active
+  torrent; since D51 a 256 KiB-piece torrent uses a few MB of them
+  (daemon ~100 MB RSS at ~4.8 MB/s), but big-piece torrents (4 MiB+) can
+  still reach the cap, and each active torrent has its own.
 - Upload side of D36 not changed: at the 1 KB/s minimum upload limit,
   remote clients might time out on us (D46). Download side fixed.
 - Failed torrents' retry state isn't saved; after a daemon restart they
@@ -60,22 +62,24 @@ auto-start, out-of-scope items (uTP, MSE, web seeds, v2, TUI).
   confirmed). Auto-start from `denco add` is possible later.
 - MSE encryption stays out of scope? (UPnP/NAT-PMP: confirmed, done in 12d.)
 
-## Last test run (2026-11-09, end of Phase 12e)
-- `go test -race -count=1 ./...` — all 21 packages pass; stress
-  `-race -count=5 -cpu=1,2,8 ./internal/portmap/` (15 runs) — pass
+## Last test run (2026-11-09, lower memory per torrent, D51)
+- `go test -race -count=1 ./...` — all 21 packages pass
+- stress `-race -cpu=1,2,8`: `torrent`, `engine` ×5 (15 runs each),
+  `pieces` ×10 (30 runs) — pass. The first stress run failed once: my new
+  simulation test had a too-tight time limit and random tie-breaking
+  (4 MiB case 563 ticks > 520); fixed by seeding it and setting the limit
+  from 20 seeds (D51), then 30/30 passes
 - `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
   linux/windows/darwin × amd64/arm64 — all build
-- new tests: `TestUPnPLease501FallsBackToPermanent` (also checks SOAP
-  calls close their connection); `TestNATPMPRefused` now checks errors stay
-  on one line. Mutation checks: 3 of 3 caught (no 501 fallback,
-  keep-alive, multi-line errors)
-- **real-world test** (public network, scratch `DENCO_HOME`, user's real
-  config untouched): Debian 13.7 netinst 792.7 MB via https URL → 3 m 14 s,
-  SHA-256 matches, no wasted bytes; stop/restart → seeding without
-  recheck; pause/resume; trackerless magnet → metadata via DHT in ~15 s,
-  4.8 MB/s, then `remove -delete`. Port forwarding on the real router
-  failed before the D50 fixes; not re-tried (changing the router was
-  denied in the dev environment)
+- new tests: `TestPeersFinishTheirOwnPieces` (replaces
+  `TestFinishActivePiecesFirst`, which encoded the old rule),
+  `TestOrphanedPieceIsAdopted`, `TestHelpsOthersWhenBudgetIsFull`,
+  `TestSimulatedSwarmMemory` (peak memory and time bounds). Mutation
+  checks: 3 of 3 caught (old rule back, no orphan adoption, never help
+  others)
+- real download, Debian 13.7 netinst 792.7 MB (public network, scratch
+  home): 3 m 15 s, SHA-256 matches; unverified data 1–8 MB (was ~112 MB);
+  daemon RSS ≤ 102 MB (was ~290 MB)
 - external deps: none
 
 ## History
@@ -199,3 +203,5 @@ auto-start, out-of-scope items (uTP, MSE, web seeds, v2, TUI).
   settings, port forwarding, running at login); real-world download test;
   UPnP fixes from the real router (Connection: close, 501 → lease 0,
   one-line errors). D50.
+- **After Phase 12 (2026-11-09):** lower memory per torrent — peers finish
+  their own pieces, orphaned pieces adopted (D51); swarm simulation test.

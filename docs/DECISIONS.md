@@ -842,3 +842,36 @@ One short entry per decision. Newest at the bottom. Format:
   fill most of the 128 MB per-torrent memory budget (D22); daemon RSS was
   ~290 MB during the download. Within the design limit.
 
+### D51 — Peers finish their own pieces (less memory), after Phase 12
+- **Problem (D50):** in a real download with ~46 fast seeds, ~112 MB of
+  received data sat in partly downloaded pieces and the daemon used
+  ~290 MB. The picker's first rule was "continue any active piece", so
+  every peer took blocks of every piece; each piece then waited for its
+  slowest peer's block, and hundreds were half done at once, up to the
+  128 MiB per-torrent budget (D22).
+- **Decision:** `pieces.Manager.NextRequests` prefers, in order:
+  1. pieces this peer already works on (requested or delivered blocks),
+     and *orphaned* pieces — data received but nothing requested from
+     anyone (their peer left or choked us), which would otherwise wait;
+  2. a new piece (rarest first, within the budget);
+  3. other peers' pieces — when the budget allows nothing new, or this
+     peer has nothing new to offer;
+  4. endgame, unchanged.
+  The 128 MiB budget stays: it is now a worst-case cap, reached only with
+  big pieces (one 4 MiB piece per peer doesn't fit).
+- **Measured:** a swarm simulation through the real Manager (40 peers,
+  mixed speeds, 32-block pipelines; `sim_test.go`, 20 tie-breaking seeds,
+  `SIM_SPREAD=1 go test -v -run SimSpread ./internal/pieces`):
+  256 KiB pieces — peak 105 → 30 MiB, same time (median 199 → 198 ticks);
+  1 MiB — 128 → 59 MiB and faster (263 → 197); 4 MiB — still the 128 MiB
+  cap, faster (598 → 423, worst 603 → 544), because pieces no longer wait
+  on slow peers. The new rule was never slower on any seed. (A first
+  single-run limit in the test was too tight and failed under stress —
+  the Manager's tie-breaking is random; the test now fixes the seed.) Lower budgets were tried and rejected: 32 MiB made 1 MiB
+  pieces 6× slower, 64 MiB made 4 MiB pieces 3× slower. Real download
+  (same Debian ISO): unverified data 112 MB → 1–8 MB, daemon RSS ~290 →
+  ~102 MB, same time (3 m 15 s), checksum matches.
+- **Not done:** one budget shared by all torrents (each active torrent
+  still has its own 128 MiB cap); writing blocks straight to disk instead
+  of buffering whole pieces.
+
