@@ -38,10 +38,22 @@ Needs [Go](https://go.dev/dl/) 1.23 or newer.
 ```sh
 git clone https://github.com/7Eshaan/Denco.git
 cd Denco
-go build -o denco ./cmd/denco      # denco.exe on Windows
+go install ./cmd/denco
 ```
 
-Put the binary somewhere on your `PATH` (or use `go install ./cmd/denco`).
+This puts the `denco` binary in Go's bin folder. To run plain `denco` from
+any folder, that folder must be on your `PATH`:
+
+- **macOS** (zsh): `echo 'export PATH="$PATH:$HOME/go/bin"' >> ~/.zshrc`,
+  then open a new terminal.
+- **Linux** (bash): `echo 'export PATH="$PATH:$HOME/go/bin"' >> ~/.bashrc`,
+  then open a new terminal. If you installed Go from the tarball, add
+  `/usr/local/go/bin` the same way.
+- **Windows:** the Go installer already adds `%USERPROFILE%\go\bin`; just
+  open a new terminal.
+
+Check it works with `denco help`. To build without installing, run
+`go build -o denco ./cmd/denco` (`denco.exe` on Windows) and use `./denco`.
 
 ## Quick start
 
