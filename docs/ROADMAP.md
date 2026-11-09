@@ -52,9 +52,9 @@ so older references stay valid.
   - [x] **12c — Robustness.** Snub timeout scaled to speed limits (D36),
         automatic retry of failed torrents with backoff, optional daemon
         log file.
-  - [ ] **12d — NAT traversal.** UPnP / NAT-PMP port mapping (stdlib only),
+  - [x] **12d — NAT traversal.** UPnP / NAT-PMP port mapping (stdlib only),
         if the user confirms it is in scope.
-  - [ ] **12e — Docs & real-world testing.** README/usage docs; a full
+  - [x] **12e — Docs & real-world testing.** README/usage docs; a full
         real download (user-approved, public network).
 
 Out of scope for now (may revisit): uTP, encryption (MSE),

@@ -243,6 +243,7 @@ func (e *upnpError) Error() string { return fmt.Sprintf("router error %d (%s)", 
 
 // UPnP error codes we act on.
 const (
+	upnpActionFailed  = 501 // ActionFailed: some routers' answer to any lease but 0
 	upnpConflict      = 718 // ConflictInMappingEntry
 	upnpOnlyPermanent = 725 // OnlyPermanentLeasesSupported
 )
@@ -267,6 +268,9 @@ func (u *upnp) soap(ctx context.Context, action string, args [][2]string, out an
 	}
 	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
 	req.Header.Set("SOAPAction", `"`+u.service+"#"+action+`"`)
+	// One connection per call: some routers close kept-alive connections
+	// without saying so, and the next call fails with EOF.
+	req.Close = true
 	resp, err := u.client.Do(req)
 	if err != nil {
 		return err
@@ -311,9 +315,14 @@ func (u *upnp) add(ctx context.Context, p Port, external uint16) (uint16, time.D
 	}
 	err := u.addMapping(ctx, p, external, lease)
 	var ue *upnpError
-	if errors.As(err, &ue) && ue.Code == upnpOnlyPermanent && lease != 0 {
-		u.permanent, lease = true, 0
-		err = u.addMapping(ctx, p, external, 0)
+	if errors.As(err, &ue) && (ue.Code == upnpOnlyPermanent || ue.Code == upnpActionFailed) && lease != 0 {
+		// The standard answer is 725; many ISP routers say 501 instead.
+		// Keep the original error if a permanent mapping fails too.
+		if err2 := u.addMapping(ctx, p, external, 0); err2 == nil {
+			u.permanent, lease, err = true, 0, nil
+		} else if ue.Code == upnpOnlyPermanent {
+			err = err2
+		}
 	}
 	if errors.As(err, &ue) && ue.Code == upnpConflict {
 		return 0, 0, errConflict

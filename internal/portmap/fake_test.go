@@ -149,6 +149,8 @@ type fakeIGD struct {
 	mu          sync.Mutex
 	maps        map[string]fakeMapping // "TCP/6881" by external port
 	onlyPerm    bool                   // refuse leases (725)
+	lease501    bool                   // refuse leases with 501, like many ISP routers
+	keptAlive   int                    // SOAP calls that didn't ask to close the connection
 	taken       map[uint16]bool        // external ports owned by another device (718)
 	descFetches int
 }
@@ -231,6 +233,9 @@ func (f *fakeIGD) control(w http.ResponseWriter, r *http.Request) {
 	action := r.Header.Get("SOAPAction")
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if !r.Close {
+		f.keptAlive++
+	}
 	fail := func(code int, desc string) {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault>`+
@@ -250,6 +255,10 @@ func (f *fakeIGD) control(w http.ResponseWriter, r *http.Request) {
 		lease, _ := strconv.Atoi(args["NewLeaseDuration"])
 		if f.onlyPerm && lease != 0 {
 			fail(725, "OnlyPermanentLeasesSupported")
+			return
+		}
+		if f.lease501 && lease != 0 {
+			fail(501, "Action Failed")
 			return
 		}
 		if f.taken[uint16(ext)] {

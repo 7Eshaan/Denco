@@ -817,3 +817,28 @@ One short entry per decision. Newest at the bottom. Format:
 - **Not done:** IPv6 (no NAT there; a firewall pinhole would need PCP or
   UPnP IGD:2's `AddPinhole`); watching for a network change between
   renewals (the next renewal or the 10-min retry notices).
+
+### D50 — Real-router fixes and the first real download, Phase 12e
+- **Context:** the first daemon run against the user's real router (UPnP,
+  WANIPConnection:1 at 192.168.1.1:5555, no NAT-PMP) failed: the TCP
+  mapping got `501 Action Failed`, the UDP one `EOF`, and `denco status`
+  printed the combined error over two lines.
+- **Decision:**
+  - SOAP calls set `Connection: close` (one connection per call). The
+    `EOF` came right after an error response on a kept-alive connection —
+    the router had closed it without saying so.
+  - A `501` to a mapping with a lease is retried once with lease 0, like
+    `725`; if that fails too, the original `501` is shown. Many ISP
+    routers answer 501 instead of the standard 725. **Not confirmed on the
+    user's router:** trying it there (a real mapping) was denied in the
+    dev environment; the user checks with `denco status`.
+  - Several errors are joined with `; ` (one line), not `errors.Join`.
+- **Real download (Debian 13.7 netinst, 792.7 MB, public swarm):** added by
+  https URL; done in 3 min 14 s (≈ 4.1 MB/s, up to 47 peers); SHA-256
+  matches Debian's; total downloaded = exactly the size (no waste). Stop
+  0.6 s; restart → straight to seeding, no full recheck. A trackerless
+  magnet (DHT only) got its metadata in ~15 s and reached 4.8 MB/s.
+- **Observed, left as is:** with many fast seeds, partly downloaded pieces
+  fill most of the 128 MB per-torrent memory budget (D22); daemon RSS was
+  ~290 MB during the download. Within the design limit.
+

@@ -1,13 +1,13 @@
 # Progress
 
-**Current phase:** 12d — Port forwarding (NAT-PMP / UPnP) · ✅ done, waiting for the user's commit
+**Current phase:** 12e — Docs & real-world testing · ✅ done, waiting for the user's commit.
+That completes Phase 12 and the roadmap.
 
-**Next action:** once the user has committed 12d, tick it in
-`docs/ROADMAP.md` and start **12e — Docs & real-world testing** (README /
-usage docs; a full real download, which touches the public network and
-needs the user's go-ahead). Before that, ideally the user tries
-`denco daemon` + `denco status` at home to see port forwarding against
-their real router (see Known issues).
+**Next action:** after the commit, tick Phase 12 in `docs/ROADMAP.md`.
+Then: the user runs `denco daemon` + `denco status` at home to see whether
+the 501 fallback (D50) gets a real UPnP mapping on their router. Further
+work is open — candidates: lower memory per torrent (D50), daemon
+auto-start, out-of-scope items (uTP, MSE, web seeds, v2, TUI).
 
 ## Known issues
 - A finished torrent (seed limit reached) stays finished when limits are
@@ -21,10 +21,15 @@ their real router (see Known issues).
   no test that fails without the code (D44).
 - Fetching metadata uses its own connections; the download then reconnects
   to the same peers (D38) — one extra handshake per peer, once per magnet.
+- Memory: partly downloaded pieces can use up to 128 MB per active torrent
+  (seen: ~290 MB RSS at ~4.5 MB/s with 46 seeds, D50).
 - Upload side of D36 not changed: at the 1 KB/s minimum upload limit,
   remote clients might time out on us (D46). Download side fixed.
 - Failed torrents' retry state isn't saved; after a daemon restart they
   simply start again (D47).
+- Port forwarding on the user's real router: UPnP found (no NAT-PMP); the
+  first try failed (501 / EOF); fixed per D50 but the fix is **not yet
+  confirmed** on that router. Earlier notes:
 - Port forwarding (D49) is tested only against fake routers on loopback.
   A read-only probe of the user's router from the dev environment found the
   gateway (192.168.1.1, both via `route` and by the Windows-path guess);
@@ -55,30 +60,22 @@ their real router (see Known issues).
   confirmed). Auto-start from `denco add` is possible later.
 - MSE encryption stays out of scope? (UPnP/NAT-PMP: confirmed, done in 12d.)
 
-## Last test run (2026-11-09, end of Phase 12d)
-- `go test -race -count=1 ./...` — all 21 packages pass (new: `portmap`)
-- stress `-race -count=5 -cpu=1,2,8`: `portmap`, `engine`, `torrent`,
-  `cli`, `config` (15 runs each) — all pass
-- `go vet` (darwin, linux, windows) clean · gofmt clean
-- cross-compile linux/windows/darwin × amd64/arm64 — all build
-- new tests: fake NAT-PMP + UPnP routers on loopback — map/renew/remove,
-  router's other external port, refusal, not found → found later, UPnP
-  permanent-lease fallback (725), conflict (718) → another port, only
-  talking to the device that answered (3 cases), NAT-PMP → UPnP fallback,
-  gateway parsing (Linux, macOS, subnet guess); engine: tracker told the
-  router's port, DHT port mapped, mappings removed on Close; status text;
-  `port_forwarding` setting
-- **found while testing:** stopping during a renewal left the mappings on
-  the router (`TestCloseDuringRenewalRemovesMappings` fails without the
-  fix); a stop didn't interrupt a pending NAT-PMP read (6 s → 1 s)
-- mutation checks — 13 of 13 caught (public port ignored, DHT port not
-  mapped, no removal, no renewal, no rediscovery, foreign host allowed,
-  no 725 fallback, no conflict retry, router's port ignored, result code
-  ignored, UDP sent as TCP, status row missing — no test covered it at
-  first, added — and the stop-mid-renewal bug)
-- read-only probe of the real router (no mapping made): gateway found;
-  NAT-PMP no answer; UPnP multicast blocked in the dev environment (see
-  Known issues)
+## Last test run (2026-11-09, end of Phase 12e)
+- `go test -race -count=1 ./...` — all 21 packages pass; stress
+  `-race -count=5 -cpu=1,2,8 ./internal/portmap/` (15 runs) — pass
+- `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
+  linux/windows/darwin × amd64/arm64 — all build
+- new tests: `TestUPnPLease501FallsBackToPermanent` (also checks SOAP
+  calls close their connection); `TestNATPMPRefused` now checks errors stay
+  on one line. Mutation checks: 3 of 3 caught (no 501 fallback,
+  keep-alive, multi-line errors)
+- **real-world test** (public network, scratch `DENCO_HOME`, user's real
+  config untouched): Debian 13.7 netinst 792.7 MB via https URL → 3 m 14 s,
+  SHA-256 matches, no wasted bytes; stop/restart → seeding without
+  recheck; pause/resume; trackerless magnet → metadata via DHT in ~15 s,
+  4.8 MB/s, then `remove -delete`. Port forwarding on the real router
+  failed before the D50 fixes; not re-tried (changing the router was
+  denied in the dev environment)
 - external deps: none
 
 ## History
@@ -198,3 +195,7 @@ their real router (see Known issues).
 - **Phase 12d (2026-11-09):** `portmap` (NAT-PMP, UPnP IGD, gateway lookup),
   engine `PortForward` + public port to trackers/DHT/BEP 10, `port_forwarding`
   setting, status row. D49.
+- **Phase 12e (2026-11-09):** README (features, install, commands,
+  settings, port forwarding, running at login); real-world download test;
+  UPnP fixes from the real router (Connection: close, 501 → lease 0,
+  one-line errors). D50.

@@ -95,8 +95,11 @@ func TestNATPMPOtherExternalPort(t *testing.T) {
 func TestNATPMPRefused(t *testing.T) {
 	shorten(t)
 	f := newFakePMP(t, func(f *fakePMP) { f.result = 2 })
-	m := start(t, f.config(Port{TCP, 6881}))
+	m := start(t, f.config(Port{TCP, 6881}, Port{UDP, 6881}))
 	st := waitState(t, m, Failed)
+	if strings.Contains(st.Err, "\n") {
+		t.Errorf("error spans lines (breaks 'denco status'): %q", st.Err)
+	}
 	if !strings.Contains(st.Err, "not authorized") || st.NextTry.IsZero() {
 		t.Errorf("status %+v", st)
 	}
@@ -144,6 +147,24 @@ func TestUPnPPermanentLeasesOnly(t *testing.T) {
 	waitState(t, m, Mapped)
 	if mp := f.mappings()["TCP/6881"]; mp.lease != 0 {
 		t.Errorf("lease %d; want 0 (the router only takes permanent ones)", mp.lease)
+	}
+}
+
+// Many ISP routers answer 501 instead of 725 to a timed lease (seen on the
+// user's router, D49).
+func TestUPnPLease501FallsBackToPermanent(t *testing.T) {
+	shorten(t)
+	f := newFakeIGD(t, func(f *fakeIGD) { f.lease501 = true })
+	m := start(t, f.config(Port{TCP, 6881}, Port{UDP, 6881}))
+	waitState(t, m, Mapped)
+	maps := f.mappings()
+	if len(maps) != 2 || maps["TCP/6881"].lease != 0 || maps["UDP/6881"].lease != 0 {
+		t.Errorf("router has %+v; want both ports, lease 0", maps)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.keptAlive != 0 {
+		t.Errorf("%d SOAP calls kept the connection open (routers drop them: EOF)", f.keptAlive)
 	}
 }
 

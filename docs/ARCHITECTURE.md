@@ -302,7 +302,8 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   InternetGatewayDevice:1/:2, WANIPConnection:1) → `LOCATION` of the device
   description XML → `WANIPConnection:2/1` or `WANPPPConnection:1`
   `controlURL` → SOAP POST (`SOAPAction: "<service>#<action>"`):
-  `AddPortMapping` (lease 3600 s; 0 if the router answers 725),
+  `AddPortMapping` (lease 3600 s; 0 if the router answers 725, or 501 —
+  D50), `Connection: close` on every call,
   `DeletePortMapping`, `GetExternalIPAddress`. Faults: `UPnPError/errorCode`
   (718 conflict → retry with a random port ≥ 49152). Only HTTP to the IP that
   answered the search; no redirects; bodies ≤ 256 KiB.

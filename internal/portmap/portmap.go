@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 )
@@ -258,7 +259,7 @@ func (m *Mapper) discover(ctx context.Context) (router, error) {
 	if len(errs) == 0 {
 		return nil, errors.New("port forwarding: no method enabled")
 	}
-	return nil, errors.Join(errs...)
+	return nil, joinErrs(errs)
 }
 
 // mapAll (re)adds every port, asking for the external ports granted last
@@ -289,11 +290,11 @@ func (m *Mapper) mapAll(ctx context.Context, r router, prev []Mapping) ([]Mappin
 		}
 	}
 	if len(maps) == 0 {
-		return nil, 0, errors.Join(errs...)
+		return nil, 0, joinErrs(errs)
 	}
 	st := Status{State: Mapped, Method: r.method(), Gateway: r.addr(), Mappings: maps}
 	if len(errs) > 0 {
-		st.Err = errors.Join(errs...).Error()
+		st.Err = joinErrs(errs).Error()
 	}
 	if ip, err := r.externalIP(ctx); err == nil {
 		st.ExternalIP = ip.String()
@@ -336,6 +337,27 @@ func describe(maps []Mapping) string {
 	}
 	return s
 }
+
+// joinErrs combines errors on one line, for status rows and log lines
+// (errors.Join puts each on its own line).
+func joinErrs(errs []error) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	return multiErr(errs)
+}
+
+type multiErr []error
+
+func (m multiErr) Error() string {
+	parts := make([]string, len(m))
+	for i, e := range m {
+		parts[i] = e.Error()
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (m multiErr) Unwrap() []error { return m }
 
 // sleep waits d or until ctx is done.
 func sleep(ctx context.Context, d time.Duration) {
