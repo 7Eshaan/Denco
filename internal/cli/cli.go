@@ -65,6 +65,7 @@ Standalone tools (no daemon needed):
   denco verify [-dir DIR] <file.torrent>       hash-check data already on disk (read-only)
   denco download [-dir DIR] [-seed] <file.torrent>   download one torrent in the foreground
 
+  denco version                                show the version
   denco help                                   show this help
 
 Denco keeps its state in $DENCO_HOME (default: <user config dir>/denco).
@@ -162,6 +163,8 @@ func runEnv(e *env, args []string) int {
 		return cmdVerify(rest, stdout, stderr)
 	case "download":
 		return cmdDownload(e, rest)
+	case "version", "--version":
+		return cmdVersion(rest, stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return 0

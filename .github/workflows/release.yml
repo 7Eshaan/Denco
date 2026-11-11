@@ -1,0 +1,45 @@
+# Pushing a version tag (git tag v0.1.0 && git push origin v0.1.0) tests the
+# code, builds binaries for Linux, macOS and Windows (amd64 and arm64) and
+# publishes them as a GitHub Release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  release:
+    needs: test # nothing is published unless every test passed
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # only this job may create the release
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: build archives
+        run: scripts/release-build.sh "$GITHUB_REF_NAME"
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+            --title "Denco $GITHUB_REF_NAME" --generate-notes --verify-tag

@@ -1,5 +1,7 @@
 # Denco
 
+[![CI](https://github.com/7Eshaan/Denco/actions/workflows/ci.yml/badge.svg)](https://github.com/7Eshaan/Denco/actions/workflows/ci.yml)
+
 A command-line BitTorrent client written in Go: a background **daemon** that
 keeps your torrents running, and a small **`denco` CLI** to control it.
 Runs on macOS, Linux and Windows. The engine uses the Go standard library
@@ -32,6 +34,24 @@ ID  NAME                             SIZE      PROGRESS  STATUS       DOWN      
   Denco never overwrites files it didn't create
 
 ## Install
+
+### Download a prebuilt binary
+
+Get the archive for your system from the
+[latest release](https://github.com/7Eshaan/Denco/releases/latest):
+`darwin` is macOS, `arm64` is Apple Silicon / ARM, `amd64` is Intel / AMD.
+Unpack it and put `denco` (`denco.exe` on Windows) in a folder on your
+`PATH`. `SHA256SUMS` lists the checksums if you want to check the download.
+
+The binaries aren't code-signed, so the first run needs one extra step:
+
+- **macOS** blocks downloaded programs. Run
+  `xattr -d com.apple.quarantine denco` once.
+- **Windows** SmartScreen may warn: choose *More info → Run anyway*.
+
+`denco version` shows which version you have.
+
+### Build from source
 
 Needs [Go](https://go.dev/dl/) 1.23 or newer.
 
@@ -111,6 +131,7 @@ number from `denco list` or the start of the info hash)
 | `denco probe <torrent>` | Connect to a few peers and show what they have. |
 | `denco verify [-dir DIR] <file.torrent>` | Hash-check data on disk (read-only). |
 | `denco download [-dir DIR] [-seed] <file.torrent>` | Download one torrent in the foreground, without the daemon. |
+| `denco version` | Show the version. |
 
 `denco help` lists everything.
 
@@ -200,6 +221,11 @@ go test -race ./...
 go vet ./...
 GOOS=windows go build ./...   # cross-compile check
 ```
+
+GitHub Actions runs the tests on Linux, macOS and Windows for every push
+(`.github/workflows/ci.yml`). Pushing a tag like `v0.1.0` builds the
+release archives with `scripts/release-build.sh` and publishes them
+(`release.yml`); the script also runs locally and writes to `dist/`.
 
 Tests never use the internet or your real files: trackers, peers, routers and
 DHT nodes are all simulated on loopback.
