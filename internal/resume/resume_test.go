@@ -239,6 +239,22 @@ func TestRestoreAfterCrashDoesNotRecheck(t *testing.T) {
 	}
 }
 
+// removeFile deletes file i as a user would while Denco is stopped: with
+// the storage closed (Windows can't delete a file that is still open).
+func (f *fixture) removeFile(t *testing.T, i int) {
+	t.Helper()
+	f.st.Close()
+	if err := os.Remove(f.layout.Files[i].Path); err != nil {
+		t.Fatal(err)
+	}
+	st, err := storage.Open(f.layout, storage.Options{AllowExisting: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	f.st = st
+}
+
 func TestRestoreRechecksExternallyModifiedFile(t *testing.T) {
 	f := newFixture(t, 2500, 3000) // pieces: file a = 0..2, file b = 2..5
 	st := f.state(true)
@@ -267,7 +283,7 @@ func TestRestoreRechecksExternallyModifiedFile(t *testing.T) {
 func TestRestoreMissingFileDropsItsPieces(t *testing.T) {
 	f := newFixture(t, 2500, 3000)
 	st := f.state(false)
-	os.Remove(f.layout.Files[1].Path)
+	f.removeFile(t, 1)
 	have, rep := f.restore(t, st)
 	// File a covers pieces 0..2 but piece 2 straddles into missing b.
 	if !have.Has(0) || !have.Has(1) || have.Has(2) || have.Has(3) || have.Has(5) {
@@ -333,7 +349,7 @@ func TestRestoreMismatch(t *testing.T) {
 
 func TestStampMissingFile(t *testing.T) {
 	f := newFixture(t, 3000)
-	os.Remove(f.layout.Files[0].Path)
+	f.removeFile(t, 0)
 	if s := Stamp(f.layout); s[0].Size != -1 {
 		t.Fatalf("stamp = %+v", s[0])
 	}

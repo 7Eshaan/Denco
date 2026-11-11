@@ -3,6 +3,7 @@ package peer
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/netip"
 	"runtime"
@@ -225,7 +226,13 @@ func TestDialErrors(t *testing.T) {
 		}
 	})
 	t.Run("not bittorrent", func(t *testing.T) {
-		addr := rawPeer(t, func(nc net.Conn) { nc.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n")) })
+		addr := rawPeer(t, func(nc net.Conn) {
+			// Read our handshake first, as a real server reads a request:
+			// closing with unread data makes Windows reset the connection,
+			// and the reset discards the reply before we read it.
+			io.ReadFull(nc, make([]byte, HandshakeLen))
+			nc.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+		})
 		if _, err := Dial(ctx, addr, testInfoHash, me); !errors.Is(err, ErrBadHandshake) {
 			t.Fatalf("got %v", err)
 		}
