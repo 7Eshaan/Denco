@@ -109,8 +109,15 @@ func TestDialAcceptExchange(t *testing.T) {
 		t.Fatalf("got %s", got)
 	}
 
-	if d.BytesWritten() == 0 || acc.BytesRead() == 0 {
-		t.Error("byte counters not updated")
+	// A counter is updated just after its socket call returns, so the other
+	// side can have the data a moment before the count shows it (seen on a
+	// busy CI runner): wait for it rather than check at once.
+	deadline := time.Now().Add(2 * time.Second)
+	for d.BytesWritten() == 0 || acc.BytesRead() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("byte counters not updated: written %d, read %d", d.BytesWritten(), acc.BytesRead())
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
