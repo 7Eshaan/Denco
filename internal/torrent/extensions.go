@@ -3,6 +3,7 @@ package torrent
 import (
 	"github.com/7Eshaan/Denco/internal/metadata"
 	"github.com/7Eshaan/Denco/internal/peer"
+	"github.com/7Eshaan/Denco/internal/version"
 )
 
 // BEP 10 extension messages. A session advertises ut_metadata (BEP 9) and
@@ -23,7 +24,7 @@ func (s *Session) sendExtHandshake(p *peerState) {
 	hs := peer.ExtHandshake{
 		M:            m,
 		MetadataSize: len(s.mi.InfoBytes),
-		Version:      "Denco 0.0.1",
+		Version:      version.Client(),
 		Port:         int(s.port()),
 		ReqQ:         maxQueuedUploads,
 	}

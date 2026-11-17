@@ -11,6 +11,7 @@ import (
 
 	"github.com/7Eshaan/Denco/internal/magnet"
 	"github.com/7Eshaan/Denco/internal/metainfo"
+	"github.com/7Eshaan/Denco/internal/version"
 )
 
 // maxTorrentFile caps a downloaded .torrent (20 bytes per piece: 16 MiB
@@ -37,7 +38,7 @@ func fetchTorrentURL(ctx context.Context, url string) (data []byte, magnetURI st
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("User-Agent", "Denco/0.0.1")
+	req.Header.Set("User-Agent", version.UserAgent())
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", err

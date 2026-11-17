@@ -13,6 +13,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/bencode"
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/peerid"
+	"github.com/7Eshaan/Denco/internal/version"
 )
 
 // testHash contains bytes that need escaping, including 0x20 (space) and '+'.
@@ -274,5 +275,28 @@ func TestAnnounceErrors(t *testing.T) {
 func TestEscapeBytes(t *testing.T) {
 	if got := escapeBytes([]byte("aZ09-_.~ +/\x00\xff")); got != "aZ09-_.~%20%2B%2F%00%FF" {
 		t.Errorf("escapeBytes = %q", got)
+	}
+}
+
+// The default User-Agent follows the release version (D54), not a constant.
+func TestAnnounceUserAgentFollowsVersion(t *testing.T) {
+	old := version.Tag
+	t.Cleanup(func() { version.Tag = old })
+	version.Tag = "v9.8.7"
+
+	var ua string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		b, _ := bencode.Encode(map[string]any{"interval": 1800, "peers": ""})
+		w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+
+	var c Client
+	if _, err := c.Announce(context.Background(), srv.URL+"/announce", baseRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if ua != "Denco/9.8.7" {
+		t.Errorf("User-Agent = %q, want %q", ua, "Denco/9.8.7")
 	}
 }

@@ -3,6 +3,8 @@ package peerid
 import (
 	"strings"
 	"testing"
+
+	"github.com/7Eshaan/Denco/internal/version"
 )
 
 func TestNew(t *testing.T) {
@@ -11,6 +13,7 @@ func TestNew(t *testing.T) {
 		t.Fatal("two IDs should differ")
 	}
 	s := a.String()
+	t.Logf("peer ID %s (prefix %s)", s, Prefix)
 	if len(s) != 20 || !strings.HasPrefix(s, Prefix) {
 		t.Fatalf("bad id %q", s)
 	}
@@ -38,7 +41,9 @@ func TestClientName(t *testing.T) {
 			t.Errorf("ClientName(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if got := ClientName(New()); got != "Denco 0.0.0.1" {
-		t.Errorf("our own ID = %q", got)
+	// Our own ID decodes to Denco and the version digits (0.1.0 → 0.1.0.0).
+	d := version.PeerIDDigits()
+	if got, want := ClientName(New()), "Denco "+string([]byte{d[0], '.', d[1], '.', d[2], '.', d[3]}); got != want {
+		t.Errorf("our own ID = %q, want %q", got, want)
 	}
 }

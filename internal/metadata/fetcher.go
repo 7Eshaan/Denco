@@ -12,6 +12,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/tracker"
+	"github.com/7Eshaan/Denco/internal/version"
 )
 
 // Config tunes a Fetcher. Zero values use defaults.
@@ -296,7 +297,7 @@ func (f *Fetcher) worker(ctx context.Context, addr netip.AddrPort, found chan<- 
 	if f.cfg.PEX {
 		m[peer.ExtPEX] = peer.ExtPEXID
 	}
-	hs := peer.ExtHandshake{M: m, Version: "Denco 0.0.1", Port: int(f.cfg.Port)}
+	hs := peer.ExtHandshake{M: m, Version: version.Client(), Port: int(f.cfg.Port)}
 	if !c.TrySend(peer.Extended(0, hs.Encode())) {
 		return
 	}

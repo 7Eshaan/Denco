@@ -5,12 +5,14 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/7Eshaan/Denco/internal/version"
 )
 
 func TestVersion(t *testing.T) {
-	old := Version
-	t.Cleanup(func() { Version = old })
-	Version = "v1.2.3"
+	old := version.Tag
+	t.Cleanup(func() { version.Tag = old })
+	version.Tag = "v1.2.3"
 
 	var out, errOut bytes.Buffer
 	e := &env{home: t.TempDir(), stdout: &out, stderr: &errOut}
@@ -26,14 +28,5 @@ func TestVersion(t *testing.T) {
 	}
 	if code := runEnv(e, []string{"version", "extra"}); code != 2 {
 		t.Errorf("version with an argument: exit %d, want 2", code)
-	}
-}
-
-func TestVersionWithoutStamp(t *testing.T) {
-	old := Version
-	t.Cleanup(func() { Version = old })
-	Version = ""
-	if v := version(); v == "" {
-		t.Error("version() is empty without a stamp")
 	}
 }

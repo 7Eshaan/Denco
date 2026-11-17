@@ -26,6 +26,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/compact"
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/peerid"
+	"github.com/7Eshaan/Denco/internal/version"
 )
 
 // Event tells the tracker why we are announcing.
@@ -85,7 +86,7 @@ type Response struct {
 // and safe for concurrent use.
 type Client struct {
 	HTTP      *http.Client // nil means a client with a 30s timeout
-	UserAgent string       // sent as User-Agent; empty means "Denco/<version>"
+	UserAgent string       // sent as User-Agent; empty means version.UserAgent()
 	UDP       *UDPClient   // nil means a shared default UDPClient
 }
 
@@ -121,7 +122,7 @@ func (c *Client) announceHTTP(ctx context.Context, u *url.URL, req Request) (*Re
 	}
 	ua := c.UserAgent
 	if ua == "" {
-		ua = "Denco/0.0.1"
+		ua = version.UserAgent()
 	}
 	httpReq.Header.Set("User-Agent", ua)
 

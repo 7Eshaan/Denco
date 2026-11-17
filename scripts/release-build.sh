@@ -23,7 +23,7 @@ for target in $targets; do
   mkdir -p "dist/$name"
   # Static, reproducible binaries: no cgo, no local paths, no debug info.
   CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath \
-    -ldflags "-s -w -X github.com/7Eshaan/Denco/internal/cli.Version=$version" \
+    -ldflags "-s -w -X github.com/7Eshaan/Denco/internal/version.Tag=$version" \
     -o "dist/$name/$exe" ./cmd/denco
   cp README.md LICENSE* "dist/$name/" 2>/dev/null || true
 
