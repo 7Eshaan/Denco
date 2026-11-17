@@ -1,4 +1,5 @@
-// Command denco is a BitTorrent client: a background daemon plus a CLI to
+// Command denco is a daemon-based BitTorrent client for the command line,
+// written in Go with zero dependencies: a background daemon plus a CLI to
 // control it. All commands are implemented in internal/cli.
 package main
 

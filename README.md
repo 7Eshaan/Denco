@@ -2,10 +2,11 @@
 
 [![CI](https://github.com/7Eshaan/Denco/actions/workflows/ci.yml/badge.svg)](https://github.com/7Eshaan/Denco/actions/workflows/ci.yml)
 
-A command-line BitTorrent client written in Go: a background **daemon** that
-keeps your torrents running, and a small **`denco` CLI** to control it.
-Runs on macOS, Linux and Windows. The engine uses the Go standard library
-only — no third-party dependencies, no cgo.
+A daemon-based BitTorrent client for the command line, written in Go with zero dependencies.
+
+A background **daemon** keeps your torrents running, and a small **`denco`
+CLI** controls it. Runs on macOS, Linux and Windows, using only the Go
+standard library — no third-party packages, no cgo.
 
 ```
 $ denco list

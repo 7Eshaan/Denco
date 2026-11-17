@@ -23,7 +23,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/ipc"
 )
 
-const usage = `denco — a BitTorrent client
+const usage = `denco — A daemon-based BitTorrent client for the command line, written in Go with zero dependencies.
 
 Daemon (keeps torrents running in the background):
   denco daemon [-v] [flags]                    run the daemon (Ctrl-C or 'denco stop' to quit);
