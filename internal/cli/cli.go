@@ -4,7 +4,8 @@
 //
 //   - daemon commands: `denco daemon` runs the engine in the foreground;
 //     add/list/info/pause/resume/remove/status/peers/files/stop are
-//     short-lived clients that talk to it over IPC (client.go, render.go);
+//     short-lived clients that talk to it over IPC (client.go, render.go),
+//     and tui runs the terminal dashboard (tui.go, internal/tui);
 //   - standalone commands that need no daemon: inspect, magnet, announce,
 //     probe, verify, download.
 //
@@ -54,6 +55,8 @@ Managing torrents (starts the daemon in the background if it isn't running):
                                                seed_ratio and seed_time limits
   denco remove [-delete] <id>...               remove torrents (-delete also deletes their files)
   denco status                                 overall client status
+  denco tui                                    live dashboard: watch, add, pause, resume and
+                                               remove torrents with the keyboard (? for keys)
 
   <id> is the number shown by 'denco list', or the start of the info hash.
 
@@ -150,6 +153,8 @@ func runEnv(e *env, args []string) int {
 		return cmdSeed(e, rest)
 	case "config":
 		return cmdConfig(e, rest)
+	case "tui":
+		return cmdTUI(e, rest)
 
 	case "inspect":
 		return cmdInspect(rest, stdout, stderr)

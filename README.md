@@ -29,6 +29,8 @@ ID  NAME                             SIZE      PROGRESS  STATUS       DOWN      
 - **Seeding controls:** ratio and time limits, per-torrent seed on/off,
   pause uploads only
 - **Port forwarding** on your router with UPnP or NAT-PMP
+- **Terminal dashboard** (`denco tui`): live progress, speeds, peers and
+  files, with pause, resume, add and remove from the keyboard
 - The daemon starts by itself when you run a command; queue
   (`max_active_downloads`), automatic retry of failed torrents, log file
 - Safe by design: paths from a torrent never escape the download folder, and
@@ -82,6 +84,7 @@ Check it works with `denco help`. To build without installing, run
 denco add ~/Downloads/some.torrent          # or a magnet link, or an https:// URL
 denco list                                  # what's going on
 denco info 1                                # details of torrent #1
+denco tui                                   # live dashboard (? lists the keys)
 denco stop                                  # stop the daemon (progress is saved)
 ```
 
@@ -121,6 +124,7 @@ number from `denco list` or the start of the info hash)
 | `denco resume <id>… \| all` | Resume paused, failed or finished torrents. |
 | `denco seed on\|off\|default <id>…` | Seed without limits / don't seed / follow the global limits. |
 | `denco remove [-delete] <id>…` | Remove; `-delete` also deletes the downloaded files. |
+| `denco tui` | Live dashboard in the terminal — see below. |
 
 **Standalone tools** (no daemon needed)
 
@@ -135,6 +139,33 @@ number from `denco list` or the start of the info hash)
 | `denco version` | Show the version. |
 
 `denco help` lists everything.
+
+## Dashboard (`denco tui`)
+
+A full-screen view of every torrent that updates once a second: progress
+bars, status, speeds, ETA, peers and ratio, the total speeds, and whether
+the daemon is connected. Press Enter on a torrent for its details — info
+hash, progress, speeds, ETA, ratio, its files and its peers.
+
+| Key | Action |
+|---|---|
+| `↑` `↓` / `j` `k` | Move between torrents (`PgUp` `PgDn`, `g` `G` jump) |
+| `Enter` | Open the torrent's details |
+| `a` | Add a `.torrent` file, magnet link or http(s) URL (type or paste it, then Enter) |
+| `p` | Pause the selected torrent |
+| `r` | Resume it (also retries a failed one) |
+| `d` | Remove it — asks first: `y` removes, `D` removes and deletes its files |
+| `?` | Show the keys |
+| `q` / `Ctrl-C` | Quit |
+| In details: `Esc` | Back to the list (`Tab` switches files/peers, `↑` `↓` scroll) |
+
+It talks to the same daemon as every other command (starting it if
+needed), so quitting the TUI never stops your downloads. If the daemon
+stops or restarts, the dashboard says so and reconnects by itself.
+`NO_COLOR=1` turns colors off. On Windows it needs Windows 10 or later
+(for ANSI escape codes). If the terminal can't send single key presses
+(input piped in, unusual systems), it falls back to line mode: type the
+keys and press Enter.
 
 ## Settings
 
@@ -212,7 +243,7 @@ denco config set log_file ~/denco.log
 
 - No uTP, no protocol encryption (MSE), no web seeds, no BitTorrent v2.
 - DHT is IPv4 only; no IPv6 port forwarding.
-- No GUI or TUI — the CLI only.
+- No graphical app — the CLI and the terminal dashboard only.
 
 ## Development
 
