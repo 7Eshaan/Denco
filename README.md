@@ -8,6 +8,10 @@ A background **daemon** keeps your torrents running, and a small **`denco`
 CLI** controls it. Runs on macOS, Linux and Windows, using only the Go
 standard library — no third-party packages, no cgo.
 
+![denco tui: a live dashboard of torrents with progress bars, speeds, ETA, peers and ratio](assets/tui-dashboard.svg)
+
+Prefer plain commands? Everything works without the dashboard too:
+
 ```
 $ denco list
 Downloading (1)
@@ -147,6 +151,8 @@ bars, status, speeds, ETA, peers and ratio, the total speeds, and whether
 the daemon is connected. Press Enter on a torrent for its details — info
 hash, progress, speeds, ETA, ratio, its files and its peers.
 
+![denco tui details view: status, speeds, peers, ratio and per-file progress of one torrent](assets/tui-details.svg)
+
 | Key | Action |
 |---|---|
 | `↑` `↓` / `j` `k` | Move between torrents (`PgUp` `PgDn`, `g` `G` jump) |
@@ -252,6 +258,7 @@ go build ./...
 go test -race ./...
 go vet ./...
 GOOS=windows go build ./...   # cross-compile check
+go run ./scripts/tuishots     # redraw the screenshots in assets/ from the real TUI
 ```
 
 GitHub Actions runs the tests on Linux, macOS and Windows for every push
