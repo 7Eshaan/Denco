@@ -184,9 +184,13 @@ type Session struct {
 	extraMu  sync.Mutex
 	extra    []netip.AddrPort // queued by AddPeers
 	incoming []*peer.Conn     // queued by addIncoming (Listener)
-	running  bool             // Run is active; when false, incoming conns are refused
-	newWant  *bitfield.Bitfield
-	wantSet  bool // newWant is waiting to be applied by the loop
+	running  bool             // Run is active (for Stats)
+	// stopped: Run has returned. Only then are incoming conns refused:
+	// before Run they wait in incoming, and the loop takes them first thing
+	// (the engine registers a session with the Listener just before Run).
+	stopped bool
+	newWant *bitfield.Bitfield
+	wantSet bool // newWant is waiting to be applied by the loop
 
 	uploadsPaused atomic.Bool
 }
@@ -265,9 +269,9 @@ func (s *Session) wake() {
 // addIncoming queues a connection accepted by the Listener. Never blocks.
 func (s *Session) addIncoming(c *peer.Conn) {
 	s.extraMu.Lock()
-	if !s.running {
+	if s.stopped {
 		s.extraMu.Unlock()
-		c.Close()
+		c.Close() // nobody would serve it, or ever close it
 		return
 	}
 	s.incoming = append(s.incoming, c)
@@ -357,7 +361,7 @@ func (s *Session) Run(ctx context.Context) error {
 	s.cfg.Pacer.add(-s.paced) // these peers no longer share the limit
 	s.paced = 0
 	s.extraMu.Lock()
-	s.running = false
+	s.running, s.stopped = false, true
 	leftover := s.incoming
 	s.incoming = nil
 	s.extraMu.Unlock()

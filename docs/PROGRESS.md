@@ -7,6 +7,12 @@ macOS/Linux and console modes on Windows, line-mode fallback; reconnects
 after a daemon restart, never auto-starts on reconnect) and
 `internal/cli/tui.go`. README has the command and keys.
 
+**2026-11-18:** CI failure fixed (D57): the Go 1.23 job failed
+`TestSessionRejectsBadMetadataRequests` — a session hung up on peers that
+connected after it was registered with the listener but before `Run`
+started (a real, harmless race in the daemon too). Now queued until Run.
+Deterministic regression test; mutation-checked both ways. Not committed.
+
 **2026-11-18:** README showcase (D56): color SVG screenshots of the
 dashboard and the details view (`assets/`), drawn from the real TUI by
 `go run ./scripts/tuishots`. Not committed yet.

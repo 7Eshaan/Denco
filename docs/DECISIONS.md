@@ -253,7 +253,8 @@ One short entry per decision. Newest at the bottom. Format:
   - **Listener:** one TCP port for all torrents (`torrent.Listener`); reads the
     peer's handshake, routes by info hash to the registered `Session`
     (`Add/Remove`), at most 64 handshakes in flight. A session refuses incoming
-    conns while `Run` isn't active.
+    conns once `Run` has returned (*amended in D57:* before `Run` starts they
+    are queued, not refused).
   - **Serving:** requests are validated (≤ 32 KiB, inside the piece, piece
     verified); bad ranges / nonexistent pieces disconnect the peer; requests
     while choked are ignored (BEP 3). Up to 256 queued per peer. A per-peer
@@ -1050,4 +1051,23 @@ One short entry per decision. Newest at the bottom. Format:
 - **Why:** no tools to install, crisp at any zoom, small (~13 KB each),
   and one command keeps them in step with the TUI. `internal/tui` didn't
   change for it. `vt_test.go` covers the emulator and the SVG writer.
+
+### D57 — Fix: peers connecting just before a session runs were dropped
+- **Context:** CI (Go 1.23 job, 2026-11-18) failed
+  `TestSessionRejectsBadMetadataRequests`: "connection closed … disconnected"
+  in 0.00 s. 900 local runs (`-cpu=1,2,8`) never failed.
+- **Cause:** `Session.addIncoming` closed every connection while `running`
+  was false — including *before* `Run` had started. The test helper (and the
+  engine, `e.ln.Add(sess)` right before `sess.Run`) registers the session
+  with the Listener first, so a peer whose handshake finished in the moment
+  before `Run` set the flag was hung up on. In the daemon the peer just
+  retried later; in the test it was a failure.
+- **Fix:** a separate `stopped` flag, set when `Run` returns. Before `Run`,
+  incoming connections are queued (the loop's first `drainExtra` takes them);
+  after it, they are refused and closed, since nobody would serve or close
+  them. `running` stays for `Stats`.
+- **Tests:** `TestIncomingBeforeRunIsServed` makes the gap deterministic (dial,
+  wait, then start `Run`; expects the bitfield). It fails with the old check
+  with CI's exact error; `TestIncomingRefusedWhenStopped` fails if
+  connections are never refused (no leak). Both mutation-checked.
 
