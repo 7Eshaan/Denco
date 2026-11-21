@@ -78,6 +78,11 @@ type Config struct {
 	// UploadLimiter, if set, caps upload speed (shared by all sessions for
 	// a global limit). The download limit lives in PeerOpts.ReadLimiter.
 	UploadLimiter *ratelimit.Limiter
+	// TorrentDownLimiter / TorrentUpLimiter, if set, are this torrent's own
+	// limits, applied on top of the global ones (D59). They can change rate
+	// while the session runs (ratelimit.Limiter.SetRate).
+	TorrentDownLimiter *ratelimit.Limiter
+	TorrentUpLimiter   *ratelimit.Limiter
 	// Pacer, if set, adapts the snub timeout and request pipeline to the
 	// download limit (PeerOpts.ReadLimiter) shared with other sessions (D46).
 	Pacer *Pacer

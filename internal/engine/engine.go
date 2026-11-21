@@ -132,6 +132,9 @@ type entry struct {
 	finished      bool   // stopped seeding (limit or mode off); not restarted on its own
 	queue         int    // download-queue order key: smaller starts first (queue.go)
 	forced        bool   // starts even when MaxActive downloads are running
+	// The torrent's own speed limits (D59). Never nil (rate 0 = none); they
+	// outlive its runs, so a change applies at once to a running session.
+	downLim, upLim *ratelimit.Limiter
 
 	removing bool  // Remove is waiting for the run goroutine
 	err      error // why it last stopped; cleared by Resume or a retry
@@ -342,7 +345,8 @@ func (e *Engine) load() error {
 func (e *Engine) restoreEntry(en resume.Entry) (*entry, error) {
 	st := en.State
 	t := &entry{state: *st, paused: st.Paused, uploadsPaused: st.UploadsPaused, seedMode: st.Seed, finished: st.Finished,
-		queue: max(st.Queue, 0), forced: st.Forced}
+		queue: max(st.Queue, 0), forced: st.Forced,
+		downLim: ratelimit.New(max(st.DownLimit, 0)), upLim: ratelimit.New(max(st.UpLimit, 0))}
 	if en.Meta == nil { // magnet link still waiting for metadata
 		h, err := hashFromHex(en.State.InfoHash)
 		t.hash = h
@@ -527,6 +531,7 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 	cfg := e.cfg.Session
 	cfg.PeerID, cfg.Port, cfg.Logger, cfg.NoSeed = e.peerID, e.ln.Port(), e.log, false
 	cfg.PeerOpts, cfg.UploadLimiter, cfg.Pacer = e.peerOpts(), e.up, e.pacer
+	cfg.TorrentDownLimiter, cfg.TorrentUpLimiter = t.downLim, t.upLim
 	cfg.PublicPort = e.publicPort
 	if e.dht != nil { // only when set: a nil *dht.Server in the interface isn't nil
 		cfg.DHT = e.dht

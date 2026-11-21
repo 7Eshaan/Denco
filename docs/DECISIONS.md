@@ -1117,3 +1117,39 @@ One short entry per decision. Newest at the bottom. Format:
   rendering. Mutation-checked: scheduling in ID order, a forced torrent
   counting against the limit, ignoring force — each fails a test (two
   survived the first version of the tests, which were then strengthened).
+
+### D59 — Per-torrent speed limits (Phase 15b)
+- **Decision:**
+  - **Stacked limiters.** Each torrent has its own download and upload
+    `ratelimit.Limiter`; data must clear the torrent's limiter *and* the
+    global one, so a torrent's limit can only make it slower than the
+    totals. Download: `peer.Conn`'s reader waits on both after every socket
+    read. The torrent's limiter is attached with `Conn.SetTorrentLimiter`
+    when the session takes the connection (an incoming peer's torrent is
+    only known after its handshake; the reader picks it up on its next
+    read). Upload: the per-peer uploader waits on both before each disk read.
+  - **Limiters live on the engine entry, not the run**, created when the
+    torrent is added or loaded (rate 0 = none), so `SetTorrentLimits` reaches
+    a running session at once (`SetRate`) and a pause/resume keeps them.
+    Saved as `resume.State.DownLimit/UpLimit` (omitted when 0).
+  - **Pacing (extends D46):** a peer's fair share is the smaller of the
+    global share (global limit ÷ all downloading peers, from the `Pacer`)
+    and the torrent's own (its limit ÷ its downloading peers). The scaled
+    snub timeout, the shorter pipeline and "no endgame" use it. Without
+    this, a 64 KB/s torrent limit over 8 peers reproduced the D46 failure:
+    peers dropped as snubbed, the download stalled (mutation-checked: the
+    test then hangs for its 30 s limit).
+  - **Interfaces:** `POST /v1/torrents/{ref}/limits` (reuses
+    `LimitsRequest`), `denco limit [-down R] [-up R] <id>…|all` (same rate
+    syntax as the config; a limit not given keeps its value; no flags =
+    show), a "Speed limits" row in `info`, the TUI's `s` prompt ("DOWN UP",
+    prefilled, e.g. `500K 2M`; `s 0 0` in line mode), a Limits line in the
+    details, and DOWN/UP cells turn yellow (the color of limits) when the
+    torrent has its own limit in that direction.
+- **Alternatives:** one limiter that is the minimum of both (a torrent's
+  traffic would then not count against the global total); limiters created
+  per run (a change would need a restart of the run); applying the torrent's
+  download limit in the session instead of the socket reader (reading
+  slower is what makes TCP slow the peer; D36).
+- **Not done:** per-torrent limits for the magnet metadata fetch (a few
+  hundred KB at most); per-torrent connection limits.

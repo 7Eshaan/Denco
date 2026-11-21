@@ -92,6 +92,10 @@ type State struct {
 	// Forced: start it even when max_active_downloads torrents are running.
 	Queue  int  `json:"queue,omitempty"`
 	Forced bool `json:"forced,omitempty"`
+	// The torrent's own speed limits in bytes/s, on top of the global ones
+	// (D59); 0 = none.
+	DownLimit int64 `json:"down_limit,omitempty"`
+	UpLimit   int64 `json:"up_limit,omitempty"`
 }
 
 // FileStamp is a file's size and mtime when the state was saved.

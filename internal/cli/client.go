@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/7Eshaan/Denco/internal/config"
 	"github.com/7Eshaan/Denco/internal/format"
 	"github.com/7Eshaan/Denco/internal/ipc"
 	"github.com/7Eshaan/Denco/internal/magnet"
@@ -374,6 +375,54 @@ func cmdQueue(e *env, args []string) int {
 			fmt.Fprintf(e.stdout, "#%d %s: queue position %d of %d\n", t.ID, t.Name, t.Queue, t.QueueLength)
 		}
 		return nil
+	})
+}
+
+// cmdLimit shows or sets torrents' own speed limits (D59). A limit not
+// given keeps its current value.
+func cmdLimit(e *env, args []string) int {
+	fs := flag.NewFlagSet("limit", flag.ContinueOnError)
+	fs.SetOutput(e.stderr)
+	downText := fs.String("down", "", "download limit, e.g. 500K or 2M (KB/s if no unit); 0 = none")
+	upText := fs.String("up", "", "upload limit, same format")
+	usage := "usage: denco limit [-down RATE] [-up RATE] <id>... | all\n" +
+		"  A torrent's own limits apply on top of download_limit / upload_limit (the totals)."
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() == 0 {
+		fmt.Fprintln(e.stderr, usage)
+		return 2
+	}
+	parse := func(name, text string) (int64, bool, bool) {
+		if text == "" {
+			return 0, false, true
+		}
+		n, err := config.ParseRate(text)
+		if err != nil {
+			fmt.Fprintf(e.stderr, "denco: -%s: %v\n%s\n", name, err, usage)
+			return 0, false, false
+		}
+		return n, true, true
+	}
+	down, setDown, ok1 := parse("down", *downText)
+	up, setUp, ok2 := parse("up", *upText)
+	if !ok1 || !ok2 {
+		return 2
+	}
+	return forEach(e, "limit", fs.Args(), func(ctx context.Context, c *ipc.Client, ref string) (string, error) {
+		t, err := c.Get(ctx, ref)
+		if err == nil && (setDown || setUp) {
+			d, u := t.DownLimit, t.UpLimit
+			if setDown {
+				d = down
+			}
+			if setUp {
+				u = up
+			}
+			t, err = c.SetTorrentLimits(ctx, ref, d, u)
+		}
+		return fmt.Sprintf("#%d %s: own limits %s", t.ID, t.Name, torrentLimitsText(t)), err
 	})
 }
 

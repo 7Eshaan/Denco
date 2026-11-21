@@ -41,7 +41,7 @@ a client command starts one (D52): it runs its own executable as
 | `internal/storage` | ✅ | `Layout` (OS-safe paths, sanitising, collisions, containment) and `Storage` (ReadAt/WriteAt across files, handle LRU, no-overwrite, ReadOnly, safe DeleteFiles). |
 | `internal/pieces` | ✅ | `Check`/`VerifyPiece`/`Recheck` (parallel hashing), `Manager` (peers finish their own pieces then rarest-first new ones (D51), random-first, endgame, memory budget, block ownership, wanted-pieces mask), `Wanted`/`SkipSet` (file selection → pieces, D44). |
 | `internal/torrent` | ✅ | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/IP bans, request pipelining, snub detection, hash+write workers, announce loop, uploading (validation, cancel, per-peer uploader), tit-for-tat choker + optimistic unchoke, seeding, pause uploads, peer exchange (`pex.go`, D41), file selection (`SetWanted`, partial seeds, D44), pacing under a download limit (`pace.go`: `Pacer`, scaled snub timeout and pipeline, D46), Stats/Peers. `Listener`: one TCP port routing incoming peers by info hash. |
-| `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (magnet: fetch metadata → open storage → restore/recheck → Session + Saver → final save), Add/AddMagnet/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview, `SetLimits`, `SetFilesWanted` (D44), seeding controls in `seeding.go` (`SetUploadsPaused`, `SetSeedMode`, `SetSeedLimits`, ratio, per-run seeding watcher, finished state; D45), automatic retry of failed torrents (`retry.go`, D47), the download queue — order keys, `MoveInQueue`, `ForceStart` (`queue.go`, D58), one `torrent.Pacer` for all sessions, an optional `portmap.Mapper` for the peer (TCP) and DHT (UDP) ports (D49). `commands.go`, `view.go`, `magnet.go`. |
+| `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (magnet: fetch metadata → open storage → restore/recheck → Session + Saver → final save), Add/AddMagnet/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview, `SetLimits`, `SetFilesWanted` (D44), seeding controls in `seeding.go` (`SetUploadsPaused`, `SetSeedMode`, `SetSeedLimits`, ratio, per-run seeding watcher, finished state; D45), automatic retry of failed torrents (`retry.go`, D47), the download queue — order keys, `MoveInQueue`, `ForceStart` (`queue.go`, D58), per-torrent speed limits (`limits.go`, D59), one `torrent.Pacer` for all sessions, an optional `portmap.Mapper` for the peer (TCP) and DHT (UDP) ports (D49). `commands.go`, `view.go`, `magnet.go`. |
 | `internal/resume` | ✅ | `Store` (atomic save/load/list/delete of `<hash>.json` + `<hash>.torrent`), `Restore` (trust rules, partial recheck), `Saver` (periodic/no-op-skipping saves with lifetime totals). |
 | `internal/ipc` | ✅ | Daemon file (`Info`, atomic 0600 write), `NewHandler`/`Serve` (loopback HTTP API over an `*engine.Engine`, bearer-token auth, error→status mapping), `Client` (+ `Connect`, stale-file detection). |
 | `internal/config` | ✅ | `Config` + `Defaults(home)`, the settings table (`Settings`, `Lookup`, `Get`/`Set` with validation), `Load`/`Parse` (strict, line numbers), in-place `SetInFile`/`UnsetInFile`, `Init`, `KeysInFile`, rate syntax (`ParseRate`/`FormatRate`). |
@@ -50,7 +50,7 @@ a client command starts one (D52): it runs its own executable as
 | `internal/portmap` | ✅ | Router port forwarding (D49): `Mapper` (`Start(Config)`, `Status`, `External`, `Close` removes the mappings) runs one goroutine: find a router, map, renew at half the lease, look again every 10 min if none answered or it refused. NAT-PMP client (`natpmp.go`, RFC 6886), UPnP IGD client (`upnp.go`: SSDP search, device description, SOAP Add/Delete/GetExternalIPAddress), default gateway lookup (`gateway*.go`: `/proc/net/route` on Linux, `route -n get default` on macOS, else first host of our subnet). |
 | `internal/compact` | ✅ | Compact peer addresses (6/18 bytes) shared by `tracker`, `peer` (PEX) and `dht`. |
 | `internal/tui` | ✅ | Terminal dashboard (D55), a daemon client only: `Run` (event loop; one refresh goroutine, one goroutine per operation), `model.go` (state + `update(event) → actions`, no I/O), `render.go`/`render_cells.go`/`render_details.go`/`render_help.go` (exactly h lines ≤ w cells), `keys.go` (raw input → keys), `screen.go` (line-diffed frames), `text.go` (cell widths, `clean`, SGR), `term.go` + `term_unix.go` (termios via ioctl; `term_darwin.go`/`term_linux.go` request numbers) / `term_windows.go` (console modes via kernel32) / `term_other.go` (line mode). Interfaces `Terminal`, `Client` for tests. |
-| `internal/cli` | ✅ | Every command. `cli.go` (dispatch, usage, `$DENCO_HOME`), `daemon.go` (daemon, stop), `autostart.go` (`denco start`, auto-start of a detached background daemon, D52; `detach_unix.go`/`detach_windows.go`), `client.go` (add/list/info/files/peers/pause/resume [-force]/queue/remove/status), `render.go` (tables/detail views), `files.go` (`files` + skip/want, file-number lists), `logfile.go` (daemon log file with rotation, D48), `version.go` (`denco version`, from `internal/version`, D53/D54), `tui.go` (`denco tui`: connect, raw mode, `tuiClient` = `ipc.Client` + `addRequest`), plus standalone `inspect.go` (inspect, magnet), `announce.go`, `probe.go`, `verify.go`, `download.go`. |
+| `internal/cli` | ✅ | Every command. `cli.go` (dispatch, usage, `$DENCO_HOME`), `daemon.go` (daemon, stop), `autostart.go` (`denco start`, auto-start of a detached background daemon, D52; `detach_unix.go`/`detach_windows.go`), `client.go` (add/list/info/files/peers/pause/resume [-force]/queue/limit/remove/status), `render.go` (tables/detail views), `files.go` (`files` + skip/want, file-number lists), `logfile.go` (daemon log file with rotation, D48), `version.go` (`denco version`, from `internal/version`, D53/D54), `tui.go` (`denco tui`: connect, raw mode, `tuiClient` = `ipc.Client` + `addRequest`), plus standalone `inspect.go` (inspect, magnet), `announce.go`, `probe.go`, `verify.go`, `download.go`. |
 
 Dependency direction (lower never imports higher):
 `bencode → metainfo/magnet → tracker/peer → pieces/storage → torrent → engine → ipc → cli → cmd`;
@@ -136,6 +136,10 @@ Dependency direction (lower never imports higher):
   (`Resume`/`Pause` end it); `List()` is in queue order; `Torrent.Queue`/`QueueLength`
   (place among incomplete torrents, from 1; 0 = complete) and `Torrent.Forced`;
   `resume.State.Queue/Forced`; `ipc.Client.MoveInQueue/ForceStart`; `tui.Client` gained both.
+- Per-torrent limits (D59): `Engine.SetTorrentLimits(ref, down, up)` (`ErrBadLimit`),
+  `Torrent.DownLimit/UpLimit`; `torrent.Config.TorrentDownLimiter/TorrentUpLimiter`;
+  `peer.Conn.SetTorrentLimiter`; `Session.fairShare` (the tighter of the global and
+  the torrent's per-peer share); `ipc.Client.SetTorrentLimits`; `tui.Client` gained it.
 - Seeding (D45): `engine.Config.SeedRatio/SeedTime/SeedCheckEvery`;
   `Engine.SetUploadsPaused(ref, bool)`, `SetSeedMode(ref, "on"|"off"|"default")`
   (`ErrBadSeedMode`), `SetSeedLimits(ratio, d)`; `Resume` → `ErrSeedLimit` for a
@@ -224,7 +228,8 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   snapshot mutex (sessions never call into the engine).
 - **ipc**: `net/http` server goroutines call the engine; `Serve` binds
   127.0.0.1 only.
-- **Rate limiting (D36):** two engine-wide `ratelimit.Limiter`s. Each
+- **Rate limiting (D36, D59):** two engine-wide `ratelimit.Limiter`s, plus
+  two per torrent (on the engine entry) that are waited on first. Each
   `peer.Conn` reader calls `WaitN` after every socket read (download);
   each per-peer uploader calls `WaitN` before each block read (upload),
   with a per-peer context so a disconnect ends the wait. `Conn` gained a
@@ -260,7 +265,8 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   "off"; absent = global limits), `finished` (done seeding; not restarted
   on its own), `seed_seconds` (lifetime seeding time) (D45), `queue`
   (download-queue order key, smaller first) and `forced` (starts past
-  `max_active_downloads`) (D58).
+  `max_active_downloads`) (D58), `down_limit` / `up_limit` (the
+  torrent's own speed limits in bytes/s) (D59).
 - **DHT state (D42):** `<state dir>/dht.json` = `{"id": "<40 hex>", "nodes":
   [{"id": "<40 hex>", "addr": "ip:port"}, …]}` (≤ 200 good nodes), written
   atomically every 15 min and on close. Missing/corrupt = fresh ID, no nodes.
@@ -336,6 +342,7 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   `POST /v1/torrents/{ref}/seed {"mode":"on|off|default"}` (→ torrent),
   `POST /v1/torrents/{ref}/queue {"move":"top|up|down|bottom"}` and
   `POST /v1/torrents/{ref}/force` (→ torrent; D58),
+  `POST /v1/torrents/{ref}/limits {"download":B/s,"upload":B/s}` (→ torrent; D59),
   `POST /v1/seed-limits {"ratio":float,"time":ns}` (→ status), `POST /v1/torrents/{ref}/pause|resume`,
   `POST /v1/torrents/{ref}/remove {"delete_files":bool}` (→ torrent + `files_deleted`),
   `POST /v1/limits {"download":B/s,"upload":B/s}` (→ status), `POST /v1/shutdown`.

@@ -120,6 +120,13 @@ func (c *Client) MoveInQueue(ctx context.Context, ref, move string) (engine.Torr
 	return t, c.do(ctx, http.MethodPost, torrentPath(ref, "/queue"), QueueRequest{Move: move}, &t)
 }
 
+// SetTorrentLimits sets one torrent's own speed limits (bytes/s, 0 = none),
+// applied on top of the daemon's total limits.
+func (c *Client) SetTorrentLimits(ctx context.Context, ref string, down, up int64) (engine.Torrent, error) {
+	var t engine.Torrent
+	return t, c.do(ctx, http.MethodPost, torrentPath(ref, "/limits"), LimitsRequest{Download: down, Upload: up}, &t)
+}
+
 // Remove removes a torrent, optionally deleting its files.
 func (c *Client) Remove(ctx context.Context, ref string, deleteFiles bool) (engine.Removed, error) {
 	var t engine.Removed

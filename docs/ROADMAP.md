@@ -71,7 +71,7 @@ so older references stay valid.
       each ending green with its own commit:
   - [x] **15a — Queue control.** Queue order (top/up/down/bottom), force
         start past `max_active_downloads`, `Q` column, TUI keys (D58).
-  - [ ] **15b — Per-torrent speed limits.** Own up/down limiters under the
+  - [x] **15b — Per-torrent speed limits.** Own up/down limiters under the
         global ones; pacing uses the tighter fair share.
   - [ ] **15c — Full IPv6.** IPv6 DHT (BEP 32), announcing over both
         families (BEP 7), /64 bans, wider address columns.

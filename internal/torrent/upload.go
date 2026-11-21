@@ -40,7 +40,9 @@ func (s *Session) startUploader(ctx context.Context, p *peerState) {
 		for {
 			select {
 			case b := <-p.uploadQ:
-				if s.cfg.UploadLimiter.WaitN(pctx, int(b.Length)) != nil {
+				// The torrent's own limit, then the global one (D59).
+				if s.cfg.TorrentUpLimiter.WaitN(pctx, int(b.Length)) != nil ||
+					s.cfg.UploadLimiter.WaitN(pctx, int(b.Length)) != nil {
 					return // peer or session gone
 				}
 				data := make([]byte, b.Length)

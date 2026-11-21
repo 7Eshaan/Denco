@@ -3,9 +3,11 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/7Eshaan/Denco/internal/config"
 	"github.com/7Eshaan/Denco/internal/engine"
 	"github.com/7Eshaan/Denco/internal/ipc"
 )
@@ -29,6 +31,7 @@ const (
 	modeHelp         // the shortcut list; any key closes it
 	modeAdd          // typing a torrent to add
 	modeConfirm      // confirming a removal
+	modeLimits       // typing a torrent's own speed limits (D59)
 )
 
 type tab int
@@ -84,6 +87,7 @@ const (
 	actForce   // force start (D58)
 	actUnforce // back under the queue's rules (a normal resume)
 	actMove    // move in the download queue
+	actLimits  // set a torrent's own speed limits
 )
 
 // action is a daemon operation for the run loop to start.
@@ -94,6 +98,7 @@ type action struct {
 	deleteFiles bool
 	arg         string // actAdd: file path, magnet link or URL
 	move        string // actMove: "top", "up", "down" or "bottom"
+	down, up    int64  // actLimits: bytes/s, 0 = none
 }
 
 const (
@@ -126,7 +131,9 @@ type model struct {
 	tab       tab
 	scroll    int // first file/peer shown in the details view
 
-	input       []rune // modeAdd
+	input       []rune // modeAdd, modeLimits
+	limitID     int    // modeLimits: the torrent
+	limitName   string // modeLimits: its name
 	confirmID   int    // modeConfirm
 	confirmName string
 
@@ -263,8 +270,8 @@ func (m *model) key(k Key) []action {
 		return nil
 	}
 	switch m.mode {
-	case modeAdd:
-		return m.addKey(k)
+	case modeAdd, modeLimits:
+		return m.promptKey(k)
 	case modeConfirm:
 		return m.confirmKey(k)
 	case modeHelp:
@@ -371,7 +378,7 @@ func isTorrentKey(k Key) bool {
 		return false
 	}
 	_, move := queueMoves[k.Rune]
-	return move || k.Rune == 'p' || k.Rune == 'r' || k.Rune == 'd' || k.Rune == 'f'
+	return move || strings.ContainsRune("prdfs", k.Rune)
 }
 
 // torrentKey handles p, r, d, f and the queue moves for torrent t.
@@ -389,6 +396,10 @@ func (m *model) torrentKey(r rune, t engine.Torrent) []action {
 		return m.start(action{kind: actMove, id: t.ID, name: name, move: move}, "Moving "+move)
 	}
 	switch r {
+	case 's':
+		m.mode, m.limitID, m.limitName = modeLimits, t.ID, name
+		m.input = []rune(compactRate(t.DownLimit) + " " + compactRate(t.UpLimit))
+		return nil
 	case 'p':
 		return m.start(action{kind: actPause, id: t.ID, name: name}, "Pausing")
 	case 'r':
@@ -428,12 +439,13 @@ func (m *model) confirmKey(k Key) []action {
 	return nil
 }
 
-func (m *model) addKey(k Key) []action {
+// promptKey edits the add or limits prompt.
+func (m *model) promptKey(k Key) []action {
 	switch k.Code {
 	case KeyEsc:
 		m.mode, m.input = modeNormal, nil
 	case KeyEnter:
-		return m.submitAdd()
+		return m.submitPrompt()
 	case KeyBackspace:
 		if len(m.input) > 0 {
 			m.input = m.input[:len(m.input)-1]
@@ -455,6 +467,54 @@ func (m *model) addKey(k Key) []action {
 	return nil
 }
 
+func (m *model) submitPrompt() []action {
+	if m.mode == modeLimits {
+		return m.submitLimits()
+	}
+	return m.submitAdd()
+}
+
+// submitLimits reads "DOWN UP" (rates as in the config file: 500K, 2M,
+// 0 = none) and sets them as the torrent's own limits.
+func (m *model) submitLimits() []action {
+	text := strings.TrimSpace(string(m.input))
+	m.mode, m.input = modeNormal, nil
+	fields := strings.Fields(text)
+	if len(fields) != 2 {
+		m.setFlash(fmt.Sprintf("Type two speeds, download then upload (e.g. 500K 2M; 0 = none), not %q", text), true)
+		return nil
+	}
+	var rates [2]int64
+	for i, f := range fields {
+		n, err := config.ParseRate(f)
+		if err != nil {
+			m.setFlash(err.Error(), true)
+			return nil
+		}
+		rates[i] = n
+	}
+	if m.conn != connUp {
+		m.setFlash("Not connected to the daemon", true)
+		return nil
+	}
+	return m.start(action{kind: actLimits, id: m.limitID, name: m.limitName, down: rates[0], up: rates[1]}, "Setting the limits of")
+}
+
+// compactRate writes a limit the way the prompt reads it: "0", "500K",
+// "2M", "1.5M".
+func compactRate(n int64) string {
+	switch {
+	case n <= 0:
+		return "0"
+	case n%1_000_000 == 0:
+		return strconv.FormatInt(n/1_000_000, 10) + "M"
+	case n >= 1_000_000:
+		return strconv.FormatFloat(float64(n)/1e6, 'f', -1, 64) + "M"
+	default:
+		return strconv.FormatFloat(float64(n)/1e3, 'f', -1, 64) + "K"
+	}
+}
+
 func (m *model) submitAdd() []action {
 	arg := strings.TrimSpace(string(m.input))
 	m.mode, m.input = modeNormal, nil
@@ -472,9 +532,9 @@ func (m *model) submitAdd() []action {
 // arrive after Enter: an empty line is Enter, the add prompt takes the
 // whole line, and anything else is a sequence of keys ("jjp").
 func (m *model) line(text string) []action {
-	if m.mode == modeAdd {
+	if m.mode == modeAdd || m.mode == modeLimits {
 		m.input = []rune(text)
-		return m.submitAdd()
+		return m.submitPrompt()
 	}
 	switch strings.ToLower(strings.TrimSpace(text)) {
 	case "":
@@ -494,10 +554,10 @@ func (m *model) line(text string) []action {
 			k = Key{Code: KeyTab}
 		}
 		acts = append(acts, m.key(k)...)
-		if m.mode == modeAdd { // "a magnet:?…": the rest of the line is what to add
+		if m.mode == modeAdd || m.mode == modeLimits { // "a magnet:?…", "s 500K 0": the rest of the line fills the prompt
 			if rest := strings.TrimSpace(text[i+1:]); rest != "" {
 				m.input = []rune(rest)
-				acts = append(acts, m.submitAdd()...)
+				acts = append(acts, m.submitPrompt()...)
 			}
 			break
 		}

@@ -54,6 +54,7 @@ func NewHandler(e *engine.Engine, token string, shutdown func(), log *slog.Logge
 	mux.HandleFunc("POST /v1/torrents/{ref}/resume", h.resume)
 	mux.HandleFunc("POST /v1/torrents/{ref}/force", h.force)
 	mux.HandleFunc("POST /v1/torrents/{ref}/queue", h.queue)
+	mux.HandleFunc("POST /v1/torrents/{ref}/limits", h.torrentLimits)
 	mux.HandleFunc("POST /v1/torrents/{ref}/remove", h.remove)
 	mux.HandleFunc("POST /v1/torrents/{ref}/uploads", h.uploads)
 	mux.HandleFunc("POST /v1/torrents/{ref}/seed", h.seed)
@@ -165,6 +166,15 @@ func (h *handler) queue(w http.ResponseWriter, r *http.Request) {
 	reply(w, t, err)
 }
 
+func (h *handler) torrentLimits(w http.ResponseWriter, r *http.Request) {
+	var req LimitsRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	t, err := h.e.SetTorrentLimits(r.PathValue("ref"), req.Download, req.Upload)
+	reply(w, t, err)
+}
+
 func (h *handler) remove(w http.ResponseWriter, r *http.Request) {
 	var req RemoveRequest
 	if !readJSON(w, r, &req) {
@@ -267,7 +277,8 @@ func toError(err error) *Error {
 	case errors.Is(err, storage.ErrExists):
 		e.Status, e.Code = http.StatusConflict, CodeExists
 	case errors.Is(err, metainfo.ErrInvalid), errors.Is(err, magnet.ErrInvalid), errors.Is(err, engine.ErrBadFile),
-		errors.Is(err, engine.ErrBadSeedMode), errors.Is(err, engine.ErrBadQueueMove):
+		errors.Is(err, engine.ErrBadSeedMode), errors.Is(err, engine.ErrBadQueueMove),
+		errors.Is(err, engine.ErrBadLimit):
 		e.Status, e.Code = http.StatusBadRequest, CodeInvalid
 	case errors.Is(err, engine.ErrBusy):
 		e.Status, e.Code = http.StatusConflict, CodeBusy

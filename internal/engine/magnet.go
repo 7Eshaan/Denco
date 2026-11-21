@@ -14,6 +14,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/magnet"
 	"github.com/7Eshaan/Denco/internal/metadata"
 	"github.com/7Eshaan/Denco/internal/metainfo"
+	"github.com/7Eshaan/Denco/internal/ratelimit"
 	"github.com/7Eshaan/Denco/internal/resume"
 	"github.com/7Eshaan/Denco/internal/storage"
 	"github.com/7Eshaan/Denco/internal/tracker"
@@ -61,6 +62,7 @@ func (e *Engine) AddMagnet(uri string, opts AddOptions) (Torrent, error) {
 	}
 	t := &entry{
 		id: e.nextID, hash: m.InfoHash, paused: opts.Paused, queue: e.nextQueueLocked(),
+		downLim: ratelimit.New(0), upLim: ratelimit.New(0),
 		state: resume.State{
 			ID:          e.nextID,
 			InfoHash:    m.InfoHash.String(),

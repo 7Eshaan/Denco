@@ -82,6 +82,9 @@ func (m *model) detailInfo() []infoItem {
 	case t.Queue > 0:
 		items = append(items, item("Queue", fmt.Sprintf("%d of %d (K J T B move it, f forces it)", t.Queue, t.QueueLength)))
 	}
+	if t.DownLimit > 0 || t.UpLimit > 0 {
+		items = append(items, item("Limits", fmt.Sprintf("↓ %s · ↑ %s (its own; s changes them)", ownLimitText(t.DownLimit), ownLimitText(t.UpLimit)), cYellow))
+	}
 	if running(t) {
 		items = append(items, item("Speed", "↓ "+format.Speed(t.DownloadRate)+"   ↑ "+format.Speed(t.UploadRate)))
 		if !t.Complete {

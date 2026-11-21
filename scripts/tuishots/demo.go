@@ -140,6 +140,9 @@ func (demo) ForceStart(context.Context, string) (engine.Torrent, error) {
 func (demo) MoveInQueue(context.Context, string, string) (engine.Torrent, error) {
 	return engine.Torrent{}, errDemo
 }
+func (demo) SetTorrentLimits(context.Context, string, int64, int64) (engine.Torrent, error) {
+	return engine.Torrent{}, errDemo
+}
 func (demo) Remove(context.Context, string, bool) (engine.Removed, error) {
 	return engine.Removed{}, errDemo
 }

@@ -37,13 +37,15 @@ var (
 func (t *entry) flagsTo(st *resume.State) {
 	st.Paused, st.UploadsPaused, st.Seed, st.Finished = t.paused, t.uploadsPaused, t.seedMode, t.finished
 	st.Queue, st.Forced = t.queue, t.forced
+	st.DownLimit, st.UpLimit = t.downLim.Rate(), t.upLim.Rate()
 }
 
 // flagsDiffer reports whether the saved state lags the entry's choices.
 func (t *entry) flagsDiffer() bool {
 	st := t.state
 	return st.Paused != t.paused || st.UploadsPaused != t.uploadsPaused || st.Seed != t.seedMode || st.Finished != t.finished ||
-		st.Queue != t.queue || st.Forced != t.forced
+		st.Queue != t.queue || st.Forced != t.forced ||
+		st.DownLimit != t.downLim.Rate() || st.UpLimit != t.upLim.Rate()
 }
 
 // seedingTimeLocked is the lifetime seeding time, this run included.

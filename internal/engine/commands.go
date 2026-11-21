@@ -12,6 +12,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/bitfield"
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/pieces"
+	"github.com/7Eshaan/Denco/internal/ratelimit"
 	"github.com/7Eshaan/Denco/internal/resume"
 	"github.com/7Eshaan/Denco/internal/storage"
 	"github.com/7Eshaan/Denco/internal/torrent"
@@ -92,6 +93,7 @@ func (e *Engine) Add(raw []byte, opts AddOptions) (Torrent, error) {
 	t := &entry{
 		id: e.nextID, hash: mi.InfoHash, mi: mi, layout: layout, paused: opts.Paused,
 		have: bitfield.New(mi.Info.NumPieces()), queue: e.nextQueueLocked(),
+		downLim: ratelimit.New(0), upLim: ratelimit.New(0),
 		state: resume.State{
 			ID:          e.nextID,
 			InfoHash:    mi.InfoHash.String(),

@@ -4,7 +4,16 @@
 2026-11-21: queue control, per-torrent limits, full IPv6, web seeds,
 MSE/PE, uTP; sub-phases 15a–15f in ROADMAP).
 
-**Phase 15a — queue control (D58) · ✅ done, not committed yet.**
+**Phase 15b — per-torrent speed limits (D59) · ✅ done, not committed yet.**
+Each torrent has its own up/down limiter on top of the global ones (peer
+reader waits on both; the uploader too), kept on the engine entry so
+changes apply live and survive pause/resume; saved as `down_limit` /
+`up_limit`. Pacing uses the tighter of the global and the torrent's
+per-peer share. `POST /v1/torrents/{ref}/limits`, `denco limit [-down R]
+[-up R] <id>…|all`, "Speed limits" row in `info`; TUI `s` prompt, Limits
+line in details, yellow DOWN/UP cells for limited torrents.
+
+**Phase 15a — queue control (D58) · ✅ done, committed as 98d64c2.**
 Queue order keys saved per torrent (`queue`), scheduler starts downloads in
 queue order, `List` in queue order; `MoveInQueue` top/up/down/bottom
 (steps over complete torrents, never stops a running download); force start
@@ -60,10 +69,11 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** the user commits 15a; then **15b — per-torrent speed
-limits** (plan: per-torrent limiters stacked under the global ones in
-`peer.Conn`'s reader and the session uploader; Pacer fair share =
-min(global/all peers, torrent/its peers); `denco limit`, TUI `s` prompt).
+**Next action:** the user commits 15b; then **15c — full IPv6** (plan:
+`dht.Server` per address family + a wrapper merging both, BEP 32 `nodes6`
+/ `want`, separate v6 nodes in `dht.json`; announce to HTTP trackers over
+both families (BEP 7); bans per /64 for IPv6; wider ADDRESS columns;
+`enable_ipv6` setting; tests on ::1, skipped where unavailable).
 Optional, any time: a release (v0.2.1 for the D57 fix, or v0.3.0 once
 some of Phase 15 is in). Open items, if wanted: the plain
 CLI should `clean` torrent names too (D55), the user's router check
@@ -132,7 +142,24 @@ web seeds, v2, GUI).
 ## Open questions for the user
 - MSE encryption stays out of scope? (UPnP/NAT-PMP: confirmed, done in 12d.)
 
-## Last test run (2026-11-21, Phase 15a, D58)
+## Last test run (2026-11-21, Phase 15b, D59)
+- `go test -race -count=1 ./...` — all 24 packages pass
+- stress `-race -count=5 -cpu=1,2,8` engine, cli, tui, ipc, torrent,
+  peer (15 runs each) — all pass
+- `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
+  linux/windows/darwin × amd64/arm64 — all build · external deps: none
+- new tests: `TestTorrentLimiterStacksWithGlobal` (peer),
+  `TestTorrentDownloadLimitDoesNotSnubPeers` + `TestFairShareTakesTheTighterLimit`
+  (torrent), `TestTorrentLimits` (real transfer under each direction's
+  own limit) + `TestTorrentLimitsAreSavedAndShown` (engine),
+  `TestAPITorrentLimits`, `TestLimitCommand` (cli, end to end),
+  `TestLimitsPrompt` + `TestLimitsShownAndHelp` (tui). Mutation-checked:
+  not attaching the torrent's read limiter, the uploader skipping it,
+  pacing ignoring it (the download then stalls — the D46 bug again), not
+  saving the limits — each fails a test
+- screens checked by eye at 80 columns: limits prompt, details, help
+
+## Previous test run (2026-11-21, Phase 15a, D58)
 - `go test -race -count=1 ./...` — all 24 packages pass
 - stress `-race -count=5 -cpu=1,2,8` engine, cli, tui, ipc, torrent,
   peer (15 runs each) — all pass
@@ -303,4 +330,6 @@ web seeds, v2, GUI).
   dashboard (D55). Released as v0.2.0 (2026-11-17).
 - **After Phase 14 (2026-11-18):** README screenshots from the real TUI
   (D56, 41180df); fix for peers dropped just before `Run` (D57, a0ae613).
-- **Phase 15a (2026-11-21):** download queue control and force start (D58).
+- **Phase 15a (2026-11-21, commit 98d64c2):** download queue control and
+  force start (D58).
+- **Phase 15b (2026-11-21):** per-torrent speed limits (D59).

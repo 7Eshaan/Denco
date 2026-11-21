@@ -81,3 +81,63 @@ func TestPacer(t *testing.T) {
 		t.Errorf("timeout %v, want the cap %v", s.requestTimeout(), maxPacedWait)
 	}
 }
+
+// A torrent's own download limit (D59) paces its peers like the global one:
+// with no global limit at all, 8 peers sharing a 64 KB/s torrent limit must
+// not be dropped as snubbed, and get no duplicate (endgame) requests.
+func TestTorrentDownloadLimitDoesNotSnubPeers(t *testing.T) {
+	f := makeTorrent(t, pl, 24*pl)
+	var seeders []*seeder
+	var addrs []netip.AddrPort
+	for i := 0; i < 8; i++ {
+		sd := newSeeder(t, f, seederOpts{})
+		seeders, addrs = append(seeders, sd), append(addrs, sd.addr)
+	}
+	tr := newTracker(t, addrs...)
+	cfg := testConfig()
+	cfg.RequestTimeout = 500 * time.Millisecond
+	cfg.Pacer = NewPacer(ratelimit.New(0)) // the daemon always has one; unlimited here
+	cfg.TorrentDownLimiter = ratelimit.New(64_000)
+
+	r := start(t, f.withTracker(t, tr.srv.URL), t.TempDir(), nil, cfg, false)
+	start := time.Now()
+	r.waitComplete(t, 30*time.Second)
+	checkOnDisk(t, f, r.dir)
+	if d := time.Since(start); d < 3*time.Second { // 384 KiB at 64 KB/s, minus the 32 KiB burst
+		t.Errorf("finished in %v: the torrent's download limit wasn't applied", d)
+	}
+	sent := int64(0)
+	for i, sd := range seeders {
+		sent += sd.blocksSent.Load()
+		if n := sd.accepts.Load(); n != 1 {
+			t.Errorf("seeder %d was connected %d times; throttled peers must not be dropped as snubbed", i, n)
+		}
+	}
+	if sent > 24+8 {
+		t.Errorf("seeders sent %d blocks for a 24-block torrent: duplicate requests under a limit", sent)
+	}
+}
+
+func TestFairShareTakesTheTighterLimit(t *testing.T) {
+	global := NewPacer(ratelimit.New(100_000))
+	global.add(4) // 25 KB/s each globally
+	s := &Session{cfg: Config{Pacer: global, TorrentDownLimiter: ratelimit.New(0)}}
+	if got := s.fairShare(); got != 25_000 {
+		t.Errorf("no torrent limit: share %d, want the global 25000", got)
+	}
+	s.cfg.TorrentDownLimiter.SetRate(40_000)
+	s.paced = 4 // this torrent's 4 peers share 40 KB/s: 10 KB/s each
+	if got := s.fairShare(); got != 10_000 {
+		t.Errorf("torrent limit tighter: share %d, want 10000", got)
+	}
+	s.cfg.TorrentDownLimiter.SetRate(1_000_000)
+	if got := s.fairShare(); got != 25_000 {
+		t.Errorf("global limit tighter: share %d, want 25000", got)
+	}
+	s.cfg.Pacer = NewPacer(ratelimit.New(0))
+	s.cfg.TorrentDownLimiter.SetRate(8000)
+	s.paced = 0 // no peers yet: the whole limit
+	if got := s.fairShare(); got != 8000 {
+		t.Errorf("only a torrent limit, no peers: share %d, want 8000", got)
+	}
+}

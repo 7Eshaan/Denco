@@ -26,6 +26,7 @@
 //	POST /v1/torrents/{ref}/resume   → engine.Torrent
 //	POST /v1/torrents/{ref}/force    → engine.Torrent (force start)
 //	POST /v1/torrents/{ref}/queue    QueueRequest → engine.Torrent
+//	POST /v1/torrents/{ref}/limits   LimitsRequest → engine.Torrent (its own limits)
 //	POST /v1/torrents/{ref}/remove   RemoveRequest → engine.Removed
 //	POST /v1/torrents/{ref}/uploads  UploadsRequest → engine.Torrent
 //	POST /v1/torrents/{ref}/seed     SeedRequest → engine.Torrent
@@ -164,7 +165,8 @@ type SeedLimitsRequest struct {
 	Time  time.Duration `json:"time"` // nanoseconds, like every duration in the API
 }
 
-// LimitsRequest sets the total speed limits (bytes/s, 0 = unlimited).
+// LimitsRequest sets speed limits (bytes/s, 0 = unlimited): the daemon's
+// totals (/v1/limits) or one torrent's own (/v1/torrents/{ref}/limits).
 type LimitsRequest struct {
 	Download int64 `json:"download"`
 	Upload   int64 `json:"upload"`

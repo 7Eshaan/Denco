@@ -64,6 +64,7 @@ func (s *Session) addPeer(ctx context.Context, c *peer.Conn) {
 		connectedAt: time.Now(),
 	}
 	s.peers[p.addr] = p
+	c.SetTorrentLimiter(s.cfg.TorrentDownLimiter)
 	if c.Outgoing {
 		s.swarm.connected(p.addr)
 	}
@@ -263,7 +264,7 @@ func (s *Session) fillRequests(p *peerState) {
 	if len(p.pending) == 0 {
 		p.lastProgress = time.Now() // start the timeout clock
 	}
-	s.m.SetEndgame(s.cfg.Pacer.PerPeer() == 0) // no duplicates under a download limit (D46)
+	s.m.SetEndgame(s.fairShare() == 0) // no duplicates under a download limit (D46)
 	for _, b := range s.m.NextRequests(p.addr, p.has, room) {
 		p.pending[b] = true
 		s.sendTo(p, peer.Request(b))

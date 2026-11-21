@@ -294,3 +294,25 @@ func TestAPIQueue(t *testing.T) {
 		t.Fatalf("resume after force = %+v, %v", v.Forced, err)
 	}
 }
+
+func TestAPITorrentLimits(t *testing.T) {
+	c, _, _ := setup(t)
+	ctx := context.Background()
+	if _, err := c.Add(ctx, AddRequest{Torrent: testTorrent(t, "lim"), Paused: true}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := c.SetTorrentLimits(ctx, "1", 500_000, 0)
+	if err != nil || v.DownLimit != 500_000 || v.UpLimit != 0 {
+		t.Fatalf("set = %d/%d, %v", v.DownLimit, v.UpLimit, err)
+	}
+	if v, _ := c.Get(ctx, "1"); v.DownLimit != 500_000 {
+		t.Fatalf("get = %d", v.DownLimit)
+	}
+	var apiErr *Error
+	if _, err := c.SetTorrentLimits(ctx, "1", -5, 0); !errors.As(err, &apiErr) || apiErr.Code != CodeInvalid {
+		t.Errorf("negative: %v", err)
+	}
+	if st, _ := c.Status(ctx); st.DownLimit != 0 {
+		t.Errorf("a torrent's limit changed the daemon's total: %d", st.DownLimit)
+	}
+}

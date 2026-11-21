@@ -166,6 +166,14 @@ func (m *model) summary(st styler) string {
 	return segLine(st, m.w, segs, nil)
 }
 
+// ownLimitText is a torrent's own limit in words (D59).
+func ownLimitText(n int64) string {
+	if n <= 0 {
+		return "no limit"
+	}
+	return format.Speed(n)
+}
+
 func limitText(n int64) string {
 	if n <= 0 {
 		return "∞"
@@ -344,9 +352,15 @@ func center(painted string, textWidth, w int) string {
 // the latest result or error, a lost connection, or work in progress.
 func (m *model) messageLine(st styler) string {
 	switch m.mode {
-	case modeAdd:
-		label := " Add torrent: "
-		hint := "  enter add · esc cancel"
+	case modeAdd, modeLimits:
+		label, hint := " Add torrent: ", "  enter add · esc cancel"
+		if m.mode == modeLimits {
+			label = fmt.Sprintf(" Limits for #%d (down up): ", m.limitID)
+			hint = "  e.g. 500K 2M · 0 = none · enter · esc"
+			if width(label)+width(hint)+12 > m.w {
+				hint = "  enter · esc"
+			}
+		}
 		room := max(1, m.w-width(label)-width(hint)-1)
 		text := tail(clean(string(m.input)), room-1)
 		return segLine(st, m.w, []seg{s(label, sBold, cCyan), s(text), s(" ", sReverse)}, []seg{s(hint, cGray)})

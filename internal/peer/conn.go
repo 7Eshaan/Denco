@@ -107,7 +107,15 @@ type Conn struct {
 
 	bytesRead    atomic.Int64
 	bytesWritten atomic.Int64
+	// torrentLim, if set, is the torrent's own download limit, applied on
+	// top of Options.ReadLimiter (D59). Set after the handshake, because an
+	// incoming peer's torrent is only known then.
+	torrentLim atomic.Pointer[ratelimit.Limiter]
 }
+
+// SetTorrentLimiter makes reads also wait on lim (nil = none), on top of
+// Options.ReadLimiter. It takes effect from the next socket read.
+func (c *Conn) SetTorrentLimiter(lim *ratelimit.Limiter) { c.torrentLim.Store(lim) }
 
 // Dial connects to addr and performs the handshake for infoHash.
 func Dial(ctx context.Context, addr netip.AddrPort, infoHash metainfo.Hash, opts Options) (*Conn, error) {
@@ -267,9 +275,7 @@ func (c *Conn) readLoop() {
 	// message: time spent waiting on our own download limit (between
 	// reads) must not count as the peer being silent (D46).
 	var src io.Reader = countingReader{deadlineReader{c.nc, c.opts.IdleTimeout}, &c.bytesRead}
-	if c.opts.ReadLimiter != nil {
-		src = limitedReader{src, c.opts.ReadLimiter, c.ctx}
-	}
+	src = limitedReader{src, c}
 	r := bufio.NewReaderSize(src, 32*1024)
 	for {
 		m, err := ReadMessage(r)
@@ -381,19 +387,24 @@ func (d deadlineReader) Read(p []byte) (int, error) {
 	return d.nc.Read(p)
 }
 
-// limitedReader charges every read to a rate limiter, pausing after reads
-// while the limit is exceeded.
+// limitedReader charges every read to the connection's rate limiters —
+// the torrent's own, then the global one — pausing after reads while a
+// limit is exceeded. A nil limiter is unlimited.
 type limitedReader struct {
-	r   io.Reader
-	lim *ratelimit.Limiter
-	ctx context.Context
+	r io.Reader
+	c *Conn
 }
 
 func (lr limitedReader) Read(p []byte) (int, error) {
 	n, err := lr.r.Read(p)
 	if n > 0 {
-		if werr := lr.lim.WaitN(lr.ctx, n); werr != nil && err == nil {
-			err = werr // connection closing
+		for _, lim := range [2]*ratelimit.Limiter{lr.c.torrentLim.Load(), lr.c.opts.ReadLimiter} {
+			if werr := lim.WaitN(lr.c.ctx, n); werr != nil {
+				if err == nil {
+					err = werr // connection closing
+				}
+				break
+			}
 		}
 	}
 	return n, err

@@ -49,6 +49,7 @@ type Client interface {
 	Resume(ctx context.Context, ref string) (engine.Torrent, error)
 	ForceStart(ctx context.Context, ref string) (engine.Torrent, error)
 	MoveInQueue(ctx context.Context, ref, move string) (engine.Torrent, error)
+	SetTorrentLimits(ctx context.Context, ref string, down, up int64) (engine.Torrent, error)
 	Remove(ctx context.Context, ref string, deleteFiles bool) (engine.Removed, error)
 	AddTorrent(ctx context.Context, arg string) (engine.Torrent, error)
 }
@@ -314,6 +315,9 @@ func perform(ctx context.Context, lnk *link, a action) resultEvent {
 	case actMove:
 		t, err := c.MoveInQueue(ctx, ref, a.move)
 		return result(err, "Moved #%d %s to queue position %d of %d", t.ID, clean(t.Name), t.Queue, t.QueueLength)
+	case actLimits:
+		t, err := c.SetTorrentLimits(ctx, ref, a.down, a.up)
+		return result(err, "#%d %s: own limits ↓ %s ↑ %s", t.ID, clean(t.Name), ownLimitText(t.DownLimit), ownLimitText(t.UpLimit))
 	case actRemove:
 		r, err := c.Remove(ctx, ref, a.deleteFiles)
 		what := "files kept"

@@ -79,6 +79,10 @@ type Torrent struct {
 	Queue       int  `json:"queue,omitempty"`
 	QueueLength int  `json:"queue_length,omitempty"`
 	Forced      bool `json:"forced,omitempty"`
+	// The torrent's own speed limits in bytes/s (0 = none), on top of the
+	// daemon's total limits (D59).
+	DownLimit int64 `json:"down_limit,omitempty"`
+	UpLimit   int64 `json:"up_limit,omitempty"`
 
 	Peers           int    `json:"peers"`
 	Seeds           int    `json:"seeds"`
@@ -285,6 +289,7 @@ func (e *Engine) view(t *entry, q *queueRanks) Torrent {
 		AddedAt: t.state.AddedAt, CompletedAt: t.state.CompletedAt,
 		Ratio: -1, SeedingTime: t.seedingTimeLocked(), SeedMode: modeName(t.seedMode),
 		SeedPolicy: e.seedPolicyLocked(t), UploadsPaused: t.uploadsPaused, Forced: t.forced,
+		DownLimit: t.downLim.Rate(), UpLimit: t.upLim.Rate(),
 	}
 	if q != nil && q.rank[t] > 0 {
 		v.Queue, v.QueueLength = q.rank[t], q.total

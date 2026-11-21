@@ -116,6 +116,17 @@ func queueText(t engine.Torrent) string {
 	return "-"
 }
 
+// torrentLimitsText describes a torrent's own speed limits.
+func torrentLimitsText(t engine.Torrent) string {
+	rate := func(n int64) string {
+		if n <= 0 {
+			return "none"
+		}
+		return format.Speed(n)
+	}
+	return fmt.Sprintf("↓ %s  ↑ %s", rate(t.DownLimit), rate(t.UpLimit))
+}
+
 // ratioText shows a share ratio with two decimals, "-" when unknown.
 func ratioText(r float64) string {
 	if r < 0 {
@@ -282,6 +293,9 @@ func renderInfo(w io.Writer, t engine.Torrent) {
 	row("Seeding", seeding)
 	if t.UploadsPaused {
 		row("Uploads", fmt.Sprintf("paused ('denco resume -uploads %d')", t.ID))
+	}
+	if t.DownLimit > 0 || t.UpLimit > 0 {
+		row("Speed limits", torrentLimitsText(t)+" (this torrent; the daemon's totals apply too)")
 	}
 	if t.Private {
 		row("Private", "yes")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -174,6 +175,12 @@ func (c *fakeClient) ForceStart(_ context.Context, ref string) (engine.Torrent, 
 }
 func (c *fakeClient) MoveInQueue(_ context.Context, ref, move string) (engine.Torrent, error) {
 	if err := c.record("queue " + move + " " + ref); err != nil {
+		return engine.Torrent{}, err
+	}
+	return c.find(ref)
+}
+func (c *fakeClient) SetTorrentLimits(_ context.Context, ref string, down, up int64) (engine.Torrent, error) {
+	if err := c.record(fmt.Sprintf("limits %s %d %d", ref, down, up)); err != nil {
 		return engine.Torrent{}, err
 	}
 	return c.find(ref)

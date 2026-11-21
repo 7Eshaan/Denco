@@ -428,3 +428,32 @@ func TestThrottledReadIsNotIdle(t *testing.T) {
 	default:
 	}
 }
+
+// A torrent's own limit (D59), set after the handshake, throttles reads on
+// top of the global one, and SetTorrentLimiter(nil) lifts it.
+func TestTorrentLimiterStacksWithGlobal(t *testing.T) {
+	global := ratelimit.New(0) // unlimited: only the torrent's limit applies
+	d, acc := pair(t, Options{PeerID: peerid.New()}, Options{PeerID: peerid.New(), ReadLimiter: global})
+	acc.SetTorrentLimiter(ratelimit.New(1 << 20)) // 1 MiB/s, burst 256 KiB
+
+	block := make([]byte, BlockSize)
+	send := func(n int) time.Duration {
+		go func() {
+			for i := 0; i < n; i++ {
+				d.Send(Piece(0, uint32(i*BlockSize), block))
+			}
+		}()
+		start := time.Now()
+		for i := 0; i < n; i++ {
+			recv(t, acc)
+		}
+		return time.Since(start)
+	}
+	if got := send(48); got < 350*time.Millisecond { // 768 KiB: ~0.5 s past the burst
+		t.Fatalf("768 KiB under a 1 MiB/s torrent limit arrived in %v", got)
+	}
+	acc.SetTorrentLimiter(nil)
+	if got := send(48); got > 300*time.Millisecond {
+		t.Fatalf("after lifting the torrent limit 768 KiB took %v", got)
+	}
+}

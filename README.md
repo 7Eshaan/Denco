@@ -29,7 +29,8 @@ ID  NAME                             SIZE      PROGRESS  STATUS       DOWN      
 - Rarest-first piece picking, endgame, tit-for-tat choking, seeding
 - **Resume** across restarts and crashes (only pieces that could be stale
   are rechecked)
-- Global **speed limits**, changeable while running; fair to every peer
+- **Speed limits:** global totals plus per-torrent limits (`denco limit`),
+  changeable while running; fair to every peer
 - **Seeding controls:** ratio and time limits, per-torrent seed on/off,
   pause uploads only
 - **Port forwarding** on your router with UPnP or NAT-PMP
@@ -130,6 +131,7 @@ number from `denco list` or the start of the info hash)
 | `denco resume <id>… \| all` | Resume paused, failed or finished torrents. |
 | `denco resume -force <id>…` | Start now, even when `max_active_downloads` torrents are downloading (`Q` shows `F`); a plain `resume` or `pause` puts it back in the queue. |
 | `denco queue top\|up\|down\|bottom <id>…` | Move downloads in the queue: it decides which of the waiting downloads start first. |
+| `denco limit [-down R] [-up R] <id>… \| all` | A torrent's own speed limits (e.g. `-down 500K -up 2M`, `0` = none), on top of the totals; without flags it shows them. |
 | `denco seed on\|off\|default <id>…` | Seed without limits / don't seed / follow the global limits. |
 | `denco remove [-delete] <id>…` | Remove; `-delete` also deletes the downloaded files. |
 | `denco tui` | Live dashboard in the terminal — see below. |
@@ -167,9 +169,10 @@ hash, progress, speeds, ETA, ratio, its files and its peers.
 | `d` | Remove it — asks first: `y` removes, `D` removes and deletes its files |
 | `K` `J` / `T` `B` | Move it up / down, or to the top / bottom of the download queue |
 | `f` | Force start it (ignores `max_active_downloads`); `f` again puts it back in the queue |
+| `s` | Set its own speed limits: download then upload, e.g. `500K 2M` (`0` = none) |
 | `?` | Show the keys |
 | `q` / `Ctrl-C` | Quit |
-| In details: `Esc` | Back to the list (`Tab` switches files/peers, `↑` `↓` scroll; `p r d f K J T B` act on the torrent shown) |
+| In details: `Esc` | Back to the list (`Tab` switches files/peers, `↑` `↓` scroll; `p r d f s K J T B` act on the torrent shown) |
 
 It talks to the same daemon as every other command (starting it if
 needed), so quitting the TUI never stops your downloads. If the daemon

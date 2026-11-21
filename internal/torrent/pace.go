@@ -54,11 +54,26 @@ func (p *Pacer) add(n int64) {
 	}
 }
 
+// fairShare is each of this torrent's downloading peers' share of the
+// tightest download limit in bytes/s, or 0 when nothing limits it: the
+// global share from the Pacer, or the torrent's own limit split among its
+// own downloading peers (D59), whichever is smaller. Loop goroutine only.
+func (s *Session) fairShare() int64 {
+	share := s.cfg.Pacer.PerPeer()
+	if r := s.cfg.TorrentDownLimiter.Rate(); r > 0 {
+		own := max(1, r/max(1, s.paced))
+		if share == 0 || own < share {
+			share = own
+		}
+	}
+	return share
+}
+
 // requestTimeout is how long a peer with outstanding requests may go
 // without delivering a block before it counts as snubbing us.
 func (s *Session) requestTimeout() time.Duration {
 	t := s.cfg.RequestTimeout
-	if share := s.cfg.Pacer.PerPeer(); share > 0 {
+	if share := s.fairShare(); share > 0 {
 		need := time.Duration(paceSlack * float64(peer.BlockSize) / float64(share) * float64(time.Second))
 		t = max(t, min(need, maxPacedWait))
 	}
@@ -68,7 +83,7 @@ func (s *Session) requestTimeout() time.Duration {
 // pipeline is how many requests to keep outstanding per peer.
 func (s *Session) pipeline() int {
 	q := s.cfg.RequestQueue
-	if share := s.cfg.Pacer.PerPeer(); share > 0 {
+	if share := s.fairShare(); share > 0 {
 		q = min(q, max(minPacedQueue, int(share*paceQueueTime/peer.BlockSize)+pacedQueueSlop))
 	}
 	return q

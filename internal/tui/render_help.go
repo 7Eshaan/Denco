@@ -15,12 +15,13 @@ var helpLines = []struct{ keys, what string }{
 	{"d", "remove it — asks first; D there also deletes its files"},
 	{"K J  T B", "move it up / down / to the top / bottom of the queue"},
 	{"f", "force start past max_active_downloads (f again undoes)"},
+	{"s", "its own speed limits: down up, e.g. 500K 2M (0 = none)"},
 	{"", ""},
 	{"", "Details"},
 	{"Esc ← h", "back to the list"},
 	{"Tab → l", "switch between files and peers"},
 	{"↑ ↓   j k", "scroll"},
-	{"p r d f K J T B", "the same for this torrent"},
+	{"p r d f s K J T B", "the same for this torrent"},
 	{"", ""},
 	{"?", "this help"},
 	{"q  Ctrl-C", "quit (the daemon keeps running)"},
@@ -28,7 +29,7 @@ var helpLines = []struct{ keys, what string }{
 
 // overlayHelp draws the shortcut list in a box over lines, centered.
 func (m *model) overlayHelp(st styler, lines []string) {
-	const keyW = 17
+	const keyW = 19
 	inner := 0
 	for _, h := range helpLines {
 		inner = max(inner, keyW+width(h.what))

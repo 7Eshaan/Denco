@@ -35,6 +35,9 @@ func downCell(t engine.Torrent) (string, []string) {
 	if !running(t) || t.Complete {
 		return "-", []string{cGray}
 	}
+	if t.DownLimit > 0 { // its own limit: yellow, like the limits in the summary
+		return format.Speed(t.DownloadRate), []string{cYellow}
+	}
 	return format.Speed(t.DownloadRate), []string{cCyan}
 }
 
@@ -44,6 +47,9 @@ func upCell(t engine.Torrent) (string, []string) {
 		return "-", []string{cGray}
 	case t.UploadsPaused:
 		return "paused", []string{cYellow}
+	}
+	if t.UpLimit > 0 {
+		return format.Speed(t.UploadRate), []string{cYellow}
 	}
 	return format.Speed(t.UploadRate), []string{cMagenta}
 }
