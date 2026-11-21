@@ -1,7 +1,24 @@
 # Progress
 
-**Current phase:** Phase 14 — terminal dashboard `denco tui` (D55) · ✅
-done, committed as 8de87c2 (D54 version strings: 0308bc0). Not pushed yet. New `internal/tui` (live table, details with
+**Current phase:** Phase 15 — qBittorrent parity, part 1 (user-selected
+2026-11-21: queue control, per-torrent limits, full IPv6, web seeds,
+MSE/PE, uTP; sub-phases 15a–15f in ROADMAP).
+
+**Phase 15a — queue control (D58) · ✅ done, not committed yet.**
+Queue order keys saved per torrent (`queue`), scheduler starts downloads in
+queue order, `List` in queue order; `MoveInQueue` top/up/down/bottom
+(steps over complete torrents, never stops a running download); force start
+(`forced`, past `max_active_downloads`, ended by resume/pause). API routes
+`/queue` and `/force`; `denco queue …`, `denco resume -force`; `Q` column
+in `list` and the TUI, Queue row in `info` and TUI details; TUI keys
+`K`/`J`/`T`/`B`/`f`; help overlay compacts on short terminals. README
+screenshots regenerated (`go run ./scripts/tuishots`, demo got queue
+positions).
+
+**Phase 14** — terminal dashboard `denco tui` (D55) · ✅
+done, committed as 8de87c2 (D54 version strings: 0308bc0), pushed, and
+released as **v0.2.0** (tag → 8de87c2; GitHub release published
+2026-11-17 with six archives + `SHA256SUMS`). New `internal/tui` (live table, details with
 files/peers, add/pause/resume/remove, help; raw input via termios on
 macOS/Linux and console modes on Windows, line-mode fallback; reconnects
 after a daemon restart, never auto-starts on reconnect) and
@@ -11,11 +28,18 @@ after a daemon restart, never auto-starts on reconnect) and
 `TestSessionRejectsBadMetadataRequests` — a session hung up on peers that
 connected after it was registered with the listener but before `Run`
 started (a real, harmless race in the daemon too). Now queued until Run.
-Deterministic regression test; mutation-checked both ways. Not committed.
+Deterministic regression test; mutation-checked both ways. Committed as
+a0ae613 and pushed — *after* the v0.2.0 tag, so no release contains it yet.
 
 **2026-11-18:** README showcase (D56): color SVG screenshots of the
 dashboard and the details view (`assets/`), drawn from the real TUI by
-`go run ./scripts/tuishots`. Not committed yet.
+`go run ./scripts/tuishots`. Committed as 41180df (docs/.gitignore
+tidy-up: fc60ec0), pushed.
+
+**2026-11-21:** PROGRESS.md brought up to date (it still said D56/D57
+were uncommitted and that v0.2.0 was the next step). Checked: `main` =
+`origin/main` = a0ae613; releases v0.1.0, v0.1.1 and v0.2.0 all exist on
+GitHub with 7 assets each.
 
 **Phase 13** — CI and releases (D53) · ✅ done.
 CI is green on Linux, macOS and Windows (the first run found 3
@@ -36,15 +60,12 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** release **v0.2.0** (new feature → minor bump; peer ID
-becomes `-DN0200-`). The user pushes main, waits for green CI on all three
-OSes (first run of the TUI's Windows code), ideally tries `denco tui` in a
-Windows console, then `git tag v0.2.0 && git push origin v0.2.0`. A local
-dry run of `scripts/release-build.sh v0.2.0` (2026-11-17) built all six
-archives (3.2–3.7 MB each, README + LICENSE inside), and the darwin/arm64
-binary reported `v0.2.0`, so the D54 stamp path works. Whether a GitHub
-release exists for v0.1.1 wasn't checked (API rate limit); v0.2.0
-supersedes it either way. Open items, if wanted: the plain
+**Next action:** the user commits 15a; then **15b — per-torrent speed
+limits** (plan: per-torrent limiters stacked under the global ones in
+`peer.Conn`'s reader and the session uploader; Pacer fair share =
+min(global/all peers, torrent/its peers); `denco limit`, TUI `s` prompt).
+Optional, any time: a release (v0.2.1 for the D57 fix, or v0.3.0 once
+some of Phase 15 is in). Open items, if wanted: the plain
 CLI should `clean` torrent names too (D55), the user's router check
 (D50), one memory budget for all torrents (D51), `denco service install`
 (D52), signing/Homebrew/Scoop (D53), and the out-of-scope list (uTP, MSE,
@@ -111,7 +132,27 @@ web seeds, v2, GUI).
 ## Open questions for the user
 - MSE encryption stays out of scope? (UPnP/NAT-PMP: confirmed, done in 12d.)
 
-## Last test run (2026-11-17, Phase 14 TUI, D55)
+## Last test run (2026-11-21, Phase 15a, D58)
+- `go test -race -count=1 ./...` — all 24 packages pass
+- stress `-race -count=5 -cpu=1,2,8` engine, cli, tui, ipc, torrent,
+  peer (15 runs each) — all pass
+- `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
+  linux/windows/darwin × amd64/arm64 — all build · external deps: none
+- new tests: `engine/queue_test.go` (moves skip complete torrents, next
+  slot goes to the queue head, order + force survive restart, forced holds
+  no slot, pause/resume end force), legacy state gets a queue key,
+  `TestAPIQueue`, `cli/queue_test.go` (end to end), `tui/queue_test.go`
+  (keys, Q cells, details, help fits 80×24). Mutation-checked: ID-order
+  scheduling, forced counting against the limit, ignoring force — all fail
+  tests (the first two survived the first draft of the tests; fixed)
+- screens checked by eye: dashboard 120×14, details, help at 80×24
+
+## Earlier test run (2026-11-21, tree at a0ae613, no code changes)
+- `go build`, `go vet`, gofmt clean; `go test -race -count=1 ./...` — all
+  24 packages with tests pass (incl. `scripts/tuishots`); cross-compile
+  linux and windows builds; external deps: none
+
+## Previous test run (2026-11-17, Phase 14 TUI, D55)
 - `go test -race -count=1 ./...` — all 23 packages pass (new: `tui`);
   stress `-race -count=5 -cpu=1,2,8` `tui`, `cli` (15 runs each) — pass;
   `torrent`, `peer` stress passed earlier today (untouched since)
@@ -258,4 +299,8 @@ web seeds, v2, GUI).
   commands start a detached background daemon, `auto_start` (D52).
 - **After Phase 13 (2026-11-17):** test fix for byte counters (2811412);
   version strings follow the release via `internal/version` (D54).
-- **Phase 14 (2026-11-17):** `denco tui` terminal dashboard (D55).
+- **Phase 14 (2026-11-17, commit 8de87c2):** `denco tui` terminal
+  dashboard (D55). Released as v0.2.0 (2026-11-17).
+- **After Phase 14 (2026-11-18):** README screenshots from the real TUI
+  (D56, 41180df); fix for peers dropped just before `Run` (D57, a0ae613).
+- **Phase 15a (2026-11-21):** download queue control and force start (D58).

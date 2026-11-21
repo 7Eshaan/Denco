@@ -1071,3 +1071,49 @@ One short entry per decision. Newest at the bottom. Format:
   with CI's exact error; `TestIncomingRefusedWhenStopped` fails if
   connections are never refused (no leak). Both mutation-checked.
 
+### D58 — Queue control (Phase 15a)
+- **Context:** the user picked six qBittorrent features for Phase 15
+  (2026-11-21): queue control, per-torrent speed limits, full IPv6, web
+  seeds, MSE/PE, uTP — built as lettered sub-phases 15a–15f, smallest first.
+- **Decision:**
+  - **Order:** every torrent has a queue key (`resume.State.Queue`, written
+    only when set, so old files load). New torrents go last; torrents saved
+    without one (older versions, `denco download`) get one on load, in ID
+    order, and it is saved. The scheduler starts incomplete torrents in key
+    order (was ID order). `List` returns queue order, like qBittorrent's
+    default sort, so a move is visible where you look.
+  - **Position:** what users see is the place among the *incomplete*
+    torrents ("2 of 5"); complete ones aren't queued (they seed without a
+    slot) but keep their key, so a torrent that wants more files later gets
+    its old place back. Up/down step past one other *download*; complete
+    torrents in between are skipped. Moving a complete torrent is refused
+    (`ErrNotQueued`, API code `not_queued`).
+  - **Moves don't stop running downloads.** Putting #5 on top while #1 runs
+    under `max_active_downloads: 1` changes who starts next, not who runs
+    now — the queue never stopped running torrents before either, and
+    stopping one would throw away its connections for a reorder.
+  - **Force start** (`resume.State.Forced`): starts even when
+    `max_active_downloads` are running and doesn't count against the limit.
+    Ends with a plain `resume` (qBittorrent's behaviour) or `pause`; saved
+    across restarts. It only affects the download queue; seeding limits
+    still apply.
+  - **Renumbering:** after a move all keys are renumbered 1…n, but only
+    torrents whose key changed are written (a few small resume files).
+  - **Interfaces:** `POST /v1/torrents/{ref}/queue {"move":…}` and
+    `/force`; `denco queue top|up|down|bottom <id>…` (several ids keep the
+    order given; the positions printed are those after all moves) and
+    `denco resume -force`; a `Q` column (position, `F` = forced) in `list`
+    and the TUI; a Queue row in `info` and the TUI details; TUI keys
+    `K`/`J` (Shift + the movement keys) up/down, `T`/`B` top/bottom, `f`
+    toggles force. The help overlay drops its spacer lines when the
+    terminal is short so it still fits.
+- **Alternatives:** separate keys only for incomplete torrents (then
+  completing and un-completing loses the place); stopping a running
+  download when another is moved above it (qBittorrent doesn't either);
+  `denco start <id>` for force start (`start` already starts the daemon).
+- **Tests:** engine (moves skip complete torrents, the next slot goes to
+  the head of the queue, order and force survive a restart, forced torrents
+  hold no slot, legacy states get a key), IPC, CLI end to end, TUI keys and
+  rendering. Mutation-checked: scheduling in ID order, a forced torrent
+  counting against the limit, ignoring force — each fails a test (two
+  survived the first version of the tests, which were then strengthened).

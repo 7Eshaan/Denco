@@ -73,6 +73,12 @@ type Torrent struct {
 	SeedPolicy    string        `json:"seed_policy"`
 	SeedNote      string        `json:"seed_note,omitempty"`
 	UploadsPaused bool          `json:"uploads_paused,omitempty"`
+	// Download queue (D58): Queue is the position among the incomplete
+	// torrents, from 1 (0 = complete, not queued), of QueueLength; Forced
+	// torrents start even when max_active_downloads are running.
+	Queue       int  `json:"queue,omitempty"`
+	QueueLength int  `json:"queue_length,omitempty"`
+	Forced      bool `json:"forced,omitempty"`
 
 	Peers           int    `json:"peers"`
 	Seeds           int    `json:"seeds"`
@@ -141,14 +147,15 @@ type Overview struct {
 	Peers        int   `json:"peers"`
 }
 
-// List returns every torrent, by ID.
+// List returns every torrent, in queue order (D58).
 func (e *Engine) List() []Torrent {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var out []Torrent
-	for _, t := range e.sortedLocked() {
+	q := e.queueRanksLocked()
+	for _, t := range e.queueOrderLocked() {
 		if !t.removing {
-			out = append(out, e.viewLocked(t))
+			out = append(out, e.view(t, q))
 		}
 	}
 	return out
@@ -235,11 +242,12 @@ func (e *Engine) Overview() Overview {
 		st := e.portmap.Status()
 		o.PortMap = &st
 	}
+	q := e.queueRanksLocked()
 	for _, t := range e.byID {
 		if t.removing {
 			continue
 		}
-		v := e.viewLocked(t)
+		v := e.view(t, q)
 		o.Torrents++
 		o.ByState[v.State]++
 		if v.Complete {
@@ -265,14 +273,21 @@ func (t *entry) haveLocked() *bitfield.Bitfield {
 	return t.have
 }
 
-func (e *Engine) viewLocked(t *entry) Torrent {
+func (e *Engine) viewLocked(t *entry) Torrent { return e.view(t, e.queueRanksLocked()) }
+
+// view builds t's snapshot; q (nil = leave the queue fields empty) is
+// queueRanksLocked, computed once when many torrents are shown.
+func (e *Engine) view(t *entry, q *queueRanks) Torrent {
 	v := Torrent{
 		ID: t.id, InfoHash: t.hash.String(), Name: t.name(), Dir: t.state.DownloadDir,
 		Downloaded: t.state.Downloaded, Uploaded: t.state.Uploaded,
 		TrackerSeeders: -1, TrackerLeechers: -1, ETA: -1,
 		AddedAt: t.state.AddedAt, CompletedAt: t.state.CompletedAt,
 		Ratio: -1, SeedingTime: t.seedingTimeLocked(), SeedMode: modeName(t.seedMode),
-		SeedPolicy: e.seedPolicyLocked(t), UploadsPaused: t.uploadsPaused,
+		SeedPolicy: e.seedPolicyLocked(t), UploadsPaused: t.uploadsPaused, Forced: t.forced,
+	}
+	if q != nil && q.rank[t] > 0 {
+		v.Queue, v.QueueLength = q.rank[t], q.total
 	}
 	if t.mi == nil { // magnet link without metadata
 		if t.fetcher != nil {

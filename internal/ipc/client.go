@@ -106,6 +106,20 @@ func (c *Client) Resume(ctx context.Context, ref string) (engine.Torrent, error)
 	return t, c.do(ctx, http.MethodPost, torrentPath(ref, "/resume"), struct{}{}, &t)
 }
 
+// ForceStart starts a torrent even when max_active_downloads are running
+// (Resume puts it back under the queue's rules).
+func (c *Client) ForceStart(ctx context.Context, ref string) (engine.Torrent, error) {
+	var t engine.Torrent
+	return t, c.do(ctx, http.MethodPost, torrentPath(ref, "/force"), struct{}{}, &t)
+}
+
+// MoveInQueue moves a torrent in the download queue: "top", "up", "down"
+// or "bottom".
+func (c *Client) MoveInQueue(ctx context.Context, ref, move string) (engine.Torrent, error) {
+	var t engine.Torrent
+	return t, c.do(ctx, http.MethodPost, torrentPath(ref, "/queue"), QueueRequest{Move: move}, &t)
+}
+
 // Remove removes a torrent, optionally deleting its files.
 func (c *Client) Remove(ctx context.Context, ref string, deleteFiles bool) (engine.Removed, error) {
 	var t engine.Removed

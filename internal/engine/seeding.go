@@ -36,12 +36,14 @@ var (
 // flagsTo records the entry's per-torrent choices in a state to be saved.
 func (t *entry) flagsTo(st *resume.State) {
 	st.Paused, st.UploadsPaused, st.Seed, st.Finished = t.paused, t.uploadsPaused, t.seedMode, t.finished
+	st.Queue, st.Forced = t.queue, t.forced
 }
 
 // flagsDiffer reports whether the saved state lags the entry's choices.
 func (t *entry) flagsDiffer() bool {
 	st := t.state
-	return st.Paused != t.paused || st.UploadsPaused != t.uploadsPaused || st.Seed != t.seedMode || st.Finished != t.finished
+	return st.Paused != t.paused || st.UploadsPaused != t.uploadsPaused || st.Seed != t.seedMode || st.Finished != t.finished ||
+		st.Queue != t.queue || st.Forced != t.forced
 }
 
 // seedingTimeLocked is the lifetime seeding time, this run included.
@@ -81,7 +83,7 @@ func seedStopReason(mode string, r float64, seeded time.Duration, limRatio float
 
 // seedStopLocked applies seedStopReason to a torrent's current numbers.
 func (e *Engine) seedStopLocked(t *entry) string {
-	v := e.viewLocked(t)
+	v := e.view(t, nil) // the queue position isn't needed (and costs a pass over every torrent)
 	return seedStopReason(t.seedMode, v.Ratio, v.SeedingTime, e.seedRatio, e.seedTime)
 }
 

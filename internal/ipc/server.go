@@ -52,6 +52,8 @@ func NewHandler(e *engine.Engine, token string, shutdown func(), log *slog.Logge
 	mux.HandleFunc("GET /v1/torrents/{ref}/peers", h.peers)
 	mux.HandleFunc("POST /v1/torrents/{ref}/pause", h.pause)
 	mux.HandleFunc("POST /v1/torrents/{ref}/resume", h.resume)
+	mux.HandleFunc("POST /v1/torrents/{ref}/force", h.force)
+	mux.HandleFunc("POST /v1/torrents/{ref}/queue", h.queue)
 	mux.HandleFunc("POST /v1/torrents/{ref}/remove", h.remove)
 	mux.HandleFunc("POST /v1/torrents/{ref}/uploads", h.uploads)
 	mux.HandleFunc("POST /v1/torrents/{ref}/seed", h.seed)
@@ -146,6 +148,20 @@ func (h *handler) pause(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) resume(w http.ResponseWriter, r *http.Request) {
 	t, err := h.e.Resume(r.PathValue("ref"))
+	reply(w, t, err)
+}
+
+func (h *handler) force(w http.ResponseWriter, r *http.Request) {
+	t, err := h.e.ForceStart(r.PathValue("ref"))
+	reply(w, t, err)
+}
+
+func (h *handler) queue(w http.ResponseWriter, r *http.Request) {
+	var req QueueRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	t, err := h.e.MoveInQueue(r.PathValue("ref"), req.Move)
 	reply(w, t, err)
 }
 
@@ -251,7 +267,7 @@ func toError(err error) *Error {
 	case errors.Is(err, storage.ErrExists):
 		e.Status, e.Code = http.StatusConflict, CodeExists
 	case errors.Is(err, metainfo.ErrInvalid), errors.Is(err, magnet.ErrInvalid), errors.Is(err, engine.ErrBadFile),
-		errors.Is(err, engine.ErrBadSeedMode):
+		errors.Is(err, engine.ErrBadSeedMode), errors.Is(err, engine.ErrBadQueueMove):
 		e.Status, e.Code = http.StatusBadRequest, CodeInvalid
 	case errors.Is(err, engine.ErrBusy):
 		e.Status, e.Code = http.StatusConflict, CodeBusy
@@ -259,6 +275,8 @@ func toError(err error) *Error {
 		e.Status, e.Code = http.StatusConflict, CodeNoMeta
 	case errors.Is(err, engine.ErrSeedLimit):
 		e.Status, e.Code = http.StatusConflict, CodeSeedLimit
+	case errors.Is(err, engine.ErrNotQueued):
+		e.Status, e.Code = http.StatusConflict, CodeNotQueued
 	}
 	return e
 }

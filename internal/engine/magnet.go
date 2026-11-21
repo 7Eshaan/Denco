@@ -60,7 +60,7 @@ func (e *Engine) AddMagnet(uri string, opts AddOptions) (Torrent, error) {
 		return Torrent{}, err
 	}
 	t := &entry{
-		id: e.nextID, hash: m.InfoHash, paused: opts.Paused,
+		id: e.nextID, hash: m.InfoHash, paused: opts.Paused, queue: e.nextQueueLocked(),
 		state: resume.State{
 			ID:          e.nextID,
 			InfoHash:    m.InfoHash.String(),
@@ -73,6 +73,7 @@ func (e *Engine) AddMagnet(uri string, opts AddOptions) (Torrent, error) {
 			Magnet:      m.String(),
 		},
 	}
+	t.state.Queue = t.queue
 	if err := e.store.Save(&t.state, nil); err != nil {
 		return Torrent{}, err
 	}

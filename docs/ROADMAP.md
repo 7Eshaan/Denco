@@ -66,5 +66,21 @@ so older references stay valid.
       API; raw terminal input with the standard library on macOS, Linux
       and Windows, line-mode fallback elsewhere (D55).
 
-Out of scope for now (may revisit): uTP, encryption (MSE),
-web seeds, BitTorrent v2, GUI.
+- [ ] **Phase 15 — qBittorrent parity, part 1** (user-selected
+      2026-11-21 from the qBittorrent comparison), lettered sub-phases,
+      each ending green with its own commit:
+  - [x] **15a — Queue control.** Queue order (top/up/down/bottom), force
+        start past `max_active_downloads`, `Q` column, TUI keys (D58).
+  - [ ] **15b — Per-torrent speed limits.** Own up/down limiters under the
+        global ones; pacing uses the tighter fair share.
+  - [ ] **15c — Full IPv6.** IPv6 DHT (BEP 32), announcing over both
+        families (BEP 7), /64 bans, wider address columns.
+  - [ ] **15d — Web seeds (BEP 19).** HTTP range downloads as pseudo-peers;
+        private/loopback URLs refused by default.
+  - [ ] **15e — Protocol encryption (MSE/PE).** `encryption:
+        prefer|require|disable`; needs a short user-approved real-world check.
+  - [ ] **15f — uTP (BEP 29).** LEDBAT over a UDP socket shared with the
+        DHT; `transport: both|tcp|utp`; needs a real-world check.
+
+Out of scope for now (may revisit): BitTorrent v2, GUI (uTP, MSE and web
+seeds moved into Phase 15 on 2026-11-21).

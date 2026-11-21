@@ -24,6 +24,8 @@
 //	GET  /v1/torrents/{ref}/peers    → []engine.Peer
 //	POST /v1/torrents/{ref}/pause    → engine.Torrent
 //	POST /v1/torrents/{ref}/resume   → engine.Torrent
+//	POST /v1/torrents/{ref}/force    → engine.Torrent (force start)
+//	POST /v1/torrents/{ref}/queue    QueueRequest → engine.Torrent
 //	POST /v1/torrents/{ref}/remove   RemoveRequest → engine.Removed
 //	POST /v1/torrents/{ref}/uploads  UploadsRequest → engine.Torrent
 //	POST /v1/torrents/{ref}/seed     SeedRequest → engine.Torrent
@@ -145,6 +147,12 @@ type UploadsRequest struct {
 	Paused bool `json:"paused"`
 }
 
+// QueueRequest moves a torrent in the download queue: "top", "up",
+// "down" or "bottom".
+type QueueRequest struct {
+	Move string `json:"move"`
+}
+
 // SeedRequest sets one torrent's seeding mode: "on", "off" or "default".
 type SeedRequest struct {
 	Mode string `json:"mode"`
@@ -178,6 +186,7 @@ const (
 	CodeBusy      = "busy"
 	CodeNoMeta    = "no_metadata"
 	CodeSeedLimit = "seed_limit"
+	CodeNotQueued = "not_queued"
 	CodeAuth      = "unauthorized"
 	CodeInternal  = "internal"
 )

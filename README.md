@@ -35,8 +35,10 @@ ID  NAME                             SIZE      PROGRESS  STATUS       DOWN      
 - **Port forwarding** on your router with UPnP or NAT-PMP
 - **Terminal dashboard** (`denco tui`): live progress, speeds, peers and
   files, with pause, resume, add and remove from the keyboard
-- The daemon starts by itself when you run a command; queue
-  (`max_active_downloads`), automatic retry of failed torrents, log file
+- **Download queue:** `max_active_downloads` at once, reorder with
+  `denco queue` or the dashboard, force-start past the limit
+- The daemon starts by itself when you run a command; automatic retry of
+  failed torrents, log file
 - Safe by design: paths from a torrent never escape the download folder, and
   Denco never overwrites files it didn't create
 
@@ -119,13 +121,15 @@ number from `denco list` or the start of the info hash)
 |---|---|
 | `denco add [-dir DIR] [-paused] [-existing] <torrent>…` | Add `.torrent` files, magnet links or http(s) URLs. `-existing` uses data already on disk (it's checked first). |
 | `denco add -skip 2,4-6 …` / `-only 1,3 …` | Download only some files (numbers from `denco inspect`). |
-| `denco list` | All torrents: progress, speed, ETA, peers, ratio. |
+| `denco list` | All torrents in queue order: queue place (`Q`), progress, speed, ETA, peers, ratio. |
 | `denco info <id>` | Details of one torrent. |
 | `denco files <id>` | Its files with progress. |
 | `denco files <id> skip\|want <files>` | Stop or start downloading some files. |
 | `denco peers <id>` | Connected peers. |
 | `denco pause <id>… \| all` | Pause. `-uploads` pauses only uploading. |
 | `denco resume <id>… \| all` | Resume paused, failed or finished torrents. |
+| `denco resume -force <id>…` | Start now, even when `max_active_downloads` torrents are downloading (`Q` shows `F`); a plain `resume` or `pause` puts it back in the queue. |
+| `denco queue top\|up\|down\|bottom <id>…` | Move downloads in the queue: it decides which of the waiting downloads start first. |
 | `denco seed on\|off\|default <id>…` | Seed without limits / don't seed / follow the global limits. |
 | `denco remove [-delete] <id>…` | Remove; `-delete` also deletes the downloaded files. |
 | `denco tui` | Live dashboard in the terminal — see below. |
@@ -161,9 +165,11 @@ hash, progress, speeds, ETA, ratio, its files and its peers.
 | `p` | Pause the selected torrent |
 | `r` | Resume it (also retries a failed one) |
 | `d` | Remove it — asks first: `y` removes, `D` removes and deletes its files |
+| `K` `J` / `T` `B` | Move it up / down, or to the top / bottom of the download queue |
+| `f` | Force start it (ignores `max_active_downloads`); `f` again puts it back in the queue |
 | `?` | Show the keys |
 | `q` / `Ctrl-C` | Quit |
-| In details: `Esc` | Back to the list (`Tab` switches files/peers, `↑` `↓` scroll) |
+| In details: `Esc` | Back to the list (`Tab` switches files/peers, `↑` `↓` scroll; `p r d f K J T B` act on the torrent shown) |
 
 It talks to the same daemon as every other command (starting it if
 needed), so quitting the TUI never stops your downloads. If the daemon
@@ -189,7 +195,7 @@ denco config init                  # write a commented file with every setting
 | Setting | Default | Meaning |
 |---|---|---|
 | `download_dir` | `~/Downloads/Denco` | Where new torrents go. |
-| `max_active_downloads` | `5` | Torrents downloading at once; the rest wait in a queue (seeding doesn't count). |
+| `max_active_downloads` | `5` | Torrents downloading at once; the rest wait in a queue (seeding doesn't count; reorder it with `denco queue`). |
 | `max_connections_per_torrent` | `50` | Peer connections per torrent. |
 | `download_limit`, `upload_limit` | `0` (unlimited) | Total speed, e.g. `2M`, `500K`, `1.5 MB/s` (a bare number is KB/s). |
 | `seed_ratio` | `0` (no limit) | Stop seeding a torrent at this ratio (uploaded ÷ downloaded). |

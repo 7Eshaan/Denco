@@ -41,7 +41,7 @@ func torrents() []engine.Torrent {
 	t3 := sintel()
 
 	t4 := base(4, "archlinux-2026.11.01-x86_64.iso", engine.StateMetadata, 0, 0)
-	t4.HasMetadata, t4.Peers, t4.MetaHave, t4.MetaTotal = false, 4, 2, 3
+	t4.HasMetadata, t4.Complete, t4.Peers, t4.MetaHave, t4.MetaTotal = false, false, 4, 2, 3
 
 	t5 := base(5, "Fedora-Workstation-Live-43-x86_64.iso", engine.StatePaused, 2_300*mb, 506*mb)
 	t5.Ratio = 0.11
@@ -53,7 +53,21 @@ func torrents() []engine.Torrent {
 
 	t8 := base(8, "openSUSE-Tumbleweed-DVD-x86_64-Current.iso", engine.StateStalled, 4_700*mb, 4_286*mb)
 	t8.Ratio = 0.31
-	return []engine.Torrent{t1, t2, t3, t4, t5, t6, t7, t8}
+	all := []engine.Torrent{t1, t2, t3, t4, t5, t6, t7, t8}
+	queued := 0
+	for _, t := range all {
+		if !t.Complete {
+			queued++
+		}
+	}
+	n := 0
+	for i := range all { // queue positions in list order (D58)
+		if !all[i].Complete {
+			n++
+			all[i].Queue, all[i].QueueLength = n, queued
+		}
+	}
+	return all
 }
 
 // sintel is the multi-file torrent shown in the details screenshot.
@@ -120,6 +134,12 @@ var errDemo = errors.New("the demo daemon doesn't change anything")
 
 func (demo) Pause(context.Context, string) (engine.Torrent, error)  { return engine.Torrent{}, errDemo }
 func (demo) Resume(context.Context, string) (engine.Torrent, error) { return engine.Torrent{}, errDemo }
+func (demo) ForceStart(context.Context, string) (engine.Torrent, error) {
+	return engine.Torrent{}, errDemo
+}
+func (demo) MoveInQueue(context.Context, string, string) (engine.Torrent, error) {
+	return engine.Torrent{}, errDemo
+}
 func (demo) Remove(context.Context, string, bool) (engine.Removed, error) {
 	return engine.Removed{}, errDemo
 }

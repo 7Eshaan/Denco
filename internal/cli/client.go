@@ -280,19 +280,28 @@ func withClient(e *env, f func(context.Context, *ipc.Client) error) int {
 	return 0
 }
 
-// pauseFlags parses pause/resume's flags; -uploads means "only uploads".
-func pauseFlags(e *env, name string, args []string) (uploads bool, refs []string, ok bool) {
+// pauseFlags parses pause/resume's flags; -uploads means "only uploads",
+// and resume's -force starts torrents past the download queue.
+func pauseFlags(e *env, name string, args []string) (uploads, force bool, refs []string, ok bool) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
 	up := fs.Bool("uploads", false, "only uploads: keep downloading, stop sending data to peers")
-	if err := fs.Parse(args); err != nil {
-		return false, nil, false
+	var f *bool
+	if name == "resume" {
+		f = fs.Bool("force", false, "start now even if max_active_downloads torrents are running")
 	}
-	return *up, fs.Args(), true
+	if err := fs.Parse(args); err != nil {
+		return false, false, nil, false
+	}
+	if f != nil && *f && *up {
+		fmt.Fprintln(e.stderr, "denco: use -uploads or -force, not both")
+		return false, false, nil, false
+	}
+	return *up, f != nil && *f, fs.Args(), true
 }
 
 func cmdPause(e *env, args []string) int {
-	uploads, refs, ok := pauseFlags(e, "pause", args)
+	uploads, _, refs, ok := pauseFlags(e, "pause", args)
 	if !ok {
 		return 2
 	}
@@ -309,9 +318,16 @@ func cmdPause(e *env, args []string) int {
 }
 
 func cmdResume(e *env, args []string) int {
-	uploads, refs, ok := pauseFlags(e, "resume", args)
+	uploads, force, refs, ok := pauseFlags(e, "resume", args)
 	if !ok {
 		return 2
+	}
+	if force {
+		return forEach(e, "resume -force", refs, func(ctx context.Context, c *ipc.Client, ref string) (string, error) {
+			t, err := c.ForceStart(ctx, ref)
+			return fmt.Sprintf("Force-started #%d %s (%s; ignores max_active_downloads until paused or resumed normally)",
+				t.ID, t.Name, strings.ToLower(stateLabel(t.State))), err
+		})
 	}
 	if uploads {
 		return forEach(e, "resume -uploads", refs, func(ctx context.Context, c *ipc.Client, ref string) (string, error) {
@@ -322,6 +338,42 @@ func cmdResume(e *env, args []string) int {
 	return forEach(e, "resume", refs, func(ctx context.Context, c *ipc.Client, ref string) (string, error) {
 		t, err := c.Resume(ctx, ref)
 		return fmt.Sprintf("Resuming #%d %s (%s)", t.ID, t.Name, strings.ToLower(stateLabel(t.State))), err
+	})
+}
+
+const queueUsage = `usage: denco queue top|up|down|bottom <id>...
+  top / bottom   start it first / last of the waiting downloads
+  up / down      swap it with the download before / after it
+  The queue decides which downloads run when more than max_active_downloads
+  are waiting; 'denco list' shows each one's place (Q). Seeding torrents
+  aren't queued.`
+
+// cmdQueue moves downloads in the queue (D58).
+func cmdQueue(e *env, args []string) int {
+	if len(args) < 2 || !slices.Contains([]string{"top", "up", "down", "bottom"}, args[0]) || slices.Contains(args[1:], "all") {
+		fmt.Fprintln(e.stderr, queueUsage)
+		return 2
+	}
+	move, refs := args[0], args[1:]
+	order := slices.Clone(refs)
+	if move == "top" || move == "down" {
+		// Keep the order given: the first one named ends up first.
+		slices.Reverse(order)
+	}
+	return withClient(e, func(ctx context.Context, c *ipc.Client) error {
+		for _, ref := range order {
+			if _, err := c.MoveInQueue(ctx, ref, move); err != nil {
+				return fmt.Errorf("%s: %w", ref, err)
+			}
+		}
+		for _, ref := range refs { // where each one ended up, after all the moves
+			t, err := c.Get(ctx, ref)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(e.stdout, "#%d %s: queue position %d of %d\n", t.ID, t.Name, t.Queue, t.QueueLength)
+		}
+		return nil
 	})
 }
 

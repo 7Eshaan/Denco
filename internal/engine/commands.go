@@ -91,7 +91,7 @@ func (e *Engine) Add(raw []byte, opts AddOptions) (Torrent, error) {
 
 	t := &entry{
 		id: e.nextID, hash: mi.InfoHash, mi: mi, layout: layout, paused: opts.Paused,
-		have: bitfield.New(mi.Info.NumPieces()),
+		have: bitfield.New(mi.Info.NumPieces()), queue: e.nextQueueLocked(),
 		state: resume.State{
 			ID:          e.nextID,
 			InfoHash:    mi.InfoHash.String(),
@@ -106,6 +106,7 @@ func (e *Engine) Add(raw []byte, opts AddOptions) (Torrent, error) {
 			Skip:        skip,
 		},
 	}
+	t.state.Queue = t.queue
 	// Persist first: if this fails nothing has changed, and once it succeeds
 	// the torrent survives a daemon restart even before it starts.
 	if err := e.store.Save(&t.state, mi.Raw); err != nil {
@@ -134,6 +135,7 @@ func (e *Engine) Pause(ref string) (Torrent, error) {
 	t.err = nil
 	if !t.paused {
 		t.paused = true
+		t.forced = false // resuming puts it back in the queue
 		if t.running {
 			t.cancel() // the run goroutine saves the paused flag when it stops
 		} else {
@@ -148,7 +150,15 @@ func (e *Engine) Pause(ref string) (Torrent, error) {
 // restarts a finished one — unless its seeding limits would stop it again
 // at once (ErrSeedLimit; SetSeedMode(SeedOn) seeds it regardless).
 // It starts now, or waits in the queue if MaxActive torrents are downloading.
-func (e *Engine) Resume(ref string) (Torrent, error) {
+// Resuming a force-started torrent puts it back under the queue's rules.
+func (e *Engine) Resume(ref string) (Torrent, error) { return e.resume(ref, false) }
+
+// ForceStart is Resume, except the torrent starts even when MaxActive
+// torrents are downloading (and doesn't take a slot) until it is paused or
+// resumed normally (D58).
+func (e *Engine) ForceStart(ref string) (Torrent, error) { return e.resume(ref, true) }
+
+func (e *Engine) resume(ref string, force bool) (Torrent, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	t, err := e.resolveLocked(ref)
@@ -162,14 +172,21 @@ func (e *Engine) Resume(ref string) (Torrent, error) {
 			return Torrent{}, fmt.Errorf("%w: %s (seed it anyway: denco seed on %d)", ErrSeedLimit, reason, t.id)
 		}
 	}
+	changed := t.forced != force
+	t.forced = force
 	if t.paused || t.err != nil || t.finished {
 		t.stopRetryLocked(true) // the user's retry; earlier failures are forgotten
 		t.paused, t.err, t.finished = false, nil, false
-		if !t.running {
-			e.persistLocked(t)
-		}
-		e.log.Info("torrent resumed", "id", t.id, "torrent", t.name())
+		changed = true
+		e.log.Info("torrent resumed", "id", t.id, "torrent", t.name(), "forced", force)
 	}
+	switch {
+	case !changed:
+	case t.saver != nil:
+		t.saver.Update(t.flagsTo) // its next save records it
+	case !t.running:
+		e.persistLocked(t)
+	} // else: starting or stopping; finish() saves what changed
 	e.scheduleLocked()
 	return e.viewLocked(t), nil
 }

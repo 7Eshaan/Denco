@@ -87,6 +87,11 @@ type State struct {
 	Seed          string `json:"seed,omitempty"`
 	Finished      bool   `json:"finished,omitempty"`
 	SeedSeconds   int64  `json:"seed_seconds,omitempty"`
+	// Queue (D58). Queue orders torrents for the download queue: smaller
+	// starts first; 0 = not assigned yet (the daemon assigns one on load).
+	// Forced: start it even when max_active_downloads torrents are running.
+	Queue  int  `json:"queue,omitempty"`
+	Forced bool `json:"forced,omitempty"`
 }
 
 // FileStamp is a file's size and mtime when the state was saved.

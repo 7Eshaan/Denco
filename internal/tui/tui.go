@@ -47,6 +47,8 @@ type Client interface {
 	Peers(ctx context.Context, ref string) ([]engine.Peer, error)
 	Pause(ctx context.Context, ref string) (engine.Torrent, error)
 	Resume(ctx context.Context, ref string) (engine.Torrent, error)
+	ForceStart(ctx context.Context, ref string) (engine.Torrent, error)
+	MoveInQueue(ctx context.Context, ref, move string) (engine.Torrent, error)
 	Remove(ctx context.Context, ref string, deleteFiles bool) (engine.Removed, error)
 	AddTorrent(ctx context.Context, arg string) (engine.Torrent, error)
 }
@@ -303,6 +305,15 @@ func perform(ctx context.Context, lnk *link, a action) resultEvent {
 	case actResume:
 		t, err := c.Resume(ctx, ref)
 		return result(err, "Resumed #%d %s (%s)", t.ID, clean(t.Name), strings.ToLower(stateLabel(t.State)))
+	case actForce:
+		t, err := c.ForceStart(ctx, ref)
+		return result(err, "Force-started #%d %s (ignores max_active_downloads; f again queues it)", t.ID, clean(t.Name))
+	case actUnforce:
+		t, err := c.Resume(ctx, ref)
+		return result(err, "#%d %s follows the queue again (position %d of %d)", t.ID, clean(t.Name), t.Queue, t.QueueLength)
+	case actMove:
+		t, err := c.MoveInQueue(ctx, ref, a.move)
+		return result(err, "Moved #%d %s to queue position %d of %d", t.ID, clean(t.Name), t.Queue, t.QueueLength)
 	case actRemove:
 		r, err := c.Remove(ctx, ref, a.deleteFiles)
 		what := "files kept"

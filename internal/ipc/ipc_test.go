@@ -266,3 +266,31 @@ func TestAPISeeding(t *testing.T) {
 		t.Errorf("negative limit: %v", err)
 	}
 }
+
+func TestAPIQueue(t *testing.T) {
+	c, _, _ := setup(t)
+	ctx := context.Background()
+	for _, name := range []string{"q1", "q2", "q3"} {
+		if _, err := c.Add(ctx, AddRequest{Torrent: testTorrent(t, name), Paused: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := c.MoveInQueue(ctx, "3", "top")
+	if err != nil || v.Queue != 1 || v.QueueLength != 3 {
+		t.Fatalf("move = queue %d of %d, %v", v.Queue, v.QueueLength, err)
+	}
+	list, _ := c.List(ctx)
+	if len(list) != 3 || list[0].ID != 3 {
+		t.Fatalf("list not in queue order: %+v", list)
+	}
+	var apiErr *Error
+	if _, err := c.MoveInQueue(ctx, "1", "sideways"); !errors.As(err, &apiErr) || apiErr.Code != CodeInvalid {
+		t.Errorf("bad move: %v", err)
+	}
+	if v, err := c.ForceStart(ctx, "2"); err != nil || !v.Forced {
+		t.Fatalf("force = %+v, %v", v.Forced, err)
+	}
+	if v, err := c.Resume(ctx, "2"); err != nil || v.Forced {
+		t.Fatalf("resume after force = %+v, %v", v.Forced, err)
+	}
+}

@@ -286,11 +286,11 @@ func TestRenderList(t *testing.T) {
 			DownloadRate: 4_200_000, UploadRate: 120_000, ETA: 7*time.Minute + 42*time.Second, Peers: 18},
 		{ID: 2, Name: "sample.zip", State: engine.StateSeeding, Complete: true, HasMetadata: true, TotalBytes: 850_000_000, WantedBytes: 850_000_000, DoneBytes: 850_000_000},
 		{ID: 3, Name: strings.Repeat("long name ", 10), State: engine.StateError, Error: "disk full", HasMetadata: true, TotalBytes: 1, WantedBytes: 1},
-		{ID: 4, Name: "from a magnet", State: engine.StateMetadata, Peers: 3},
+		{ID: 4, Name: "from a magnet", State: engine.StateMetadata, Peers: 3, Forced: true},
 	})
 	out := b.String()
 	for _, want := range []string{"Downloading (3)", "Completed (1)", "5.2 GB", "65.4%", "4.2 MB/s", "120.0 KB/s",
-		"7m 42s", "18", "Seeding", "100%", "#3 failed: disk full", "…", "Fetching metadata"} {
+		"7m 42s", "18", "Seeding", "100%", "#3 failed: disk full", "…", "Fetching metadata", "ID  Q  NAME", "4   F  from a magnet"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}

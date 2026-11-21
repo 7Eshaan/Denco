@@ -51,6 +51,8 @@ Managing torrents (starts the daemon in the background if it isn't running):
   denco peers <id>                             connected peers
   denco pause [-uploads] <id>... | all         pause torrents (-uploads: only uploading)
   denco resume [-uploads] <id>... | all        resume paused, failed or finished torrents
+  denco resume -force <id>...                  start now, even if max_active_downloads are running
+  denco queue top|up|down|bottom <id>...       move downloads in the queue (see Q in 'denco list')
   denco seed on|off|default <id>... | all      seed with no limits / don't seed / use the
                                                seed_ratio and seed_time limits
   denco remove [-delete] <id>...               remove torrents (-delete also deletes their files)
@@ -145,6 +147,8 @@ func runEnv(e *env, args []string) int {
 		return cmdPause(e, rest)
 	case "resume":
 		return cmdResume(e, rest)
+	case "queue":
+		return cmdQueue(e, rest)
 	case "remove", "rm":
 		return cmdRemove(e, rest)
 	case "status":

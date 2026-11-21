@@ -526,8 +526,8 @@ func TestLegacyStateGetsAnID(t *testing.T) {
 	}
 	e.Close()
 	saved, _, _ := store.Load(f.mi.InfoHash)
-	if saved.ID != 1 {
-		t.Fatalf("saved ID = %d", saved.ID)
+	if saved.ID != 1 || saved.Queue != 1 {
+		t.Fatalf("saved ID = %d, queue = %d; want 1, 1", saved.ID, saved.Queue)
 	}
 }
 

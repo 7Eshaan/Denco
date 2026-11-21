@@ -25,7 +25,7 @@ const (
 	twoColumnsMin = 110
 )
 
-var detailHints = []hint{{"esc", "back"}, {"tab", "files/peers"}, {"↑↓", "scroll"}, {"p", "pause"}, {"r", "resume"}, {"d", "remove"}, {"?", "help"}, {"q", "quit"}}
+var detailHints = []hint{{"esc", "back"}, {"tab", "files/peers"}, {"↑↓", "scroll"}, {"p", "pause"}, {"r", "resume"}, {"d", "remove"}, {"K/J", "queue"}, {"?", "help"}, {"q", "quit"}}
 
 // infoItem is one "label: value" line; a value with bar ≥ 0 gets a
 // progress bar in front of its text.
@@ -75,6 +75,12 @@ func (m *model) detailInfo() []infoItem {
 			frac = float64(t.DoneBytes) / float64(t.WantedBytes)
 		}
 		items = append(items, infoItem{label: "Progress", text: p, bar: frac, done: t.Complete})
+	}
+	switch {
+	case t.Forced && !t.Complete:
+		items = append(items, item("Queue", fmt.Sprintf("forced, %d of %d (f queues it again)", t.Queue, t.QueueLength), cYellow))
+	case t.Queue > 0:
+		items = append(items, item("Queue", fmt.Sprintf("%d of %d (K J T B move it, f forces it)", t.Queue, t.QueueLength)))
 	}
 	if running(t) {
 		items = append(items, item("Speed", "↓ "+format.Speed(t.DownloadRate)+"   ↑ "+format.Speed(t.UploadRate)))

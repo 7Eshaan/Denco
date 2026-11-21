@@ -166,6 +166,18 @@ func (c *fakeClient) Resume(_ context.Context, ref string) (engine.Torrent, erro
 	c.setState(ref, engine.StateDownloading)
 	return c.find(ref)
 }
+func (c *fakeClient) ForceStart(_ context.Context, ref string) (engine.Torrent, error) {
+	if err := c.record("force " + ref); err != nil {
+		return engine.Torrent{}, err
+	}
+	return c.find(ref)
+}
+func (c *fakeClient) MoveInQueue(_ context.Context, ref, move string) (engine.Torrent, error) {
+	if err := c.record("queue " + move + " " + ref); err != nil {
+		return engine.Torrent{}, err
+	}
+	return c.find(ref)
+}
 func (c *fakeClient) Remove(_ context.Context, ref string, del bool) (engine.Removed, error) {
 	call := "remove " + ref
 	if del {
@@ -232,7 +244,7 @@ func TestRunShowsLiveDataAndRunsActions(t *testing.T) {
 	c := &fakeClient{torrents: fakeTorrents(3)}
 	done := runAsync(context.Background(), term, Config{Client: c, Refresh: 20 * time.Millisecond, Color: true})
 
-	waitFor(t, "the list on screen", func() bool { return strings.Contains(term.output(), "torrent-01-download") })
+	waitFor(t, "the list on screen", func() bool { return strings.Contains(term.output(), "torrent-01-downlo") })
 	if !strings.HasPrefix(term.output(), enterScreen) {
 		t.Error("Run should switch to the alternate screen first")
 	}

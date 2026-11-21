@@ -62,6 +62,18 @@ func peersCell(t engine.Torrent) (string, []string) {
 	return strconv.Itoa(t.Peers), nil
 }
 
+// queueCell is the place in the download queue: the position, F when
+// force-started, nothing for a complete torrent (D58).
+func queueCell(t engine.Torrent) (string, []string) {
+	switch {
+	case t.Forced && !t.Complete:
+		return "F", []string{cYellow, sBold}
+	case t.Queue > 0:
+		return strconv.Itoa(t.Queue), []string{cGray}
+	}
+	return "", nil
+}
+
 func ratioText(r float64) string {
 	if r < 0 {
 		return "-"

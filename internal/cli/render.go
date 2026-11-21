@@ -104,6 +104,18 @@ func portMapText(st *portmap.Status, port uint16) string {
 	}
 }
 
+// queueText is a torrent's place in the download queue for the Q column:
+// its position, F if force-started, "-" if complete (not queued).
+func queueText(t engine.Torrent) string {
+	switch {
+	case t.Forced && !t.Complete:
+		return "F"
+	case t.Queue > 0:
+		return strconv.Itoa(t.Queue)
+	}
+	return "-"
+}
+
 // ratioText shows a share ratio with two decimals, "-" when unknown.
 func ratioText(r float64) string {
 	if r < 0 {
@@ -154,7 +166,7 @@ func renderList(w io.Writer, list []engine.Torrent) {
 	section := func(title string, ts []engine.Torrent) {
 		fmt.Fprintf(w, "%s (%d)\n", title, len(ts))
 		tw := newTable(w)
-		fmt.Fprintln(tw, "ID\tNAME\tSIZE\tPROGRESS\tSTATUS\tDOWN\tUP\tETA\tPEERS\tRATIO")
+		fmt.Fprintln(tw, "ID\tQ\tNAME\tSIZE\tPROGRESS\tSTATUS\tDOWN\tUP\tETA\tPEERS\tRATIO")
 		for _, t := range ts {
 			down, up, eta, peers := "-", "-", "-", "-"
 			if running(t) {
@@ -169,7 +181,7 @@ func renderList(w io.Writer, list []engine.Torrent) {
 			if t.State == engine.StateMetadata {
 				peers = fmt.Sprint(t.Peers)
 			}
-			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, short(t.Name, maxNameWidth),
+			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, queueText(t), short(t.Name, maxNameWidth),
 				sizeText(t), progressText(t), stateLabel(t.State), down, up, eta, peers, ratioText(t.Ratio))
 		}
 		tw.Flush()
@@ -225,6 +237,12 @@ func renderInfo(w io.Writer, t engine.Torrent) {
 	row("Progress", progressText(t))
 	row("Pieces", fmt.Sprintf("%d / %d  (%s each)", t.PiecesHave, t.PiecesTotal, format.Bytes(t.PieceLength)))
 	row("Files", fmt.Sprint(t.Files))
+	switch {
+	case t.Forced && !t.Complete:
+		row("Queue", fmt.Sprintf("force-started: runs even when max_active_downloads are running (position %d of %d; 'denco resume %d' queues it again)", t.Queue, t.QueueLength, t.ID))
+	case t.Queue > 0:
+		row("Queue", fmt.Sprintf("%d of %d ('denco queue top|up|down|bottom %d' moves it)", t.Queue, t.QueueLength, t.ID))
+	}
 	blank()
 	if running(t) {
 		row("Download Speed", format.Speed(t.DownloadRate))

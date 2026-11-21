@@ -204,6 +204,7 @@ const (
 func listColumns(w int) []column {
 	all := []column{
 		{title: "ID", w: 3, right: true, cell: func(t engine.Torrent) (string, []string) { return strconv.Itoa(t.ID), []string{cGray} }},
+		{title: "Q", w: 3, right: true, cell: queueCell},
 		{title: "NAME", cell: func(t engine.Torrent) (string, []string) { return clean(t.Name), nil }},
 		{title: "SIZE", w: 9, right: true, cell: sizeCell},
 		{title: "PROGRESS", w: barCellWidth, bar: true},
@@ -233,7 +234,7 @@ func listColumns(w int) []column {
 		return out
 	}
 	cols := all
-	for _, step := range []string{"RATIO", "PEERS", "ETA", "UP", "bar", "SIZE", "DOWN", "STATUS"} {
+	for _, step := range []string{"RATIO", "Q", "PEERS", "ETA", "UP", "bar", "SIZE", "DOWN", "STATUS"} {
 		if need(cols) <= w {
 			break
 		}
@@ -373,7 +374,7 @@ func (m *model) messageLine(st styler) string {
 
 type hint struct{ key, what string }
 
-var listHints = []hint{{"↑↓", "move"}, {"enter", "details"}, {"a", "add"}, {"p", "pause"}, {"r", "resume"}, {"d", "remove"}, {"?", "help"}, {"q", "quit"}}
+var listHints = []hint{{"↑↓", "move"}, {"enter", "details"}, {"a", "add"}, {"p", "pause"}, {"r", "resume"}, {"d", "remove"}, {"K/J", "queue"}, {"?", "help"}, {"q", "quit"}}
 
 func (m *model) hints(st styler, hs []hint, right string) string {
 	segs := []seg{s(" ")}

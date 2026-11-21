@@ -81,6 +81,9 @@ const (
 	actResume
 	actRemove
 	actAdd
+	actForce   // force start (D58)
+	actUnforce // back under the queue's rules (a normal resume)
+	actMove    // move in the download queue
 )
 
 // action is a daemon operation for the run loop to start.
@@ -90,6 +93,7 @@ type action struct {
 	name        string
 	deleteFiles bool
 	arg         string // actAdd: file path, magnet link or URL
+	move        string // actMove: "top", "up", "down" or "bottom"
 }
 
 const (
@@ -309,7 +313,7 @@ func (m *model) listKey(k Key) []action {
 			m.view, m.detailID, m.detail = viewDetails, t.ID, t
 			m.files, m.peers, m.detailErr, m.tab, m.scroll = nil, nil, "", tabFiles, 0
 		}
-	case isRune(k, 'p'), isRune(k, 'r'), isRune(k, 'd'):
+	case isTorrentKey(k):
 		t, ok := m.selected()
 		if !ok {
 			m.setFlash("No torrent selected", true)
@@ -339,7 +343,7 @@ func (m *model) detailsKey(k Key) []action {
 		m.scroll = 0
 	case k.Code == KeyEnd || isRune(k, 'G'):
 		m.scroll = m.tabLen()
-	case isRune(k, 'p'), isRune(k, 'r'), isRune(k, 'd'):
+	case isTorrentKey(k):
 		return m.torrentKey(k.Rune, m.detail)
 	}
 	m.clampScroll()
@@ -357,18 +361,43 @@ func (m *model) clampScroll() {
 	m.scroll = max(0, min(m.scroll, m.tabLen()-m.detailRows()))
 }
 
-// torrentKey handles p, r and d for torrent t.
+// queueMoves are the keys that move a torrent in the download queue:
+// Shift plus the movement keys (K up, J down), T top and B bottom.
+var queueMoves = map[rune]string{'K': "up", 'J': "down", 'T': "top", 'B': "bottom"}
+
+// isTorrentKey: a key that acts on the selected (or shown) torrent.
+func isTorrentKey(k Key) bool {
+	if k.Code != KeyRune {
+		return false
+	}
+	_, move := queueMoves[k.Rune]
+	return move || k.Rune == 'p' || k.Rune == 'r' || k.Rune == 'd' || k.Rune == 'f'
+}
+
+// torrentKey handles p, r, d, f and the queue moves for torrent t.
 func (m *model) torrentKey(r rune, t engine.Torrent) []action {
 	if m.conn != connUp {
 		m.setFlash("Not connected to the daemon", true)
 		return nil
 	}
 	name := clean(t.Name)
+	if move, ok := queueMoves[r]; ok {
+		if t.Complete {
+			m.setFlash(fmt.Sprintf("#%d is complete: the queue only orders downloads", t.ID), true)
+			return nil
+		}
+		return m.start(action{kind: actMove, id: t.ID, name: name, move: move}, "Moving "+move)
+	}
 	switch r {
 	case 'p':
 		return m.start(action{kind: actPause, id: t.ID, name: name}, "Pausing")
 	case 'r':
 		return m.start(action{kind: actResume, id: t.ID, name: name}, "Resuming")
+	case 'f':
+		if t.Forced {
+			return m.start(action{kind: actUnforce, id: t.ID, name: name}, "Queuing again")
+		}
+		return m.start(action{kind: actForce, id: t.ID, name: name}, "Force-starting")
 	default: // 'd'
 		m.mode, m.confirmID, m.confirmName = modeConfirm, t.ID, name
 		return nil

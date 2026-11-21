@@ -7,8 +7,9 @@
 //
 // Files:
 //
-//	engine.go   – Engine, Open/Close, the queue and the per-torrent run goroutine
-//	commands.go – Add, Pause, Resume, Remove and torrent lookup
+//	engine.go   – Engine, Open/Close, scheduling and the per-torrent run goroutine
+//	queue.go    – the download queue: order, moves, force start (D58)
+//	commands.go – Add, Pause, Resume, ForceStart, Remove and torrent lookup
 //	view.go     – read-only views (Torrent, File, Peer, Overview) for the UI
 //	magnet.go   – magnet links: AddMagnet and fetching metadata before the first run
 //
@@ -27,7 +28,6 @@ import (
 	"net"
 	"net/netip"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -130,6 +130,8 @@ type entry struct {
 	uploadsPaused bool   // choke every peer; downloading goes on
 	seedMode      string // "" = global limits, SeedOn, SeedOff
 	finished      bool   // stopped seeding (limit or mode off); not restarted on its own
+	queue         int    // download-queue order key: smaller starts first (queue.go)
+	forced        bool   // starts even when MaxActive downloads are running
 
 	removing bool  // Remove is waiting for the run goroutine
 	err      error // why it last stopped; cleared by Resume or a retry
@@ -331,6 +333,7 @@ func (e *Engine) load() error {
 			e.log.Warn("saving torrent ID", "name", t.state.Name, "err", err)
 		}
 	}
+	e.assignQueueLocked()
 	return nil
 }
 
@@ -338,7 +341,8 @@ func (e *Engine) load() error {
 // it has metadata).
 func (e *Engine) restoreEntry(en resume.Entry) (*entry, error) {
 	st := en.State
-	t := &entry{state: *st, paused: st.Paused, uploadsPaused: st.UploadsPaused, seedMode: st.Seed, finished: st.Finished}
+	t := &entry{state: *st, paused: st.Paused, uploadsPaused: st.UploadsPaused, seedMode: st.Seed, finished: st.Finished,
+		queue: max(st.Queue, 0), forced: st.Forced}
 	if en.Meta == nil { // magnet link still waiting for metadata
 		h, err := hashFromHex(en.State.InfoHash)
 		t.hash = h
@@ -399,19 +403,20 @@ func (e *Engine) SetLimits(down, up int64) {
 // --- queue ------------------------------------------------------------------------------
 
 // scheduleLocked starts every torrent that should be running: all
-// unpaused complete ones (seeding), and incomplete ones up to MaxActive, in
-// ID order. Called whenever something changes. Caller holds e.mu.
+// unpaused complete ones (seeding), forced ones, and other incomplete ones
+// up to MaxActive, in queue order (D58). Called whenever something
+// changes. Caller holds e.mu.
 func (e *Engine) scheduleLocked() {
 	if e.closed {
 		return
 	}
 	active := 0
 	for _, t := range e.byID {
-		if t.running && !t.completeLocked() {
+		if t.running && !t.forced && !t.completeLocked() {
 			active++
 		}
 	}
-	for _, t := range e.sortedLocked() {
+	for _, t := range e.queueOrderLocked() {
 		if t.running || t.paused || t.removing || t.err != nil {
 			continue
 		}
@@ -433,7 +438,7 @@ func (e *Engine) scheduleLocked() {
 				continue
 			}
 		}
-		if !complete {
+		if !complete && !t.forced {
 			if active >= e.cfg.MaxActive {
 				continue // stays queued
 			}
@@ -471,15 +476,6 @@ func (t *entry) wantLocked() *bitfield.Bitfield {
 		return nil
 	}
 	return pieces.Wanted(&t.mi.Info, t.skipLocked())
-}
-
-func (e *Engine) sortedLocked() []*entry {
-	out := make([]*entry, 0, len(e.byID))
-	for _, t := range e.byID {
-		out = append(out, t)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].id < out[j].id })
-	return out
 }
 
 func (e *Engine) startLocked(t *entry) {
