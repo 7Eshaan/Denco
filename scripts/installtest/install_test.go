@@ -165,21 +165,44 @@ func shells(t *testing.T) []string {
 	return out
 }
 
+// locales the scripts run under: CI's macOS runner uses UTF-8, where
+// macOS's sh once read "$arch" plus an ellipsis as one variable name.
+var locales = []string{"C", "en_US.UTF-8"}
+
 func TestInstallSh(t *testing.T) {
 	for _, sh := range shells(t) {
-		t.Run(sh, func(t *testing.T) {
-			r := newRelease(t)
-			res := r.run(t, sh, []string{"../install.sh"})
-			if res.code != 0 || res.ran != "setup" || !strings.Contains(res.out, "Checksum OK") {
-				t.Fatalf("exit %d, denco ran with %q:\n%s", res.code, res.ran, res.out)
+		for _, loc := range locales {
+			t.Run(sh+"/"+loc, func(t *testing.T) {
+				r := newRelease(t)
+				res := r.run(t, sh, []string{"../install.sh"}, "LC_ALL="+loc)
+				if res.code != 0 || res.ran != "setup" || !strings.Contains(res.out, "Checksum OK") {
+					t.Fatalf("exit %d, denco ran with %q:\n%s", res.code, res.ran, res.out)
+				}
+				if !r.asked("/releases/latest") || !strings.Contains(res.out, version) {
+					t.Errorf("the latest version wasn't looked up: %v", r.requests)
+				}
+				if len(res.leftTmp) != 0 {
+					t.Errorf("left in the temp folder: %v", res.leftTmp)
+				}
+			})
+		}
+	}
+}
+
+// The scripts are plain ASCII (see locales).
+func TestScriptsAreASCII(t *testing.T) {
+	for _, f := range []string{"../install.sh", "../install.ps1"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, c := range b {
+			if c >= 0x80 {
+				line := 1 + bytes.Count(b[:i], []byte("\n"))
+				t.Errorf("%s:%d: a non-ASCII byte", f, line)
+				break
 			}
-			if !r.asked("/releases/latest") || !strings.Contains(res.out, version) {
-				t.Errorf("the latest version wasn't looked up: %v", r.requests)
-			}
-			if len(res.leftTmp) != 0 {
-				t.Errorf("left in the temp folder: %v", res.leftTmp)
-			}
-		})
+		}
 	}
 }
 
@@ -201,10 +224,16 @@ func TestInstallShPiped(t *testing.T) {
 
 func TestInstallShRefuses(t *testing.T) {
 	shells(t)
+	for _, loc := range locales {
+		t.Run(loc, func(t *testing.T) { installShRefuses(t, "LC_ALL="+loc) })
+	}
+}
+
+func installShRefuses(t *testing.T, locale string) {
 	t.Run("checksum mismatch", func(t *testing.T) {
 		r := newRelease(t)
 		r.setSums(func(s string) string { return "00000000" + s[8:] })
-		res := r.run(t, "sh", []string{"../install.sh"})
+		res := r.run(t, "sh", []string{"../install.sh"}, locale)
 		if res.code == 0 || res.ran != "" || !strings.Contains(res.out, "checksum mismatch") {
 			t.Fatalf("exit %d, ran %q:\n%s", res.code, res.ran, res.out)
 		}
@@ -215,39 +244,49 @@ func TestInstallShRefuses(t *testing.T) {
 	t.Run("not in SHA256SUMS", func(t *testing.T) {
 		r := newRelease(t)
 		r.setSums(func(string) string { return "abc  other.tar.gz\n" })
-		res := r.run(t, "sh", []string{"../install.sh"})
+		res := r.run(t, "sh", []string{"../install.sh"}, locale)
 		if res.code == 0 || res.ran != "" || !strings.Contains(res.out, "isn't listed") {
 			t.Fatalf("exit %d, ran %q:\n%s", res.code, res.ran, res.out)
 		}
 	})
 	t.Run("setup fails", func(t *testing.T) {
 		r := newRelease(t)
-		res := r.run(t, "sh", []string{"../install.sh"}, "DENCO_FAKE_EXIT=2")
+		res := r.run(t, "sh", []string{"../install.sh"}, locale, "DENCO_FAKE_EXIT=2")
 		if res.code == 0 || !strings.Contains(res.out, "denco setup failed") {
 			t.Fatalf("exit %d:\n%s", res.code, res.out)
 		}
 	})
 	t.Run("no such version", func(t *testing.T) {
 		r := newRelease(t)
-		res := r.run(t, "sh", []string{"../install.sh"}, "DENCO_VERSION=v0.0.1")
+		res := r.run(t, "sh", []string{"../install.sh"}, locale, "DENCO_VERSION=v0.0.1")
 		if res.code == 0 || res.ran != "" || !strings.Contains(res.out, "download failed") || r.asked("/releases/latest") {
 			t.Fatalf("exit %d, ran %q:\n%s", res.code, res.ran, res.out)
 		}
 	})
 }
 
-// install.ps1 runs only where Windows PowerShell or pwsh is (Windows CI).
+// install.ps1 runs under every PowerShell found — Windows PowerShell 5.1
+// and PowerShell 7 on Windows CI. The test process inherits CI's
+// PSModulePath (PowerShell 7's), the condition that broke Get-FileHash
+// in 5.1; the script now needs no module cmdlets for its real work.
 func TestInstallPs1(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("install.ps1 is for Windows")
 	}
-	ps := "powershell"
-	if _, err := exec.LookPath(ps); err != nil {
-		ps = "pwsh"
+	found := false
+	for _, ps := range []string{"powershell", "pwsh"} {
 		if _, err := exec.LookPath(ps); err != nil {
-			t.Skip("no PowerShell")
+			continue
 		}
+		found = true
+		t.Run(ps, func(t *testing.T) { installPs1(t, ps) })
 	}
+	if !found {
+		t.Skip("no PowerShell")
+	}
+}
+
+func installPs1(t *testing.T, ps string) {
 	base := []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"}
 	t.Run("file", func(t *testing.T) {
 		r := newRelease(t)
@@ -281,4 +320,30 @@ func TestInstallPs1(t *testing.T) {
 			t.Fatalf("exit %d:\n%s", res.code, res.out)
 		}
 	})
+}
+
+// An unexpected error after the cleanup trap is set still exits non-zero.
+// (macOS's bash 3.2 exits 0 after an unbound variable, $? included; CI
+// reported such failures as "exit 0".)
+func TestInstallShErrorsExitNonZero(t *testing.T) {
+	for _, sh := range shells(t) {
+		t.Run(sh, func(t *testing.T) {
+			b, err := os.ReadFile("../install.sh")
+			if err != nil {
+				t.Fatal(err)
+			}
+			const after = "trap 'exit 1' INT TERM\n"
+			if !bytes.Contains(b, []byte(after)) {
+				t.Fatal("the trap line moved; update this test")
+			}
+			broken := bytes.Replace(b, []byte(after), []byte(after+": \"$no_such_variable\"\n"), 1)
+			f := filepath.Join(t.TempDir(), "broken.sh")
+			os.WriteFile(f, broken, 0o644)
+			r := newRelease(t)
+			res := r.run(t, sh, []string{f}, "LC_ALL=en_US.UTF-8")
+			if res.code == 0 || res.ran != "" {
+				t.Fatalf("exit %d, ran %q:\n%s", res.code, res.ran, res.out)
+			}
+		})
+	}
 }

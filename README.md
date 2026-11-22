@@ -68,7 +68,7 @@ release's `SHA256SUMS`, and runs `denco setup` (below): Denco ends up in
 your home folder and on your `PATH`, without admin rights or a password.
 Open a new terminal and run `denco help`. Want to read the script first?
 It's [here](scripts/install.sh) ([Windows](scripts/install.ps1)). Needs
-Denco v0.3.0 or later (the first release with `denco setup`).
+Denco v0.3.1 or later (the first release with `denco setup`).
 
 ### Download a prebuilt binary
 

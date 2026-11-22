@@ -8,8 +8,12 @@
 # installs it to ~/.local/bin and puts that on your PATH (no password).
 # Read it first if you like: it does nothing else.
 #
-# DENCO_VERSION=v0.3.0 picks a version instead of the latest.
+# DENCO_VERSION=v0.3.1 picks a version instead of the latest.
 # (DENCO_REPO_URL points elsewhere; the tests use it.)
+#
+# Keep this file ASCII: in UTF-8 locales macOS's sh counts the bytes of
+# characters like an ellipsis as letters, so "$arch" followed by one was
+# read as a longer variable name (CI caught it).
 set -eu
 
 repo=${DENCO_REPO_URL:-https://github.com/7Eshaan/Denco}
@@ -62,9 +66,14 @@ fi
 
 name="denco_${version}_${os}_${arch}"
 tmp=$(mktemp -d 2>/dev/null || mktemp -d -t denco)
-trap 'rm -rf "$tmp"' EXIT INT TERM
+# Clean up on the way out. Any exit before the end is a failure: after
+# some errors (an unbound variable) macOS's bash 3.2 exits 0 and even $?
+# in this trap is 0, so success is marked explicitly instead.
+done=
+trap 'rm -rf "$tmp"; [ -n "$done" ] || exit 1' EXIT
+trap 'exit 1' INT TERM
 
-echo "Downloading Denco $version for $os/$arch…"
+echo "Downloading Denco ${version} for ${os}/${arch}..."
 fetch "$repo/releases/download/$version/$name.tar.gz" "$tmp/$name.tar.gz" ||
 	fail "download failed: $repo/releases/download/$version/$name.tar.gz"
 fetch "$repo/releases/download/$version/SHA256SUMS" "$tmp/SHA256SUMS" ||
@@ -83,4 +92,5 @@ tar -xzf "$tmp/$name.tar.gz" -C "$tmp" || fail "couldn't unpack $name.tar.gz"
 # curl/wget it carries no macOS quarantine flag, so Gatekeeper doesn't
 # block it.
 "$tmp/$name/denco" setup </dev/null ||
-	fail "denco setup failed (Denco $version may be older than 'denco setup': use v0.3.0 or newer)"
+	fail "denco setup failed (Denco $version may be older than 'denco setup': use v0.3.1 or newer)"
+done=1

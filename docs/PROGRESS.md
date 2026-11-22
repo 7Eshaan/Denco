@@ -4,11 +4,22 @@
 installing shouldn't need PATH knowledge; 16a–16e in ROADMAP). Phase 15
 (qBittorrent parity, part 1) is complete.
 
-**Phase 16c — install scripts (D67) · ✅ done, not committed yet.**
+**Release v0.3.0 (Phase 15) · published** — the user tagged 47c1ced (uTP);
+the Release workflow passed. It has no `denco setup` (16a–c came after).
+
+**Phase 16c — install scripts (D67) · committed as a3b1e57; CI failed
+on macOS and Windows, fixes not committed yet.** macOS: an ellipsis after
+`$arch` broke sh in UTF-8 locales, and the failure exited 0; Windows:
+Windows PowerShell 5.1 couldn't load `Get-FileHash` under CI's PowerShell 7
+module path. Fixed (ASCII scripts, explicit success flag, .NET instead of
+module cmdlets) and covered by new tests (both locales, both PowerShells,
+an error must exit non-zero, ASCII check); install.ps1's fix runs first in
+CI.
 `scripts/install.sh` (`curl … | sh`) and `scripts/install.ps1`
 (`irm … | iex`): latest release via the redirect, SHA-256 check, `denco
 setup`, temp folder removed. README leads with the one-liners. They need
-a release with `denco setup` (v0.3.0+); the latest is v0.2.0 today.
+a release with `denco setup` (v0.3.1+): until v0.3.1 is out they install
+v0.3.0 and stop at `setup` with that message.
 install.ps1 has not run anywhere yet (no PowerShell on this Mac): its
 first run is Windows CI.
 
@@ -158,12 +169,13 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** the user commits 16c (D67) and checks CI — the Windows
-job is install.ps1's first real run. Then **tag v0.3.0** (Phase 15 +
-16a–c): the one-liners only work once a release has `denco setup`. After
-that, 16d (Homebrew tap, winget, Scoop — needs a tap repo and tokens on
-the user's account). Still open: a real-Windows try of the double-click /
-setup flow; the real-download smoke test (offered, not run).
+**Next action:** the user commits the CI fixes (with the v0.3.1 wording);
+CI green on all three OSes (the
+Windows job is install.ps1's first real run) → the user tags **v0.3.1**
+(16a–c: double-click, `denco setup`, install scripts), which makes the
+README's one-liners work. Then 16d (Homebrew tap, winget, Scoop — needs a
+tap repo and tokens on the user's account). Still open: a real-Windows try
+of the double-click / setup flow; the real-download smoke test.
 Optional, any time: a release (v0.2.1 for the D57 fix, or v0.3.0 once
 some of Phase 15 is in). Open items, if wanted: the plain
 CLI should `clean` torrent names too (D55), the user's router check

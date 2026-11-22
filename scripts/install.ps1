@@ -7,11 +7,10 @@
 # it to %LocalAppData%\Programs\Denco and puts that on your PATH (no admin
 # rights). Read it first if you like: it does nothing else.
 #
-# $env:DENCO_VERSION = "v0.3.0" picks a version instead of the latest.
+# $env:DENCO_VERSION = "v0.3.1" picks a version instead of the latest.
 # ($env:DENCO_REPO_URL points elsewhere; the tests use it.)
 
 $ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue' # Invoke-WebRequest is far slower with the progress bar
 
 & {
     $repo = if ($env:DENCO_REPO_URL) { $env:DENCO_REPO_URL } else { 'https://github.com/7Eshaan/Denco' }
@@ -47,30 +46,45 @@ $ProgressPreference = 'SilentlyContinue' # Invoke-WebRequest is far slower with 
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("denco-install-" + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tmp | Out-Null
     try {
-        Write-Host "Downloading Denco $version for windows/$arch..."
+        Write-Host "Downloading Denco ${version} for windows/${arch}..."
         $zip = Join-Path $tmp "$name.zip"
         $sums = Join-Path $tmp 'SHA256SUMS'
-        Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/download/$version/$name.zip" -OutFile $zip
-        Invoke-WebRequest -UseBasicParsing -Uri "$repo/releases/download/$version/SHA256SUMS" -OutFile $sums
+        $web = New-Object Net.WebClient
+        try {
+            $web.DownloadFile("$repo/releases/download/$version/$name.zip", $zip)
+            $web.DownloadFile("$repo/releases/download/$version/SHA256SUMS", $sums)
+        }
+        catch { Fail "download failed: $repo/releases/download/$version/$name.zip ($($_.Exception.InnerException.Message))" }
+        finally { $web.Dispose() }
 
         $want = $null
-        foreach ($line in Get-Content $sums) {
+        foreach ($line in [IO.File]::ReadAllLines($sums)) {
             $f = $line -split '\s+', 2
             if ($f.Count -eq 2 -and $f[1].TrimStart('*') -eq "$name.zip") { $want = $f[0].ToLower() }
         }
         if (-not $want) { Fail "$name.zip isn't listed in SHA256SUMS" }
-        $got = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLower()
+        # .NET rather than Invoke-WebRequest / Get-FileHash / Expand-Archive:
+        # those live in modules that can fail to load, e.g. when Windows
+        # PowerShell 5.1 inherits PowerShell 7's module path (CI hit that:
+        # Get-FileHash "not recognized").
+        $stream = [IO.File]::OpenRead($zip)
+        try { $hash = [Security.Cryptography.SHA256]::Create().ComputeHash($stream) }
+        finally { $stream.Dispose() }
+        $got = [BitConverter]::ToString($hash).Replace('-', '').ToLower()
         if ($got -ne $want) { Fail "checksum mismatch for $name.zip (expected $want, got $got): not installing" }
         Write-Host 'Checksum OK.'
 
-        Expand-Archive -Path $zip -DestinationPath $tmp -Force
+        if (-not ('System.IO.Compression.ZipFile' -as [type])) {
+            [void][Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem') # 5.1
+        }
+        [IO.Compression.ZipFile]::ExtractToDirectory($zip, $tmp)
         $exe = Join-Path (Join-Path $tmp $name) 'denco.exe'
         if (-not (Test-Path $exe)) { Fail "no denco.exe in $name.zip" }
 
         # denco setup copies it to %LocalAppData%\Programs\Denco and adds
         # that to the user PATH (for terminals opened from now on).
         & $exe setup
-        if ($LASTEXITCODE -ne 0) { Fail "denco setup failed (Denco $version may be older than 'denco setup': use v0.3.0 or newer)" }
+        if ($LASTEXITCODE -ne 0) { Fail "denco setup failed (Denco $version may be older than 'denco setup': use v0.3.1 or newer)" }
 
         # This PowerShell window too, so 'denco' works right away.
         $dir = Join-Path $env:LOCALAPPDATA 'Programs\Denco'

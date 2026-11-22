@@ -1679,7 +1679,8 @@ One short entry per decision. Newest at the bottom. Format:
     in a script block, so nothing is left in the user's session.
 - **Hosted on `main`:** the script is always the newest; the archive is
   the latest *release*. So the one-liners work only once a release
-  includes `denco setup` (v0.3.0 or later); with an older release the
+  includes `denco setup` (v0.3.1 or later — v0.3.0 was tagged at the uTP
+  commit, before setup); with an older release the
   script stops with that explanation.
 - **Alternatives:** the GitHub API for the latest tag (rate-limited);
   scripts as release assets (`/releases/latest/download/install.sh` — also
@@ -1702,3 +1703,27 @@ One short entry per decision. Newest at the bottom. Format:
 - **End to end on macOS:** the real script installed a real
   `release-build.sh` archive (served on loopback) into a temporary HOME:
   checksum OK, `denco setup` ran, a new zsh found `denco v9.9.9`.
+- **CI found three bugs on the first run (2026-11-22, run #18):**
+  1. **macOS:** `arch…: unbound variable`. In UTF-8 locales (the CI
+     runner's) macOS's sh — bash 3.2 — counts the bytes of a UTF-8
+     character such as `…` as letters, so `"$arch…"` named a variable
+     `arch…`. It passed here because this shell runs in the C locale.
+     Fix: the scripts are ASCII only, with `${var}` in strings; tests now
+     run install.sh under both `C` and `en_US.UTF-8` and check the
+     scripts are ASCII.
+  2. **macOS, hidden by 1:** the failed script exited **0**. After an
+     unbound-variable error bash 3.2 exits 0 and even `$?` in the EXIT trap
+     is 0, so preserving `$?` (tried first) doesn't help. Fix: the script
+     sets `done=1` as its last step and the trap exits 1 unless it is set;
+     a test runs a copy with an undefined variable under sh/dash/bash and
+     requires a non-zero exit (it fails with the old trap).
+  3. **Windows:** `Get-FileHash` "not recognized". The CI job's shell is
+     PowerShell 7, whose `PSModulePath` Windows PowerShell 5.1 inherited
+     when the test started it, so 5.1 couldn't load its own module
+     command. Real users rarely have that mix, but to be safe the script
+     now uses .NET for its real work — `Net.WebClient` to download,
+     `SHA256` to check, `ZipFile` to unpack — instead of
+     `Invoke-WebRequest`, `Get-FileHash` and `Expand-Archive`. The test
+     runs install.ps1 under both `powershell` (5.1) and `pwsh` (7), still
+     with CI's inherited module path. **The fixed install.ps1 has again
+     not run anywhere yet** — its next run is CI.
