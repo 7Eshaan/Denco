@@ -49,6 +49,27 @@ ID  NAME                             SIZE      PROGRESS  STATUS       DOWN      
 
 ## Install
 
+### One line (recommended)
+
+**macOS, Linux** — in a terminal:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/7Eshaan/Denco/main/scripts/install.sh | sh
+```
+
+**Windows** — in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/7Eshaan/Denco/main/scripts/install.ps1 | iex
+```
+
+It downloads the latest release for your system, checks it against the
+release's `SHA256SUMS`, and runs `denco setup` (below): Denco ends up in
+your home folder and on your `PATH`, without admin rights or a password.
+Open a new terminal and run `denco help`. Want to read the script first?
+It's [here](scripts/install.sh) ([Windows](scripts/install.ps1)). Needs
+Denco v0.3.0 or later (the first release with `denco setup`).
+
 ### Download a prebuilt binary
 
 Get the archive for your system from the

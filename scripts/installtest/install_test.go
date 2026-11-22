@@ -1,0 +1,284 @@
+// Package installtest tests scripts/install.sh and scripts/install.ps1
+// (DECISIONS D67) against a fake GitHub release served on loopback: the
+// "latest" redirect, the archive and SHA256SUMS, with a fake denco that
+// only records how it was run. Nothing is installed and no network
+// beyond loopback is used.
+package installtest
+
+import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+)
+
+const version = "v9.9.9"
+
+// fakeDenco builds the stand-in binary once.
+var fakeDenco = sync.OnceValues(func() ([]byte, error) {
+	dir, err := os.MkdirTemp("", "fakedenco-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	out := filepath.Join(dir, "denco")
+	if runtime.GOOS == "windows" {
+		out += ".exe"
+	}
+	cmd := exec.Command("go", "build", "-o", out, "./testdata/fakedenco")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("building the fake denco: %v\n%s", err, b)
+	}
+	return os.ReadFile(out)
+})
+
+// release is a fake GitHub release of the fake denco for this machine.
+type release struct {
+	srv      *httptest.Server
+	asset    string
+	data     []byte
+	sums     string
+	requests []string
+	mu       sync.Mutex
+}
+
+func newRelease(t *testing.T) *release {
+	t.Helper()
+	bin, err := fakeDenco()
+	if err != nil {
+		t.Skip(err) // no Go toolchain to build it with
+	}
+	name := fmt.Sprintf("denco_%s_%s_%s", version, runtime.GOOS, runtime.GOARCH)
+	r := &release{}
+	var buf bytes.Buffer
+	if runtime.GOOS == "windows" {
+		r.asset = name + ".zip"
+		zw := zip.NewWriter(&buf)
+		w, _ := zw.Create(name + "/denco.exe")
+		w.Write(bin)
+		zw.Close()
+	} else {
+		r.asset = name + ".tar.gz"
+		gz := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gz)
+		tw.WriteHeader(&tar.Header{Name: name + "/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: name + "/denco", Mode: 0o755, Size: int64(len(bin))})
+		tw.Write(bin)
+		tw.Close()
+		gz.Close()
+	}
+	r.data = buf.Bytes()
+	r.sums = fmt.Sprintf("%x  %s\n%x  some_other_file.zip\n", sha256.Sum256(r.data), r.asset, sha256.Sum256(nil))
+	r.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.mu.Lock()
+		r.requests = append(r.requests, req.URL.Path)
+		data, sums := r.data, r.sums
+		r.mu.Unlock()
+		switch req.URL.Path {
+		case "/releases/latest":
+			http.Redirect(w, req, "/releases/tag/"+version, http.StatusFound)
+		case "/releases/tag/" + version:
+			w.Write([]byte("<html>release page</html>"))
+		case "/releases/download/" + version + "/" + r.asset:
+			w.Write(data)
+		case "/releases/download/" + version + "/SHA256SUMS":
+			w.Write([]byte(sums))
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	t.Cleanup(r.srv.Close)
+	return r
+}
+
+type result struct {
+	code    int
+	out     string
+	ran     string // the fake denco's arguments; "" if it didn't run
+	leftTmp []os.DirEntry
+}
+
+// run runs a script command with a temporary HOME/TMPDIR/LOCALAPPDATA.
+func (r *release) run(t *testing.T, name string, args []string, env ...string) result {
+	t.Helper()
+	tmp := t.TempDir()
+	scratch := filepath.Join(tmp, "tmp")
+	os.MkdirAll(scratch, 0o755)
+	log := filepath.Join(tmp, "ran")
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), "HOME="+tmp, "USERPROFILE="+tmp, "TMPDIR="+scratch, "TEMP="+scratch, "TMP="+scratch,
+		"LOCALAPPDATA="+filepath.Join(tmp, "local"), "DENCO_REPO_URL="+r.srv.URL, "DENCO_FAKE_LOG="+log, "DENCO_VERSION=")
+	cmd.Env = append(cmd.Env, env...)
+	out, err := cmd.CombinedOutput()
+	res := result{out: string(out)}
+	if ee, ok := err.(*exec.ExitError); ok {
+		res.code = ee.ExitCode()
+	} else if err != nil {
+		t.Fatalf("running %s: %v", name, err)
+	}
+	if b, err := os.ReadFile(log); err == nil {
+		res.ran = string(b)
+	}
+	res.leftTmp, _ = os.ReadDir(scratch)
+	return res
+}
+
+// setSums replaces the SHA256SUMS the server sends.
+func (r *release) setSums(f func(string) string) {
+	r.mu.Lock()
+	r.sums = f(r.sums)
+	r.mu.Unlock()
+}
+
+func (r *release) asked(path string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range r.requests {
+		if p == path {
+			return true
+		}
+	}
+	return false
+}
+
+func shells(t *testing.T) []string {
+	if runtime.GOOS == "windows" {
+		t.Skip("install.sh is for macOS and Linux")
+	}
+	var out []string
+	for _, sh := range []string{"sh", "dash", "bash"} { // dash: Debian/Ubuntu's /bin/sh
+		if _, err := exec.LookPath(sh); err == nil {
+			out = append(out, sh)
+		}
+	}
+	return out
+}
+
+func TestInstallSh(t *testing.T) {
+	for _, sh := range shells(t) {
+		t.Run(sh, func(t *testing.T) {
+			r := newRelease(t)
+			res := r.run(t, sh, []string{"../install.sh"})
+			if res.code != 0 || res.ran != "setup" || !strings.Contains(res.out, "Checksum OK") {
+				t.Fatalf("exit %d, denco ran with %q:\n%s", res.code, res.ran, res.out)
+			}
+			if !r.asked("/releases/latest") || !strings.Contains(res.out, version) {
+				t.Errorf("the latest version wasn't looked up: %v", r.requests)
+			}
+			if len(res.leftTmp) != 0 {
+				t.Errorf("left in the temp folder: %v", res.leftTmp)
+			}
+		})
+	}
+}
+
+// The script as users run it: piped into sh.
+func TestInstallShPiped(t *testing.T) {
+	shells(t)
+	r := newRelease(t)
+	script, _ := os.ReadFile("../install.sh")
+	tmp := t.TempDir()
+	cmd := exec.Command("sh")
+	cmd.Stdin = bytes.NewReader(script)
+	cmd.Env = append(os.Environ(), "HOME="+tmp, "TMPDIR="+tmp, "DENCO_REPO_URL="+r.srv.URL,
+		"DENCO_FAKE_LOG="+filepath.Join(tmp, "ran"), "DENCO_VERSION=")
+	out, err := cmd.CombinedOutput()
+	if b, _ := os.ReadFile(filepath.Join(tmp, "ran")); err != nil || string(b) != "setup" {
+		t.Fatalf("%v, ran %q:\n%s", err, b, out)
+	}
+}
+
+func TestInstallShRefuses(t *testing.T) {
+	shells(t)
+	t.Run("checksum mismatch", func(t *testing.T) {
+		r := newRelease(t)
+		r.setSums(func(s string) string { return "00000000" + s[8:] })
+		res := r.run(t, "sh", []string{"../install.sh"})
+		if res.code == 0 || res.ran != "" || !strings.Contains(res.out, "checksum mismatch") {
+			t.Fatalf("exit %d, ran %q:\n%s", res.code, res.ran, res.out)
+		}
+		if len(res.leftTmp) != 0 {
+			t.Errorf("left in the temp folder: %v", res.leftTmp)
+		}
+	})
+	t.Run("not in SHA256SUMS", func(t *testing.T) {
+		r := newRelease(t)
+		r.setSums(func(string) string { return "abc  other.tar.gz\n" })
+		res := r.run(t, "sh", []string{"../install.sh"})
+		if res.code == 0 || res.ran != "" || !strings.Contains(res.out, "isn't listed") {
+			t.Fatalf("exit %d, ran %q:\n%s", res.code, res.ran, res.out)
+		}
+	})
+	t.Run("setup fails", func(t *testing.T) {
+		r := newRelease(t)
+		res := r.run(t, "sh", []string{"../install.sh"}, "DENCO_FAKE_EXIT=2")
+		if res.code == 0 || !strings.Contains(res.out, "denco setup failed") {
+			t.Fatalf("exit %d:\n%s", res.code, res.out)
+		}
+	})
+	t.Run("no such version", func(t *testing.T) {
+		r := newRelease(t)
+		res := r.run(t, "sh", []string{"../install.sh"}, "DENCO_VERSION=v0.0.1")
+		if res.code == 0 || res.ran != "" || !strings.Contains(res.out, "download failed") || r.asked("/releases/latest") {
+			t.Fatalf("exit %d, ran %q:\n%s", res.code, res.ran, res.out)
+		}
+	})
+}
+
+// install.ps1 runs only where Windows PowerShell or pwsh is (Windows CI).
+func TestInstallPs1(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("install.ps1 is for Windows")
+	}
+	ps := "powershell"
+	if _, err := exec.LookPath(ps); err != nil {
+		ps = "pwsh"
+		if _, err := exec.LookPath(ps); err != nil {
+			t.Skip("no PowerShell")
+		}
+	}
+	base := []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"}
+	t.Run("file", func(t *testing.T) {
+		r := newRelease(t)
+		res := r.run(t, ps, append(base, "-File", `..\install.ps1`))
+		if res.code != 0 || res.ran != "setup" || !strings.Contains(res.out, "Checksum OK") || !r.asked("/releases/latest") {
+			t.Fatalf("exit %d, ran %q:\n%s", res.code, res.ran, res.out)
+		}
+		if len(res.leftTmp) != 0 {
+			t.Errorf("left in the temp folder: %v", res.leftTmp)
+		}
+	})
+	t.Run("piped into iex", func(t *testing.T) {
+		r := newRelease(t)
+		res := r.run(t, ps, append(base, "-Command", `Get-Content -Raw ..\install.ps1 | Invoke-Expression`))
+		if res.code != 0 || res.ran != "setup" {
+			t.Fatalf("exit %d, ran %q:\n%s", res.code, res.ran, res.out)
+		}
+	})
+	t.Run("checksum mismatch", func(t *testing.T) {
+		r := newRelease(t)
+		r.setSums(func(s string) string { return "00000000" + s[8:] })
+		res := r.run(t, ps, append(base, "-File", `..\install.ps1`))
+		if res.code == 0 || res.ran != "" || !strings.Contains(res.out, "checksum mismatch") {
+			t.Fatalf("exit %d, ran %q:\n%s", res.code, res.ran, res.out)
+		}
+	})
+	t.Run("setup fails", func(t *testing.T) {
+		r := newRelease(t)
+		res := r.run(t, ps, append(base, "-File", `..\install.ps1`), "DENCO_FAKE_EXIT=2")
+		if res.code == 0 || !strings.Contains(res.out, "denco setup failed") {
+			t.Fatalf("exit %d:\n%s", res.code, res.out)
+		}
+	})
+}

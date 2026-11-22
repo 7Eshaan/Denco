@@ -4,8 +4,16 @@
 installing shouldn't need PATH knowledge; 16a–16e in ROADMAP). Phase 15
 (qBittorrent parity, part 1) is complete.
 
-**Phase 16b — `denco setup` (D66) · ✅ done, not committed yet (together
-with 16a).** Denco installs itself per user — Windows:
+**Phase 16c — install scripts (D67) · ✅ done, not committed yet.**
+`scripts/install.sh` (`curl … | sh`) and `scripts/install.ps1`
+(`irm … | iex`): latest release via the redirect, SHA-256 check, `denco
+setup`, temp folder removed. README leads with the one-liners. They need
+a release with `denco setup` (v0.3.0+); the latest is v0.2.0 today.
+install.ps1 has not run anywhere yet (no PowerShell on this Mac): its
+first run is Windows CI.
+
+**Phase 16b — `denco setup` (D66) · ✅ done, committed with 16a as
+b54a4e3.** Denco installs itself per user — Windows:
 `%LocalAppData%\Programs\Denco` + the user PATH in the registry; macOS/
 Linux: `~/.local/bin` + one marked line in the shell's startup file — no
 admin rights; `-remove` undoes it; a newer version's setup updates (stops
@@ -150,11 +158,12 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** the user commits 16a + 16b (D65, D66) and checks CI —
-ideally someone tries `denco.exe` on a real Windows machine (double-click
-→ install offer → dashboard; `denco setup -remove`). Then **16c — install
-scripts** (`install.sh`, `install.ps1`). Release: v0.3.0 (Phase 15) is
-ready to tag; the real-download smoke test was offered and not yet run.
+**Next action:** the user commits 16c (D67) and checks CI — the Windows
+job is install.ps1's first real run. Then **tag v0.3.0** (Phase 15 +
+16a–c): the one-liners only work once a release has `denco setup`. After
+that, 16d (Homebrew tap, winget, Scoop — needs a tap repo and tokens on
+the user's account). Still open: a real-Windows try of the double-click /
+setup flow; the real-download smoke test (offered, not run).
 Optional, any time: a release (v0.2.1 for the D57 fix, or v0.3.0 once
 some of Phase 15 is in). Open items, if wanted: the plain
 CLI should `clean` torrent names too (D55), the user's router check
@@ -222,7 +231,21 @@ CLI should `clean` torrent names too (D55), the user's router check
 ## Open questions for the user
 - (none open)
 
-## Last test run (2026-11-22, Phase 16b, D66)
+## Last test run (2026-11-22, Phase 16c, D67)
+- `go test -race -count=1 ./...` — all 29 packages pass (new:
+  `scripts/installtest`)
+- install tests: 40 plain runs, 60 race runs at 1/4 CPUs under CPU load —
+  all pass; install.sh under sh, dash, bash and piped
+- `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
+  linux/windows/darwin × amd64/arm64 — all build
+- mutation-checked install.sh: 8 mutations, each caught (one unexplained
+  failure in a mutation run, not reproducible — D67)
+- end to end on macOS: the real install.sh + a real release archive on
+  loopback → `denco setup` → a new zsh runs `denco v9.9.9`
+- install.ps1: not run (no PowerShell here); Windows CI will be its first
+  run
+
+## Previous test run (2026-11-22, Phase 16b, D66)
 - `go test -race -count=1 ./...` — all 28 packages pass; no temp homes
   left behind
 - `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
@@ -531,4 +554,5 @@ CLI should `clean` torrent names too (D55), the user's router check
 - **Phase 15e (2026-11-22, commit ff013ea):** protocol encryption, MSE/PE (D63).
 - **Phase 15f (2026-11-22, commit 47c1ced):** uTP (D64).
 - **Phase 16a (2026-11-22):** double-click opens the dashboard (D65).
-- **Phase 16b (2026-11-22):** `denco setup` (D66).
+- **Phase 16b (2026-11-22, commit b54a4e3, with 16a):** `denco setup` (D66).
+- **Phase 16c (2026-11-22):** install scripts (D67).

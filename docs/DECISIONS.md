@@ -1645,3 +1645,60 @@ One short entry per decision. Newest at the bottom. Format:
   self-delete and the double-click offer have only been compiled, vetted
   and (list logic) tested — they need a real Windows machine; Linux shells
   were tested through the same file logic, not on a Linux desktop.
+
+### D67 — One-line install scripts (Phase 16c)
+- **Decision:** two scripts in the repo, run straight from GitHub:
+  - `scripts/install.sh` (macOS, Linux):
+    `curl -fsSL https://raw.githubusercontent.com/7Eshaan/Denco/main/scripts/install.sh | sh`
+  - `scripts/install.ps1` (Windows, PowerShell):
+    `irm https://raw.githubusercontent.com/7Eshaan/Denco/main/scripts/install.ps1 | iex`
+
+  Each detects the OS/CPU, finds the latest release by following the
+  `/releases/latest` redirect (not the GitHub API, which limits requests
+  per address — this machine hit that limit), downloads the archive and
+  `SHA256SUMS` into a temporary folder, refuses to go on unless the
+  archive's line is there and its SHA-256 matches, unpacks it and runs
+  `denco setup` (D66), then deletes the temporary folder. Nothing else:
+  PATH, the install folder and updates are setup's job, so there is one
+  implementation of them. `DENCO_VERSION` pins a version;
+  `DENCO_REPO_URL` (tests) points elsewhere.
+  - install.sh is POSIX `sh` (checked under macOS `sh`, `dash` — Debian/
+    Ubuntu's `/bin/sh` — and `bash`), works with `curl` or `wget`,
+    `sha256sum` or `shasum`; `denco setup` gets `/dev/null` as stdin (the
+    script itself arrives on stdin when piped). Files fetched by curl/wget
+    carry no macOS quarantine flag, so Gatekeeper doesn't block them
+    (checked: only `com.apple.provenance`) — the `xattr` step is not
+    needed this way.
+  - install.ps1 works in Windows PowerShell 5.1 and pwsh: it enables TLS
+    1.2 (5.1 may default to 1.0), takes the CPU from
+    `PROCESSOR_ARCHITEW6432` / `PROCESSOR_ARCHITECTURE` (right under 32-bit
+    PowerShell too), reads the redirect with `HttpWebRequest` without
+    following it, checks with `Get-FileHash`, unpacks with
+    `Expand-Archive`, and adds the install folder to the *current*
+    window's `$env:Path` so `denco` works there at once. Everything runs
+    in a script block, so nothing is left in the user's session.
+- **Hosted on `main`:** the script is always the newest; the archive is
+  the latest *release*. So the one-liners work only once a release
+  includes `denco setup` (v0.3.0 or later); with an older release the
+  script stops with that explanation.
+- **Alternatives:** the GitHub API for the latest tag (rate-limited);
+  scripts as release assets (`/releases/latest/download/install.sh` — also
+  fine, but then fixing a script needs a release); installing in the
+  script itself (a second implementation of setup).
+- **Tests** (`scripts/installtest`): a fake GitHub release on loopback
+  (latest redirect, archive, SHA256SUMS) with a fake `denco` built from
+  `testdata/fakedenco` that only records its arguments. install.sh under
+  sh/dash/bash and piped into sh: latest looked up, checksum checked,
+  `denco setup` run, temp folder gone; refused on a checksum mismatch, a
+  missing SHA256SUMS line, a failing setup and an unknown version.
+  install.ps1 (as `-File` and piped into `Invoke-Expression`, success,
+  mismatch, failing setup) runs only where PowerShell is — Windows CI;
+  **this Mac has none, so install.ps1 has not run yet**: its first run is
+  CI after the commit. Mutation-checked install.sh: 8 mutations, each
+  caught; one run of the mutation script reported a failure for a
+  mutation that can't fail on this arm64 Mac — not reproduced in 6 reruns
+  of it, 40 plain runs and 60 race runs under CPU load; unexplained,
+  noted here rather than hidden.
+- **End to end on macOS:** the real script installed a real
+  `release-build.sh` archive (served on loopback) into a temporary HOME:
+  checksum OK, `denco setup` ran, a new zsh found `denco v9.9.9`.

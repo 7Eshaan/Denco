@@ -91,7 +91,7 @@ so older references stay valid.
   - [x] **16b — `denco setup`.** (D66; double-click offers it on Windows.) The binary installs itself per user
         (`%LocalAppData%\Programs\Denco` + user PATH in the registry;
         `~/.local/bin` + a shell rc line), `-remove` undoes it. No admin.
-  - [ ] **16c — Install scripts.** `install.sh` (macOS/Linux) and
+  - [x] **16c — Install scripts.** (D67) `install.sh` (macOS/Linux) and
         `install.ps1` (Windows): detect OS/arch, download, verify
         `SHA256SUMS`, then set up as 16b.
   - [ ] **16d — Package managers.** Homebrew tap (macOS + Linux), winget
