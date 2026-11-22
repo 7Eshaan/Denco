@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
-	"encoding/binary"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/7Eshaan/Denco/internal/bencode"
 	"github.com/7Eshaan/Denco/internal/bitfield"
+	"github.com/7Eshaan/Denco/internal/compact"
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/peerid"
@@ -86,6 +86,7 @@ type seederOpts struct {
 	dropAfter    int           // close each connection after this many blocks (0 = never)
 	neverRespond bool          // unchoke but ignore requests
 	slow         time.Duration // pause before sending each block
+	ipv6         bool          // listen on [::1] instead of 127.0.0.1
 }
 
 type seeder struct {
@@ -103,7 +104,11 @@ type seeder struct {
 
 func newSeeder(t *testing.T, f *fixture, opts seederOpts) *seeder {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	host := "127.0.0.1:0"
+	if opts.ipv6 {
+		host = "[::1]:0"
+	}
+	ln, err := net.Listen("tcp", host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,14 +211,17 @@ func newTracker(t *testing.T, peers ...netip.AddrPort) *fakeTracker {
 		ft.mu.Lock()
 		ft.events = append(ft.events, q.Get("event"))
 		ft.lefts = append(ft.lefts, q.Get("left"))
-		var compact []byte
+		var peers, peers6 []byte
 		for _, p := range ft.peers {
-			ip := p.Addr().As4()
-			compact = append(compact, ip[:]...)
-			compact = binary.BigEndian.AppendUint16(compact, p.Port())
+			if p.Addr().Is6() {
+				peers6 = compact.Append(peers6, p)
+			} else {
+				peers = compact.Append(peers, p)
+			}
 		}
 		body, _ := bencode.Encode(map[string]any{
-			"interval": 60, "complete": ft.seeders, "incomplete": ft.leechers, "peers": string(compact),
+			"interval": 60, "complete": ft.seeders, "incomplete": ft.leechers,
+			"peers": string(peers), "peers6": string(peers6),
 		})
 		ft.mu.Unlock()
 		w.Write(body)

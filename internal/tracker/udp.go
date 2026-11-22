@@ -62,12 +62,18 @@ type connID struct {
 
 // Announce performs a BEP 15 announce to a udp:// URL.
 func (c *UDPClient) Announce(ctx context.Context, trackerURL string, req Request) (*Response, error) {
+	return c.announceNet(ctx, trackerURL, req, "udp")
+}
+
+// announceNet announces over network: "udp", or "udp4"/"udp6" to force an
+// address family (Client.DualStack).
+func (c *UDPClient) announceNet(ctx context.Context, trackerURL string, req Request, network string) (*Response, error) {
 	u, err := url.Parse(trackerURL)
 	if err != nil || u.Host == "" || u.Port() == "" {
 		return nil, fmt.Errorf("tracker: bad UDP tracker URL %q", trackerURL)
 	}
 	var d net.Dialer
-	nc, err := d.DialContext(ctx, "udp", u.Host)
+	nc, err := d.DialContext(ctx, network, u.Host)
 	if err != nil {
 		return nil, fmt.Errorf("tracker %s: %w", u.Host, err)
 	}
@@ -79,7 +85,7 @@ func (c *UDPClient) Announce(ctx context.Context, trackerURL string, req Request
 	if ra, ok := nc.RemoteAddr().(*net.UDPAddr); ok {
 		ipv6 = ra.IP.To4() == nil
 	}
-	resp, err := c.announce(ctx, nc, u, req, ipv6)
+	resp, err := c.announce(ctx, nc, u, req, ipv6, network)
 	if err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
@@ -89,8 +95,10 @@ func (c *UDPClient) Announce(ctx context.Context, trackerURL string, req Request
 	return resp, nil
 }
 
-func (c *UDPClient) announce(ctx context.Context, nc net.Conn, u *url.URL, req Request, ipv6 bool) (*Response, error) {
-	id, cached, err := c.connectionID(ctx, nc, u.Host)
+func (c *UDPClient) announce(ctx context.Context, nc net.Conn, u *url.URL, req Request, ipv6 bool, network string) (*Response, error) {
+	// Connection IDs are per tracker address, so per family too.
+	host := network + "/" + u.Host
+	id, cached, err := c.connectionID(ctx, nc, host)
 	if err != nil {
 		return nil, err
 	}
@@ -99,8 +107,8 @@ func (c *UDPClient) announce(ctx context.Context, nc net.Conn, u *url.URL, req R
 	if errors.As(err, &fe) && cached {
 		// A cached ID can be rejected (tracker restarted, clocks disagree).
 		// Forget it and retry once with a fresh connect.
-		c.forget(u.Host)
-		if id, _, err = c.connectionID(ctx, nc, u.Host); err != nil {
+		c.forget(host)
+		if id, _, err = c.connectionID(ctx, nc, host); err != nil {
 			return nil, err
 		}
 		return c.doAnnounce(ctx, nc, id, u, req, ipv6)

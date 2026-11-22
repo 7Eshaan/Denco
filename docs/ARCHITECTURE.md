@@ -46,7 +46,7 @@ a client command starts one (D52): it runs its own executable as
 | `internal/ipc` | ✅ | Daemon file (`Info`, atomic 0600 write), `NewHandler`/`Serve` (loopback HTTP API over an `*engine.Engine`, bearer-token auth, error→status mapping), `Client` (+ `Connect`, stale-file detection). |
 | `internal/config` | ✅ | `Config` + `Defaults(home)`, the settings table (`Settings`, `Lookup`, `Get`/`Set` with validation), `Load`/`Parse` (strict, line numbers), in-place `SetInFile`/`UnsetInFile`, `Init`, `KeysInFile`, rate syntax (`ParseRate`/`FormatRate`). |
 | `internal/ratelimit` | ✅ | `Limiter`: token bucket shared by many goroutines; `WaitN(ctx, n)` as a first-come-first-served reservation (D46), live `SetRate`; nil/0 = unlimited. |
-| `internal/dht` | ✅ | BEP 5 DHT node (D42): `Server` (UDP socket, reader goroutine answering ping/find_node/get_peers/announce_peer, queries matched by tid **and** source address, per-second query cap, verify-before-adding), iterative `lookup` (α=4, K=8), `GetPeers(ctx, hash, port)` (+ announce), routing table (160 k-buckets, replace bad/failing nodes), tokens (rotating secret), peer store (30-min TTL, caps), `dht.json` state (ID + ≤ 200 good nodes). IPv4 only. |
+| `internal/dht` | ✅ | BEP 5 DHT node (D42): `Server` (UDP socket, reader goroutine answering ping/find_node/get_peers/announce_peer, queries matched by tid **and** source address, per-second query cap, verify-before-adding), iterative `lookup` (α=4, K=8), `GetPeers(ctx, hash, port)` (+ announce), routing table (160 k-buckets, replace bad/failing nodes), tokens (rotating secret), peer store (30-min TTL, caps), `dht.json` state (ID + ≤ 200 good nodes). One `Server` per address family (`Config.IPv6`: udp6, `nodes6`, 18-byte values; BEP 32) and `Dual{V4, V6}` running both, merging lookups (`dual.go`, D60). |
 | `internal/portmap` | ✅ | Router port forwarding (D49): `Mapper` (`Start(Config)`, `Status`, `External`, `Close` removes the mappings) runs one goroutine: find a router, map, renew at half the lease, look again every 10 min if none answered or it refused. NAT-PMP client (`natpmp.go`, RFC 6886), UPnP IGD client (`upnp.go`: SSDP search, device description, SOAP Add/Delete/GetExternalIPAddress), default gateway lookup (`gateway*.go`: `/proc/net/route` on Linux, `route -n get default` on macOS, else first host of our subnet). |
 | `internal/compact` | ✅ | Compact peer addresses (6/18 bytes) shared by `tracker`, `peer` (PEX) and `dht`. |
 | `internal/tui` | ✅ | Terminal dashboard (D55), a daemon client only: `Run` (event loop; one refresh goroutine, one goroutine per operation), `model.go` (state + `update(event) → actions`, no I/O), `render.go`/`render_cells.go`/`render_details.go`/`render_help.go` (exactly h lines ≤ w cells), `keys.go` (raw input → keys), `screen.go` (line-diffed frames), `text.go` (cell widths, `clean`, SGR), `term.go` + `term_unix.go` (termios via ioctl; `term_darwin.go`/`term_linux.go` request numbers) / `term_windows.go` (console modes via kernel32) / `term_other.go` (line mode). Interfaces `Terminal`, `Client` for tests. |
@@ -136,6 +136,10 @@ Dependency direction (lower never imports higher):
   (`Resume`/`Pause` end it); `List()` is in queue order; `Torrent.Queue`/`QueueLength`
   (place among incomplete torrents, from 1; 0 = complete) and `Torrent.Forced`;
   `resume.State.Queue/Forced`; `ipc.Client.MoveInQueue/ForceStart`; `tui.Client` gained both.
+- IPv6 (D60): `dht.Config.IPv6`, `dht.Dual` (`GetPeers`, `AddNode`, `Port`, `Close`);
+  `tracker.Client.DualStack` (announce per family, merged); `torrent.Config.IPv4Only`,
+  `metadata.Config.IPv4Only`; `engine.Config.EnableIPv6/DHT6Addr`; `Overview.IPv6/DHT6/
+  DHT6Port/DHT6Nodes/DHT6Good`; `config.Config.EnableIPv6` (`enable_ipv6`). Bans per IPv6 /64.
 - Per-torrent limits (D59): `Engine.SetTorrentLimits(ref, down, up)` (`ErrBadLimit`),
   `Torrent.DownLimit/UpLimit`; `torrent.Config.TorrentDownLimiter/TorrentUpLimiter`;
   `peer.Conn.SetTorrentLimiter`; `Session.fairShare` (the tighter of the global and
@@ -267,7 +271,8 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   (download-queue order key, smaller first) and `forced` (starts past
   `max_active_downloads`) (D58), `down_limit` / `up_limit` (the
   torrent's own speed limits in bytes/s) (D59).
-- **DHT state (D42):** `<state dir>/dht.json` = `{"id": "<40 hex>", "nodes":
+- **DHT state (D42, D60):** `<state dir>/dht.json` (IPv4 node) and
+  `dht6.json` (IPv6 node), each = `{"id": "<40 hex>", "nodes":
   [{"id": "<40 hex>", "addr": "ip:port"}, …]}` (≤ 200 good nodes), written
   atomically every 15 min and on close. Missing/corrupt = fresh ID, no nodes.
 - **Daemon file:** `$DENCO_HOME/daemon.json` (0600):
@@ -309,7 +314,9 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   encryption, 0x02 seed, 0x04 uTP, 0x08 holepunch, 0x10 reachable. Denco
   sends ≤ 50 added + ≤ 50 dropped per message, first message right after
   the peer's extension handshake, then ≤ 1 per minute.
-- **DHT / KRPC (BEP 5):** one bencoded dict per UDP datagram (IPv4).
+- **DHT / KRPC (BEP 5, BEP 32):** one bencoded dict per UDP datagram. The
+  IPv4 node sends `nodes` (26-byte entries) and 6-byte values; the IPv6 node
+  `nodes6` (20-byte ID + 18-byte address) and 18-byte values.
   Query `{"t": tid(2 bytes), "y": "q", "q": method, "a": {"id": 20 bytes, …}}`,
   response `{"t", "y": "r", "r": {"id", …}}`, error `{"t", "y": "e", "e": [code, msg]}`
   (201 generic, 202 server, 203 protocol, 204 unknown method). Methods:

@@ -85,6 +85,7 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 		UploadLimit:   cfg.UploadLimit,
 		Session:       torrent.Config{MaxPeers: cfg.MaxConnectionsPerTorrent, PEX: cfg.EnablePEX},
 		EnableDHT:     cfg.EnableDHT,
+		EnableIPv6:    cfg.EnableIPv6,
 		PortForward:   cfg.PortForwarding,
 		SeedRatio:     cfg.SeedRatio,
 		SeedTime:      cfg.SeedTime,
@@ -113,6 +114,9 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 	dhtNote := "DHT off"
 	if ov.DHT {
 		dhtNote = fmt.Sprintf("DHT on UDP port %d", ov.DHTPort)
+		if ov.DHT6 {
+			dhtNote += " (IPv4 and IPv6)"
+		}
 	}
 	fmt.Fprintf(e.stdout, "Denco daemon running (pid %d). %d torrents, peer port %d, %s.\n", os.Getpid(), ov.Torrents, ov.ListenPort, dhtNote)
 	fmt.Fprintf(e.stdout, "Downloads go to %s by default. Limits: ↓ %s  ↑ %s. Seeding: %s.\n",

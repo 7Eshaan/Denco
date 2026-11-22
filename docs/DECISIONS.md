@@ -1153,3 +1153,56 @@ One short entry per decision. Newest at the bottom. Format:
   slower is what makes TCP slow the peer; D36).
 - **Not done:** per-torrent limits for the magnet metadata fetch (a few
   hundred KB at most); per-torrent connection limits.
+
+### D60 — Full IPv6 (Phase 15c)
+- **Context:** IPv6 peers from trackers (`peers6`) and PEX already worked,
+  and the listener already accepted both families. Missing: the DHT was
+  IPv4 only, trackers only ever heard one of our addresses, and bans and
+  displays assumed IPv4.
+- **Decision:**
+  - **DHT (BEP 32): one node per family.** `dht.Config.IPv6` makes a
+    `Server` an IPv6 node: it listens on udp6 (IPv6 only), keeps its own
+    routing table, sends and reads `nodes6` (38-byte entries) instead of
+    `nodes`, resolves routers' AAAA records, and returns 18-byte peers.
+    `dht.Dual{V4, V6}` runs a lookup on both at once and merges the peers;
+    node hints (PORT messages) go to the node of their family; `Port` is the
+    IPv4 node's (one PORT message carries one port; the IPv6 node uses the
+    same number when it can). BEP 32 keeps the two tables separate, so a
+    node doesn't cross-reference the other family (we omit, rather than
+    fill, the other family's list when asked with `want`). State:
+    `dht.json` (IPv4) and `dht6.json` (IPv6), each with its own node ID.
+  - **The engine** opens the IPv6 node with `enable_ipv6` (default on): on
+    `[::]:<port>` when the peer port listens on every address, on that
+    address when it is an IPv6 one, and not at all when it is bound to an
+    IPv4 address. No IPv6 on the machine = no IPv6 node, logged, not an
+    error. `status` shows both tables.
+  - **Trackers (BEP 7): announce once per family.** `tracker.Client.
+    DualStack` sends each announce over IPv4 and IPv6 at the same time
+    (HTTP through clients that dial only tcp4/tcp6; UDP over udp4/udp6, with
+    connection IDs cached per family) and merges the answers (every peer
+    once, the shorter interval, the larger counts). A family the tracker
+    has no address for fails at once and is ignored; when one family
+    answered, the other gets `dualGrace` (3 s) more, so a broken IPv6 route
+    can't hold up a working IPv4 answer for a whole attempt timeout. Like
+    libtorrent, which announces per listening interface; the alternative,
+    BEP 7's `ipv6=` parameter, needs our global IPv6 address, which we
+    don't know.
+  - **Bans cover an IPv6 /64** (strikes too): one machine usually owns a
+    whole /64 and could otherwise come back on another address.
+  - **`enable_ipv6: false`** = IPv4 only: no IPv6 DHT node, single-stack
+    announces, and IPv6 peer addresses from every source (trackers, PEX,
+    DHT, magnet `x.pe`, the metadata fetcher) are dropped
+    (`torrent.Config.IPv4Only`, `metadata.Config.IPv4Only`). Incoming
+    IPv6 connections are still accepted: someone already reached us.
+  - **Display:** the TUI's peer ADDRESS column grows to the longest
+    address shown (up to the 47 cells of `[…39…]:65535`).
+- **Not done:** IPv6 firewall pinholes (PCP / UPnP IGD:2 `AddPinhole`,
+  D49); BEP 42 secure node IDs.
+- **Tests** run on `::1` and skip themselves where the machine has no IPv6
+  loopback (or `localhost` doesn't resolve to both 127.0.0.1 and ::1):
+  an IPv6-only DHT network, `nodes6` on the wire, `Dual` merging peers
+  announced on only one family, dual-stack HTTP and UDP announces against
+  trackers on both loopbacks (and a silent IPv6 side), a session
+  downloading from an IPv6-only seeder, /64 bans, the engine's IPv6 node
+  and a magnet fetched and downloaded from an IPv6-only peer (and ignored
+  with IPv6 off). Mutation-checked: 8 mutations, each fails a test.

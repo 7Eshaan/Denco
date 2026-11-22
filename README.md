@@ -25,6 +25,8 @@ ID  NAME                             SIZE      PROGRESS  STATUS       DOWN      
   fetched from peers, BEP 9)
 - HTTP and UDP trackers (BEP 3, 12, 15), **DHT** (BEP 5), **peer exchange**
   (BEP 11) — DHT and PEX are never used for private torrents
+- **IPv6** throughout: IPv6 peers, an IPv6 DHT next to the IPv4 one
+  (BEP 32), and trackers hear from us over both (BEP 7)
 - Multi-file torrents, **choosing files** (skip/want, also while running)
 - Rarest-first piece picking, endgame, tit-for-tat choking, seeding
 - **Resume** across restarts and crashes (only pieces that could be stale
@@ -206,6 +208,7 @@ denco config init                  # write a commented file with every setting
 | `listen_port` | `6881` | Port for incoming peers (TCP) and the DHT (UDP). A random one is used if it's taken. |
 | `port_forwarding` | `true` | Ask your router to forward `listen_port` (UPnP / NAT-PMP). |
 | `enable_dht`, `enable_pex` | `true` | Find peers without trackers / exchange peer lists. |
+| `enable_ipv6` | `true` | Use IPv6 too: an IPv6 DHT node, announcing to trackers over IPv4 and IPv6, IPv6 peers. `false` = IPv4 only. |
 | `dht_bootstrap` | public routers | DHT entry points; `none` = only remembered nodes. |
 | `resume_enabled`, `resume_dir` | `true`, `<home>/resume` | Remember torrents across restarts. |
 | `log_file` | `none` | Log to this file instead of the terminal (kept under ~20 MB). A daemon started in the background logs to `<home>/daemon.log` when this is `none`. |
@@ -257,7 +260,8 @@ denco config set log_file ~/denco.log
 ## Limitations
 
 - No uTP, no protocol encryption (MSE), no web seeds, no BitTorrent v2.
-- DHT is IPv4 only; no IPv6 port forwarding.
+- No IPv6 firewall pinholes on the router (IPv6 has no NAT, but some
+  routers block incoming IPv6 connections by default).
 - No graphical app — the CLI and the terminal dashboard only.
 
 ## Development

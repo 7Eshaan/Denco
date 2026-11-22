@@ -50,6 +50,7 @@ func TestParse(t *testing.T) {
 		"enable_dht: no",
 		"dht_bootstrap: 10.0.0.1:6881, example.org:25401",
 		"enable_pex: off",
+		"enable_ipv6: false",
 		"listen_port: 51413",
 		"resume_enabled: off\r", // Windows line ending
 		`resume_dir: "` + dl + ` #1"`,
@@ -68,6 +69,7 @@ func TestParse(t *testing.T) {
 		EnableDHT:                false,
 		DHTBootstrap:             "10.0.0.1:6881,example.org:25401",
 		EnablePEX:                false,
+		EnableIPv6:               false,
 		ListenPort:               51413,
 		PortForwarding:           true, // not in the file: the default
 		AutoStart:                true,

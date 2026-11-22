@@ -158,7 +158,7 @@ func (m *model) summary(st styler) string {
 	add(o.ByState[engine.StateError], "failed", cRed)
 	segs = append(segs, s(" · ", cGray), s(fmt.Sprintf("%d peer%s", o.Peers, plural(o.Peers))))
 	if o.DHT {
-		segs = append(segs, s(" · ", cGray), s(fmt.Sprintf("DHT %d nodes", o.DHTNodes)))
+		segs = append(segs, s(" · ", cGray), s(fmt.Sprintf("DHT %d nodes", o.DHTNodes+o.DHT6Nodes)))
 	}
 	if o.DownLimit > 0 || o.UpLimit > 0 {
 		segs = append(segs, s(" · ", cGray), s("limit ↓ "+limitText(o.DownLimit)+" ↑ "+limitText(o.UpLimit), cYellow))

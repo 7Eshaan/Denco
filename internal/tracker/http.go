@@ -15,11 +15,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/7Eshaan/Denco/internal/bencode"
@@ -88,6 +90,14 @@ type Client struct {
 	HTTP      *http.Client // nil means a client with a 30s timeout
 	UserAgent string       // sent as User-Agent; empty means version.UserAgent()
 	UDP       *UDPClient   // nil means a shared default UDPClient
+	// DualStack announces over IPv4 and over IPv6 separately (BEP 7, D60),
+	// so a tracker with both kinds of address lists us under both and
+	// returns peers of both. Families the tracker (or we) lack fail at once
+	// and are ignored. Off: one announce over whichever family dials first.
+	DualStack bool
+
+	famOnce sync.Once
+	famHTTP [2]*http.Client // DualStack: HTTP clients dialing tcp4 / tcp6
 }
 
 // defaultUDP is shared so UDP connection IDs are reused across torrents.
@@ -100,20 +110,169 @@ func (c *Client) Announce(ctx context.Context, trackerURL string, req Request) (
 		return nil, fmt.Errorf("tracker: bad URL %q: %w", trackerURL, err)
 	}
 	switch u.Scheme {
-	case "http", "https":
-		return c.announceHTTP(ctx, u, req)
-	case "udp":
+	case "http", "https", "udp":
+	default:
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedScheme, u.Scheme)
+	}
+	if !c.DualStack {
+		return c.announceFamily(ctx, u, req, anyFamily)
+	}
+	return c.announceDual(ctx, u, req)
+}
+
+// Address families an announce may be forced to.
+const (
+	anyFamily = iota
+	ipv4
+	ipv6
+)
+
+// announceFamily sends one announce over the given family.
+func (c *Client) announceFamily(ctx context.Context, u *url.URL, req Request, fam int) (*Response, error) {
+	if u.Scheme == "udp" {
 		udp := c.UDP
 		if udp == nil {
 			udp = defaultUDP
 		}
-		return udp.Announce(ctx, trackerURL, req)
-	default:
-		return nil, fmt.Errorf("%w: %s", ErrUnsupportedScheme, u.Scheme)
+		return udp.announceNet(ctx, u.String(), req, [...]string{"udp", "udp4", "udp6"}[fam])
 	}
+	hc := c.HTTP
+	if fam != anyFamily {
+		hc = c.familyHTTP(fam)
+	}
+	return c.announceHTTP(ctx, hc, cloneURL(u), req)
 }
 
-func (c *Client) announceHTTP(ctx context.Context, u *url.URL, req Request) (*Response, error) {
+func cloneURL(u *url.URL) *url.URL {
+	v := *u
+	return &v
+}
+
+// dualGrace is how long, after one family's announce succeeded, the other
+// may still take: a broken IPv6 route mustn't delay working IPv4 answers
+// by a whole attempt timeout.
+var dualGrace = 3 * time.Second
+
+// announceDual announces over IPv4 and IPv6 at once and merges the answers.
+func (c *Client) announceDual(ctx context.Context, u *url.URL, req Request) (*Response, error) {
+	type result struct {
+		resp *Response
+		err  error
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan result, 2)
+	for _, fam := range []int{ipv4, ipv6} {
+		go func() {
+			resp, err := c.announceFamily(ctx, u, req, fam)
+			results <- result{resp, err}
+		}()
+	}
+	var oks []*Response
+	var errs []error
+	var grace <-chan time.Time
+	for n := 0; n < 2; n++ {
+		var r result
+		select {
+		case r = <-results:
+		case <-grace:
+			cancel() // the other family had its chance
+			r = <-results
+		}
+		if r.err != nil {
+			errs = append(errs, r.err)
+			continue
+		}
+		oks = append(oks, r.resp)
+		if grace == nil {
+			t := time.NewTimer(dualGrace)
+			defer t.Stop()
+			grace = t.C
+		}
+	}
+	if len(oks) == 0 {
+		return nil, dualError(errs)
+	}
+	return mergeResponses(oks), nil
+}
+
+// dualError picks the error worth showing when both families failed: not
+// "no address of this family" when the other has a real reason.
+func dualError(errs []error) error {
+	for _, err := range errs {
+		if !noAddress(err) {
+			return err
+		}
+	}
+	return errs[0]
+}
+
+// noAddress reports a dial that failed because the host (or we) has no
+// address of the family asked for.
+func noAddress(err error) bool {
+	var ae *net.AddrError
+	return errors.As(err, &ae)
+}
+
+// mergeResponses combines the answers of both families: every peer once,
+// the shorter interval, the larger swarm counts.
+func mergeResponses(rs []*Response) *Response {
+	out := *rs[0]
+	seen := map[netip.AddrPort]bool{}
+	out.Peers = nil
+	for _, r := range rs {
+		for _, p := range r.Peers {
+			if !seen[p] {
+				seen[p] = true
+				out.Peers = append(out.Peers, p)
+			}
+		}
+	}
+	for _, r := range rs[1:] {
+		out.Interval = min(out.Interval, r.Interval)
+		if r.MinInterval > 0 && (out.MinInterval == 0 || r.MinInterval < out.MinInterval) {
+			out.MinInterval = r.MinInterval
+		}
+		out.Seeders, out.Leechers = max(out.Seeders, r.Seeders), max(out.Leechers, r.Leechers)
+		if out.TrackerID == "" {
+			out.TrackerID = r.TrackerID
+		}
+		if out.Warning == "" {
+			out.Warning = r.Warning
+		}
+	}
+	return &out
+}
+
+// familyHTTP is an HTTP client that only dials tcp4 (ipv4) or tcp6 (ipv6),
+// built from c.HTTP's settings.
+func (c *Client) familyHTTP(fam int) *http.Client {
+	c.famOnce.Do(func() {
+		base := c.HTTP
+		if base == nil {
+			base = &http.Client{Timeout: defaultTimeout}
+		}
+		for i, network := range []string{"tcp4", "tcp6"} {
+			tr := http.DefaultTransport.(*http.Transport).Clone()
+			if bt, ok := base.Transport.(*http.Transport); ok {
+				tr = bt.Clone()
+			}
+			dial := tr.DialContext
+			if dial == nil {
+				dial = (&net.Dialer{Timeout: 30 * time.Second}).DialContext
+			}
+			tr.DialContext = func(ctx context.Context, _, addr string) (net.Conn, error) {
+				return dial(ctx, network, addr)
+			}
+			hc := *base
+			hc.Transport = tr
+			c.famHTTP[i] = &hc
+		}
+	})
+	return c.famHTTP[fam-ipv4]
+}
+
+func (c *Client) announceHTTP(ctx context.Context, hc *http.Client, u *url.URL, req Request) (*Response, error) {
 	u.RawQuery = buildQuery(u.RawQuery, req)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -126,7 +285,6 @@ func (c *Client) announceHTTP(ctx context.Context, u *url.URL, req Request) (*Re
 	}
 	httpReq.Header.Set("User-Agent", ua)
 
-	hc := c.HTTP
 	if hc == nil {
 		hc = &http.Client{Timeout: defaultTimeout}
 	}

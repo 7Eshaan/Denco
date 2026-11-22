@@ -265,3 +265,25 @@ func TestRenderedTextCantDriveTheTerminal(t *testing.T) {
 	press(m, runeKey('d'))
 	check("confirm")
 }
+
+// IPv6 peer addresses (D60) widen the ADDRESS column instead of being cut,
+// and every line still fits the screen.
+func TestIPv6PeerAddressesFit(t *testing.T) {
+	m := detailsModel(140, 20)
+	long := netip.MustParseAddrPort("[2001:db8:85a3:1234:5678:8a2e:370:7334]:51413")
+	m.peers = []engine.Peer{{Addr: long, Client: "qBittorrent 5.3.0.0", Progress: 0.5},
+		{Addr: netip.MustParseAddrPort("10.0.0.1:6881"), Client: "Transmission"}}
+	m.tab = tabPeers
+	got := screenText(m)
+	if !strings.Contains(got, long.String()) {
+		t.Errorf("IPv6 address cut at 140 columns:\n%s", got)
+	}
+	for _, w := range []int{40, 60, 80, 100} {
+		m.update(resizeEvent{w, 20})
+		for i, l := range plainScreen(m) {
+			if width(l) > w {
+				t.Fatalf("at %d columns line %d is %d wide: %q", w, i, width(l), l)
+			}
+		}
+	}
+}

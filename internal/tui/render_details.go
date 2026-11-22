@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/7Eshaan/Denco/internal/engine"
@@ -300,6 +301,9 @@ func heading(st styler, cols []tcol, w int) string {
 	return st.paint(stripANSI(tableLine(styler{}, cols, idx, cells, w)), sBold, cGray)
 }
 
+// maxAddrWidth is the longest address: "[" + 39 + "]:" + 5 digits.
+const maxAddrWidth = 47
+
 var (
 	fileCols = []tcol{
 		{title: "#", w: 4, right: true}, {title: "WANT", w: 4, drop: 2}, {title: "SIZE", w: 9, right: true, drop: 3},
@@ -342,7 +346,12 @@ func (m *model) detailTable(st styler) []string {
 			empty = "Loading…"
 		}
 	} else {
-		cols = peerCols
+		// IPv6 addresses are up to 47 cells: the column grows to the
+		// longest one shown (to a cap), and narrow screens cut it (D60).
+		cols = slices.Clone(peerCols)
+		for _, p := range m.peers {
+			cols[0].w = max(cols[0].w, min(maxAddrWidth, width(p.Addr.String())))
+		}
 		for _, p := range m.peers {
 			dir := "out"
 			if p.Incoming {

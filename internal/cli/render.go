@@ -416,9 +416,23 @@ func renderStatus(w io.Writer, st ipc.Status) {
 	row("Peer exchange", pex)
 	dht := "off (enable_dht)"
 	if st.DHT {
-		dht = fmt.Sprintf("on, UDP port %d, %d node%s (%d good)", st.DHTPort, st.DHTNodes, plural(st.DHTNodes), st.DHTGood)
+		dht = fmt.Sprintf("on, UDP port %d, IPv4 %d node%s (%d good)", st.DHTPort, st.DHTNodes, plural(st.DHTNodes), st.DHTGood)
+		switch {
+		case st.DHT6:
+			dht += fmt.Sprintf(" · IPv6 %d node%s (%d good)", st.DHT6Nodes, plural(st.DHT6Nodes), st.DHT6Good)
+			if st.DHT6Port != st.DHTPort {
+				dht += fmt.Sprintf(" on port %d", st.DHT6Port)
+			}
+		case st.IPv6:
+			dht += " · no IPv6 node (no IPv6 here?)"
+		}
 	}
 	row("DHT", dht)
+	ipv6 := "off (enable_ipv6): IPv4 peers and trackers only"
+	if st.IPv6 {
+		ipv6 = "on: trackers hear from us over IPv4 and IPv6, IPv6 peers welcome"
+	}
+	row("IPv6", ipv6)
 	row("Limits", fmt.Sprintf("↓ %s  ↑ %s", config.DescribeRate(st.DownLimit), config.DescribeRate(st.UpLimit)))
 	row("Seeding", describeSeedLimits(st.SeedRatio, st.SeedTime))
 	row("Speed", fmt.Sprintf("↓ %s  ↑ %s", format.Speed(st.DownloadRate), format.Speed(st.UploadRate)))

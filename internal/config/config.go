@@ -40,6 +40,7 @@ type Config struct {
 	EnableDHT                bool   // BEP 5 DHT; never for private torrents
 	DHTBootstrap             string // comma-separated host:port routers; "" = none
 	EnablePEX                bool   // peer exchange (BEP 11); never for private torrents
+	EnableIPv6               bool   // IPv6 DHT node, dual-stack tracker announces, IPv6 peers (D60)
 	ListenPort               int
 	PortForwarding           bool // ask the router to forward ListenPort (UPnP / NAT-PMP)
 	ResumeEnabled            bool
@@ -72,6 +73,7 @@ func Defaults(home string) Config {
 		EnableDHT:                true,
 		DHTBootstrap:             DefaultDHTBootstrap,
 		EnablePEX:                true, // like mainstream clients; private torrents never use it
+		EnableIPv6:               true,
 		ListenPort:               6881,
 		PortForwarding:           DefaultPortForwarding,
 		ResumeEnabled:            true,
@@ -127,6 +129,9 @@ var settings = []Setting{
 	{Name: "enable_pex", Help: "exchange peer lists with other peers (PEX); never used for private torrents",
 		get: func(c *Config) string { return strconv.FormatBool(c.EnablePEX) },
 		set: func(c *Config, v string) error { return setBool(&c.EnablePEX, v) }},
+	{Name: "enable_ipv6", Help: "use IPv6 too: an IPv6 DHT node, announcing to trackers over both, IPv6 peers",
+		get: func(c *Config) string { return strconv.FormatBool(c.EnableIPv6) },
+		set: func(c *Config, v string) error { return setBool(&c.EnableIPv6, v) }},
 	{Name: "listen_port", Help: "TCP port for incoming peers (0 = random); a random one is used if it's taken",
 		get: func(c *Config) string { return strconv.Itoa(c.ListenPort) },
 		set: func(c *Config, v string) error { return setInt(&c.ListenPort, v, 0, 65535) }},

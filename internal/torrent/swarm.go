@@ -18,12 +18,16 @@ type swarm struct {
 	addrs map[netip.AddrPort]*candidate
 
 	// Bans and strikes are per IP: a peer that connects to us comes from a
-	// random port, so banning one address:port wouldn't keep it out.
+	// random port, so banning one address:port wouldn't keep it out. For
+	// IPv6 they cover the address's /64: one machine usually has a whole
+	// /64 to pick addresses from (D60).
 	// exact (tests only) bans the exact address:port instead, because every
 	// test peer shares 127.0.0.1.
 	strikes map[netip.AddrPort]int
 	banned  map[netip.AddrPort]bool
 	exact   bool
+	// ipv4Only drops IPv6 addresses (enable_ipv6 off, D60).
+	ipv4Only bool
 }
 
 type candidate struct {
@@ -49,12 +53,18 @@ func newSwarm(base time.Duration) *swarm {
 	}
 }
 
-// banKey is the IP (port zeroed), or the full address in exact mode.
+// banKey is the IP — for IPv6 its /64 — with the port zeroed, or the full
+// address in exact mode.
 func (w *swarm) banKey(a netip.AddrPort) netip.AddrPort {
 	if w.exact {
 		return a
 	}
-	return netip.AddrPortFrom(a.Addr(), 0)
+	ip := a.Addr().Unmap()
+	if ip.Is6() {
+		p, _ := ip.Prefix(64)
+		ip = p.Addr()
+	}
+	return netip.AddrPortFrom(ip, 0)
 }
 
 // add records addresses (from trackers, magnet links, ...). Known ones are
@@ -62,7 +72,7 @@ func (w *swarm) banKey(a netip.AddrPort) netip.AddrPort {
 func (w *swarm) add(addrs []netip.AddrPort) {
 	for _, a := range addrs {
 		a = netip.AddrPortFrom(a.Addr().Unmap(), a.Port())
-		if !a.IsValid() || a.Port() == 0 || a.Addr().IsUnspecified() {
+		if !a.IsValid() || a.Port() == 0 || a.Addr().IsUnspecified() || (w.ipv4Only && a.Addr().Is6()) {
 			continue
 		}
 		if _, ok := w.addrs[a]; !ok {

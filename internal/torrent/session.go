@@ -68,6 +68,9 @@ type Config struct {
 	// see pieces.Wanted); nil means every piece. Change it with SetWanted.
 	Wanted *bitfield.Bitfield
 
+	// IPv4Only ignores IPv6 peer addresses from every source (enable_ipv6
+	// off, D60); incoming IPv6 connections are still accepted.
+	IPv4Only bool
 	// PEX enables peer exchange (BEP 11) with peers that support it. It is
 	// never used for private torrents, whatever this says.
 	PEX bool
@@ -223,6 +226,7 @@ func New(mi *metainfo.MetaInfo, st *storage.Storage, have *bitfield.Bitfield, cf
 	s.left.Store(s.m.MissingBytes())
 	s.uploadsPaused.Store(cfg.UploadsPaused)
 	s.swarm.exact = cfg.banExactAddr
+	s.swarm.ipv4Only = cfg.IPv4Only
 	if s.m.Complete() {
 		s.markComplete()
 	}
@@ -603,8 +607,8 @@ func (s *Session) blame(contributors []pieces.PeerKey) {
 		if len(contributors) == 1 || strikes >= 3 {
 			s.log.Warn("banning peer for bad data", "peer", addr)
 			s.swarm.ban(addr)
-			for _, p := range s.peers { // the IP may have several connections
-				if p.addr.Addr() == addr.Addr() {
+			for _, p := range s.peers { // the IP (or /64) may have several connections
+				if s.swarm.banKey(p.addr) == s.swarm.banKey(addr) {
 					p.conn.Close()
 				}
 			}

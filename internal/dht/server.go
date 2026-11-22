@@ -16,8 +16,9 @@
 // queries itself (they are cheap) and hands responses to the waiting
 // query by transaction ID. Lookups and the maintenance goroutine send
 // queries concurrently; the table, token and peer store have their own
-// mutexes. Close stops everything and waits. IPv4 only (IPv6, BEP 32, is
-// not supported yet). See DECISIONS D42.
+// mutexes. Close stops everything and waits. One Server serves one address
+// family; Dual runs an IPv4 and an IPv6 node side by side (BEP 32, D60).
+// See DECISIONS D42.
 package dht
 
 import (
@@ -48,6 +49,10 @@ var DefaultBootstrap = []string{
 
 // Config configures a Server. Zero values use defaults.
 type Config struct {
+	// IPv6 makes this an IPv6 node (BEP 32): it listens on udp6, keeps its
+	// own routing table of IPv6 nodes and exchanges "nodes6". Run one node
+	// per address family (Dual).
+	IPv6      bool
 	Addr      string   // UDP address to listen on, e.g. ":6881"
 	Bootstrap []string // host:port routers; nil = none (tests); see DefaultBootstrap
 	StateFile string   // where the node ID and good nodes are kept ("" = not saved)
@@ -62,6 +67,7 @@ type Config struct {
 // Server is one DHT node.
 type Server struct {
 	cfg   Config
+	v6    bool // an IPv6 node (BEP 32)
 	log   *slog.Logger
 	conn  *net.UDPConn
 	id    ID
@@ -91,6 +97,16 @@ type pendingQuery struct {
 	ch   chan msg
 }
 
+func family(v6 bool) string {
+	if v6 {
+		return "IPv6"
+	}
+	return "IPv4"
+}
+
+// IPv6 reports whether this is the IPv6 node.
+func (s *Server) IPv6() bool { return s.v6 }
+
 // ErrClosed is returned by queries after Close.
 var ErrClosed = errors.New("dht: closed")
 
@@ -115,24 +131,34 @@ func Open(cfg Config) (*Server, error) {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	ua, err := net.ResolveUDPAddr("udp4", cfg.Addr)
+	network := "udp4"
+	if cfg.IPv6 {
+		network = "udp6" // IPv6 only: the IPv4 node is a separate Server
+	}
+	ua, err := net.ResolveUDPAddr(network, cfg.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("dht: %w", err)
 	}
-	conn, err := net.ListenUDP("udp4", ua)
+	conn, err := net.ListenUDP(network, ua)
 	if err != nil {
 		return nil, fmt.Errorf("dht: %w", err)
 	}
 	st := loadState(cfg.StateFile, log)
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
-		cfg: cfg, log: log.With("component", "dht"), conn: conn, id: st.id,
+		cfg: cfg, v6: cfg.IPv6, log: log.With("component", "dht", "family", family(cfg.IPv6)), conn: conn, id: st.id,
 		table: newTable(st.id), tok: newTokens(time.Now), store: newPeerStore(),
 		pending: map[string]*pendingQuery{}, routers: map[netip.AddrPort]bool{},
 		verifySem: make(chan struct{}, 16),
 		ctx:       ctx, cancel: cancel,
 	}
-	s.table.load(st.nodes)
+	var nodes []NodeInfo
+	for _, n := range st.nodes { // a state file of the other family loads nothing
+		if isFamily(n.Addr, cfg.IPv6) {
+			nodes = append(nodes, n)
+		}
+	}
+	s.table.load(nodes)
 	s.wg.Add(2)
 	go func() { defer s.wg.Done(); s.readLoop() }()
 	go func() { defer s.wg.Done(); s.maintain() }()
@@ -178,7 +204,7 @@ func (s *Server) Stats() Stats {
 // AddNode is a hint that a DHT node may run at addr (a peer's PORT
 // message). It is pinged, and joins the table only if it answers.
 func (s *Server) AddNode(addr netip.AddrPort) {
-	if compact.Usable(addr) && addr.Addr().Unmap().Is4() {
+	if compact.Usable(addr) && isFamily(addr, s.v6) {
 		s.verify(NodeInfo{Addr: addr}, true)
 	}
 }
@@ -340,7 +366,7 @@ func (s *Server) answer(m msg, from netip.AddrPort) {
 			fail(errProtocol, "bad target")
 			return
 		}
-		reply(map[string]any{"nodes": encodeNodes(s.table.closest(target, K))})
+		reply(map[string]any{nodesKey(s.v6): encodeNodes(s.table.closest(target, K), s.v6)})
 	case "get_peers":
 		hash, ok := m.hash("info_hash")
 		if !ok {
@@ -355,7 +381,7 @@ func (s *Server) answer(m msg, from netip.AddrPort) {
 			}
 			r["values"] = values
 		}
-		r["nodes"] = encodeNodes(s.table.closest(hash, K))
+		r[nodesKey(s.v6)] = encodeNodes(s.table.closest(hash, K), s.v6)
 		reply(r)
 	case "announce_peer":
 		hash, ok := m.hash("info_hash")
@@ -429,7 +455,11 @@ func (s *Server) bootstrap() {
 		if err != nil {
 			continue
 		}
-		ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", host)
+		ipNet := "ip4"
+		if s.v6 {
+			ipNet = "ip6"
+		}
+		ips, err := net.DefaultResolver.LookupNetIP(ctx, ipNet, host)
 		if err != nil {
 			s.log.Debug("bootstrap router unresolved", "router", hp, "err", err)
 			continue

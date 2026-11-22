@@ -73,7 +73,7 @@ so older references stay valid.
         start past `max_active_downloads`, `Q` column, TUI keys (D58).
   - [x] **15b — Per-torrent speed limits.** Own up/down limiters under the
         global ones; pacing uses the tighter fair share.
-  - [ ] **15c — Full IPv6.** IPv6 DHT (BEP 32), announcing over both
+  - [x] **15c — Full IPv6.** IPv6 DHT (BEP 32), announcing over both
         families (BEP 7), /64 bans, wider address columns.
   - [ ] **15d — Web seeds (BEP 19).** HTTP range downloads as pseudo-peers;
         private/loopback URLs refused by default.

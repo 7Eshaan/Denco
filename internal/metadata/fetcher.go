@@ -25,6 +25,8 @@ type Config struct {
 	// receive: nothing is sent, so nothing leaks if the torrent turns out
 	// to be private (unknowable before the metadata arrives).
 	PEX bool
+	// IPv4Only ignores IPv6 peer addresses (enable_ipv6 off, D60).
+	IPv4Only bool
 	// DHT, if set, is asked for peers every Retry. We don't announce: with
 	// no metadata we have nothing to offer yet.
 	DHT PeerFinder
@@ -169,6 +171,9 @@ func (f *Fetcher) Run(ctx context.Context) ([]byte, error) {
 		}
 		f.mu.Unlock()
 		for _, a := range addrs {
+			if f.cfg.IPv4Only && a.Addr().Unmap().Is6() {
+				continue
+			}
 			known[a] = true
 			if !tried[a] && !active[a] && !f.isBanned(a) {
 				tried[a] = true

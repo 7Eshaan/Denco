@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,15 +47,29 @@ func TestMessages(t *testing.T) {
 func TestCompactNodes(t *testing.T) {
 	a := NodeInfo{NewID(), netip.MustParseAddrPort("1.2.3.4:5")}
 	b := NodeInfo{NewID(), netip.MustParseAddrPort("[::ffff:6.7.8.9]:10")}
-	v6 := NodeInfo{NewID(), netip.MustParseAddrPort("[2001:db8::1]:1")} // skipped: IPv4 only
+	v6 := NodeInfo{NewID(), netip.MustParseAddrPort("[2001:db8::1]:1")} // other family: skipped
 	zero := NodeInfo{NewID(), netip.MustParseAddrPort("1.1.1.1:0")}     // unusable port
-	got := decodeNodes(encodeNodes([]NodeInfo{a, b, v6, zero}) + "junk")
+	got := decodeNodes(encodeNodes([]NodeInfo{a, b, v6, zero}, false)+"junk", false)
 	want := []NodeInfo{a, {b.ID, netip.MustParseAddrPort("6.7.8.9:10")}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("nodes = %v, want %v", got, want)
 	}
-	body := map[string]any{"values": []any{"\x01\x02\x03\x04\x00\x50", "short", 7, "\x01\x02\x03\x04\x00\x00"}}
-	if v := decodeValues(body); len(v) != 1 || v[0] != netip.MustParseAddrPort("1.2.3.4:80") {
+	// BEP 32: "nodes6" entries are 38 bytes and carry only IPv6 nodes.
+	v6b := NodeInfo{NewID(), netip.MustParseAddrPort("[2001:db8::2]:6881")}
+	enc6 := encodeNodes([]NodeInfo{a, v6, b, v6b}, true)
+	if len(enc6) != 2*nodeLen6 {
+		t.Fatalf("nodes6 is %d bytes, want %d", len(enc6), 2*nodeLen6)
+	}
+	if got := decodeNodes(enc6, true); !slices.Equal(got, []NodeInfo{v6, v6b}) {
+		t.Fatalf("nodes6 = %v", got)
+	}
+	if got := decodeNodes(enc6, false); len(got) != 0 { // read as IPv4: no garbage nodes
+		t.Logf("IPv4 reading of nodes6 gave %v", got)
+	}
+	peer6 := "\x20\x01\x0d\xb8" + strings.Repeat("\x00", 11) + "\x05\x1a\xe1" // [2001:db8::5]:6881
+	body := map[string]any{"values": []any{"\x01\x02\x03\x04\x00\x50", "short", 7, "\x01\x02\x03\x04\x00\x00", peer6}}
+	if v := decodeValues(body); len(v) != 2 || v[0] != netip.MustParseAddrPort("1.2.3.4:80") ||
+		v[1] != netip.MustParseAddrPort("[2001:db8::5]:6881") {
 		t.Fatalf("values = %v", v)
 	}
 }

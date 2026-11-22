@@ -156,15 +156,37 @@ type NodeInfo struct {
 	Addr netip.AddrPort
 }
 
-// nodeLen is one entry of the compact node format: ID + IPv4 + port.
-const nodeLen = 20 + compact.IPv4Len
+// Compact node info (BEP 5, BEP 32): a 20-byte ID and a compact address,
+// 26 bytes per IPv4 node under "nodes", 38 per IPv6 node under "nodes6".
+const (
+	nodeLen  = 20 + compact.IPv4Len
+	nodeLen6 = 20 + compact.IPv6Len
+)
 
-// encodeNodes packs IPv4 nodes in the compact node format (IPv6 nodes,
-// BEP 32, aren't supported and are skipped).
-func encodeNodes(nodes []NodeInfo) string {
-	b := make([]byte, 0, len(nodes)*nodeLen)
+// nodesKey is the key a node list of one address family travels under.
+func nodesKey(v6 bool) string {
+	if v6 {
+		return "nodes6"
+	}
+	return "nodes"
+}
+
+// isFamily reports whether a is an address of the family (v6 or IPv4).
+func isFamily(a netip.AddrPort, v6 bool) bool {
+	ip := a.Addr().Unmap()
+	return ip.Is6() == v6
+}
+
+// encodeNodes packs the nodes of one address family in the compact node
+// format; nodes of the other family are skipped.
+func encodeNodes(nodes []NodeInfo, v6 bool) string {
+	n6 := nodeLen
+	if v6 {
+		n6 = nodeLen6
+	}
+	b := make([]byte, 0, len(nodes)*n6)
 	for _, n := range nodes {
-		if n.Addr.Addr().Unmap().Is4() {
+		if isFamily(n.Addr, v6) {
 			b = append(b, n.ID[:]...)
 			b = compact.Append(b, n.Addr)
 		}
@@ -172,14 +194,19 @@ func encodeNodes(nodes []NodeInfo) string {
 	return string(b)
 }
 
-// decodeNodes unpacks compact node info, skipping unusable addresses.
-func decodeNodes(s string) []NodeInfo {
+// decodeNodes unpacks compact node info of one family, skipping unusable
+// addresses.
+func decodeNodes(s string, v6 bool) []NodeInfo {
+	size, ipLen := nodeLen, 4
+	if v6 {
+		size, ipLen = nodeLen6, 16
+	}
 	var out []NodeInfo
-	for i := 0; i+nodeLen <= len(s); i += nodeLen {
+	for i := 0; i+size <= len(s); i += size {
 		var n NodeInfo
 		copy(n.ID[:], s[i:i+20])
-		addrs := compact.Parse(s[i+20:i+nodeLen], 4)
-		if len(addrs) == 1 && compact.Usable(addrs[0]) {
+		addrs := compact.Parse(s[i+20:i+size], ipLen)
+		if len(addrs) == 1 && compact.Usable(addrs[0]) && isFamily(addrs[0], v6) {
 			n.Addr = addrs[0]
 			out = append(out, n)
 		}
@@ -187,16 +214,21 @@ func decodeNodes(s string) []NodeInfo {
 	return out
 }
 
-// decodeValues reads get_peers "values": a list of 6-byte compact peers.
+// decodeValues reads get_peers "values": a list of compact peers, 6 bytes
+// for IPv4 and 18 for IPv6 (BEP 32: an IPv6 node returns IPv6 peers).
 func decodeValues(body map[string]any) []netip.AddrPort {
 	list, _ := bencode.GetList(body, "values")
 	var out []netip.AddrPort
 	for _, v := range list {
 		s, ok := v.(string)
-		if !ok || len(s) != compact.IPv4Len {
-			continue
+		var a []netip.AddrPort
+		switch {
+		case ok && len(s) == compact.IPv4Len:
+			a = compact.Parse(s, 4)
+		case ok && len(s) == compact.IPv6Len:
+			a = compact.Parse(s, 16)
 		}
-		if a := compact.Parse(s, 4); compact.Usable(a[0]) {
+		if len(a) == 1 && compact.Usable(a[0]) {
 			out = append(out, a[0])
 		}
 	}

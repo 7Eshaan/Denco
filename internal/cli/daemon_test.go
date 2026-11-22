@@ -324,3 +324,22 @@ func TestRenderStatusCountsEveryState(t *testing.T) {
 		t.Errorf("missing %q in:\n%s", want, b.String())
 	}
 }
+
+func TestRenderStatusIPv6(t *testing.T) {
+	var st ipc.Status
+	st.DHT, st.DHTPort, st.DHTNodes, st.DHTGood = true, 6881, 120, 80
+	st.IPv6, st.DHT6, st.DHT6Port, st.DHT6Nodes, st.DHT6Good = true, true, 6881, 34, 20
+	var b bytes.Buffer
+	renderStatus(&b, st)
+	for _, want := range []string{"IPv4 120 nodes (80 good) · IPv6 34 nodes (20 good)", "IPv6:", "over IPv4 and IPv6"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("status lacks %q:\n%s", want, b.String())
+		}
+	}
+	st.DHT6, st.IPv6 = false, false
+	b.Reset()
+	renderStatus(&b, st)
+	if !strings.Contains(b.String(), "off (enable_ipv6)") || strings.Contains(b.String(), "IPv6 34") {
+		t.Errorf("IPv6 off:\n%s", b.String())
+	}
+}

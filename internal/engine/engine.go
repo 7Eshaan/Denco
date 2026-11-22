@@ -45,6 +45,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/resume"
 	"github.com/7Eshaan/Denco/internal/storage"
 	"github.com/7Eshaan/Denco/internal/torrent"
+	"github.com/7Eshaan/Denco/internal/tracker"
 )
 
 // Config configures an Engine. StateDir and DownloadDir are required.
@@ -60,7 +61,15 @@ type Config struct {
 	// EnableDHT runs a DHT node (UDP, on the peer port's number if free)
 	// shared by all torrents; DHTBootstrap are its routers. Its state is
 	// kept in StateDir/dht.json.
-	EnableDHT    bool
+	EnableDHT bool
+	// EnableIPv6 (D60): an IPv6 DHT node next to the IPv4 one (BEP 32),
+	// announces to trackers over both families (BEP 7), and IPv6 peers.
+	// Off: IPv4 only (incoming IPv6 connections are still accepted).
+	// DHT6Addr overrides where the IPv6 node listens (tests); by default it
+	// is the peer port's number on every IPv6 address, or nothing when
+	// ListenAddr names an IPv4 address.
+	EnableIPv6   bool
+	DHT6Addr     string
 	DHTBootstrap []string
 	// Seeding limits (D45): a complete torrent stops seeding ("finished")
 	// at this ratio or after this much seeding time; 0 = no limit. A
@@ -96,7 +105,7 @@ type Engine struct {
 	down    *ratelimit.Limiter // shared by every connection
 	up      *ratelimit.Limiter
 	pacer   *torrent.Pacer  // paces every session under the download limit (D46)
-	dht     *dht.Server     // nil when DHT is off
+	dht     *dht.Dual       // nil when DHT is off
 	portmap *portmap.Mapper // nil when port forwarding is off
 
 	mu        sync.Mutex
@@ -188,6 +197,10 @@ func Open(cfg Config) (*Engine, error) {
 	if cfg.RetryMax <= 0 {
 		cfg.RetryMax = time.Hour
 	}
+	if cfg.Session.Announcer == nil {
+		// Sessions and magnet fetches announce over both families (BEP 7).
+		cfg.Session.Announcer = &tracker.Client{DualStack: cfg.EnableIPv6}
+	}
 	if cfg.Session.MaxPeers <= 0 {
 		cfg.Session.MaxPeers = 50 // same default as torrent.Config; set here so Overview can show it
 	}
@@ -266,24 +279,52 @@ func listen(addr string, opts peer.Options, log *slog.Logger) (*torrent.Listener
 	return torrent.Listen(net.JoinHostPort(host, "0"), opts, log)
 }
 
-// openDHT starts the DHT node on UDP port `port` (the peer port's number,
-// as most clients do), or a random one if that's taken.
-func openDHT(cfg Config, port uint16, log *slog.Logger) (*dht.Server, error) {
+// openDHT starts the DHT: an IPv4 node on UDP port `port` (the peer port's
+// number, as most clients do; a random one if that's taken) and, with
+// EnableIPv6, an IPv6 node on the same number (D60). No IPv6 on this
+// machine just means no IPv6 node.
+func openDHT(cfg Config, port uint16, log *slog.Logger) (*dht.Dual, error) {
 	host, _, _ := net.SplitHostPort(cfg.ListenAddr)
-	dcfg := dht.Config{
-		Addr:      net.JoinHostPort(host, strconv.Itoa(int(port))),
-		Bootstrap: cfg.DHTBootstrap,
-		StateFile: filepath.Join(cfg.StateDir, "dht.json"),
-		Logger:    log,
+	open := func(dcfg dht.Config, addr string) (*dht.Server, error) {
+		dcfg.Addr = addr
+		d, err := dht.Open(dcfg)
+		if err != nil {
+			h, _, _ := net.SplitHostPort(addr)
+			log.Warn("DHT port unavailable; using a random port", "addr", addr, "err", err)
+			dcfg.Addr = net.JoinHostPort(h, "0")
+			d, err = dht.Open(dcfg)
+		}
+		return d, err
 	}
-	d, err := dht.Open(dcfg)
-	if err != nil {
-		log.Warn("DHT port unavailable; using a random port", "addr", dcfg.Addr, "err", err)
-		dcfg.Addr = net.JoinHostPort(host, "0")
-		d, err = dht.Open(dcfg)
-	}
+	base := dht.Config{Bootstrap: cfg.DHTBootstrap, Logger: log}
+	v4cfg := base
+	v4cfg.StateFile = filepath.Join(cfg.StateDir, "dht.json")
+	v4, err := open(v4cfg, net.JoinHostPort(host, strconv.Itoa(int(port))))
 	if err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
+	}
+	d := &dht.Dual{V4: v4}
+	if !cfg.EnableIPv6 {
+		return d, nil
+	}
+	addr6 := cfg.DHT6Addr
+	if addr6 == "" {
+		ip, err := netip.ParseAddr(host)
+		switch {
+		case host == "":
+			addr6 = net.JoinHostPort("::", strconv.Itoa(int(v4.Port())))
+		case err == nil && ip.Is6():
+			addr6 = net.JoinHostPort(host, strconv.Itoa(int(v4.Port())))
+		default:
+			return d, nil // bound to an IPv4 address (or a name): IPv4 only
+		}
+	}
+	v6cfg := base
+	v6cfg.IPv6 = true
+	v6cfg.StateFile = filepath.Join(cfg.StateDir, "dht6.json")
+	if d.V6, err = open(v6cfg, addr6); err != nil {
+		log.Info("no IPv6 DHT node (this machine may have no IPv6)", "err", err)
+		d.V6 = nil
 	}
 	return d, nil
 }
@@ -533,9 +574,10 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 	cfg.PeerOpts, cfg.UploadLimiter, cfg.Pacer = e.peerOpts(), e.up, e.pacer
 	cfg.TorrentDownLimiter, cfg.TorrentUpLimiter = t.downLim, t.upLim
 	cfg.PublicPort = e.publicPort
-	if e.dht != nil { // only when set: a nil *dht.Server in the interface isn't nil
+	if e.dht != nil { // only when set: a nil *dht.Dual in the interface isn't nil
 		cfg.DHT = e.dht
 	}
+	cfg.IPv4Only = !e.cfg.EnableIPv6
 	prev := state
 	prev.Fresh, prev.Existing, prev.Paused = false, false, false // from now on the files are ours
 

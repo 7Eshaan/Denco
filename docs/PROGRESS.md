@@ -4,7 +4,16 @@
 2026-11-21: queue control, per-torrent limits, full IPv6, web seeds,
 MSE/PE, uTP; sub-phases 15a–15f in ROADMAP).
 
-**Phase 15b — per-torrent speed limits (D59) · ✅ done, not committed yet.**
+**Phase 15c — full IPv6 (D60) · ✅ done, not committed yet.**
+IPv6 DHT node next to the IPv4 one (BEP 32: `dht.Config.IPv6`, `nodes6`,
+18-byte values, own table and `dht6.json`; `dht.Dual` merges lookups);
+trackers announced to over IPv4 and IPv6 separately and merged (BEP 7,
+`tracker.Client.DualStack`, 3 s grace for a slow family); bans per IPv6
+/64; `enable_ipv6` (default true; off = IPv4 only, IPv6 addresses dropped
+everywhere); `status` shows both DHT tables and an IPv6 row; the TUI's peer
+ADDRESS column widens for IPv6 addresses.
+
+**Phase 15b — per-torrent speed limits (D59) · ✅ done, committed as 4c4c8e8.**
 Each torrent has its own up/down limiter on top of the global ones (peer
 reader waits on both; the uploader too), kept on the engine entry so
 changes apply live and survive pause/resume; saved as `down_limit` /
@@ -69,11 +78,13 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** the user commits 15b; then **15c — full IPv6** (plan:
-`dht.Server` per address family + a wrapper merging both, BEP 32 `nodes6`
-/ `want`, separate v6 nodes in `dht.json`; announce to HTTP trackers over
-both families (BEP 7); bans per /64 for IPv6; wider ADDRESS columns;
-`enable_ipv6` setting; tests on ::1, skipped where unavailable).
+**Next action:** the user commits 15c; then **15d — web seeds (BEP 19)**
+(plan: `url-list` / magnet `ws=`; a web seed is a pseudo-peer goroutine
+fetching whole pieces with HTTP Range requests through the normal
+BlockReceived/hash/write path; the piece manager's peer key generalised
+to name web seeds; download limit applies; 503/Retry-After backoff; hash
+failures strike a web seed like a peer; URLs resolving to loopback/private
+addresses refused by default; web seeds shown in peers and details).
 Optional, any time: a release (v0.2.1 for the D57 fix, or v0.3.0 once
 some of Phase 15 is in). Open items, if wanted: the plain
 CLI should `clean` torrent names too (D55), the user's router check
@@ -119,9 +130,9 @@ web seeds, v2, GUI).
   UPnP multicast search could not be sent there ("no route to host" — the
   same from Python, so a macOS Local Network permission / sandbox limit of
   that environment, not Denco). A real mapping hasn't been made yet.
-- No IPv6 port forwarding / pinholes; the BEP 5 PORT message carries the
+- No IPv6 firewall pinholes (D60); the BEP 5 PORT message carries the
   local DHT port even if the router forwards another one (D49).
-- DHT: IPv4 only (no BEP 32); no BEP 42 secure node IDs. Behind NAT without
+- DHT: IPv4 and IPv6 nodes (D60); no BEP 42 secure node IDs. Behind NAT without
   a forwarded port the routing table fills slowly. Two DHT nodes alone
   (no tracker, no third node) take minutes to find each other.
 - `denco download` (standalone) doesn't use extensions or DHT, and has no
@@ -142,7 +153,27 @@ web seeds, v2, GUI).
 ## Open questions for the user
 - MSE encryption stays out of scope? (UPnP/NAT-PMP: confirmed, done in 12d.)
 
-## Last test run (2026-11-21, Phase 15b, D59)
+## Last test run (2026-11-22, Phase 15c, D60)
+- `go test -race -count=1 ./...` — all 24 packages pass, the IPv6 tests
+  really ran (this machine has ::1 and localhost → 127.0.0.1 + ::1)
+- stress `-race -count=5 -cpu=1,2,8` dht, tracker, metadata, engine,
+  cli, tui, torrent, peer (15 runs each) — all pass
+- `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
+  linux/windows/darwin × amd64/arm64 — all build · external deps: none
+- new tests: dht `TestIPv6AnnounceAndFindPeers`, `TestIPv6NodeSpeaksNodes6`,
+  `TestDualSearchesBothFamilies`, nodes6/18-byte values in
+  `TestCompactNodes`; tracker `TestDualStackHTTPAnnounce`,
+  `TestDualStackToleratesOneFamily`, `TestDualStackUDPAnnounce`; torrent
+  `TestDownloadFromIPv6Peer`, `TestBanKeys`; engine
+  `TestIPv6DHTNodeAndDualStackTrackers`, `TestMagnetFromIPv6Peer`; cli
+  `TestRenderStatusIPv6`; tui `TestIPv6PeerAddressesFit`; config
+  `enable_ipv6`. Mutation-checked: 8 mutations (nodes6 key, Dual using one
+  family, 18-byte values, DualStack ignored, no grace cancel, /64 bans,
+  IPv4-only swarm and fetcher filters) — each fails a test
+- found by a test: the ADDRESS column cap (41) cut full-length IPv6
+  addresses; raised to their true maximum, 47
+
+## Previous test run (2026-11-21, Phase 15b, D59)
 - `go test -race -count=1 ./...` — all 24 packages pass
 - stress `-race -count=5 -cpu=1,2,8` engine, cli, tui, ipc, torrent,
   peer (15 runs each) — all pass
@@ -332,4 +363,5 @@ web seeds, v2, GUI).
   (D56, 41180df); fix for peers dropped just before `Run` (D57, a0ae613).
 - **Phase 15a (2026-11-21, commit 98d64c2):** download queue control and
   force start (D58).
-- **Phase 15b (2026-11-21):** per-torrent speed limits (D59).
+- **Phase 15b (2026-11-21, commit 4c4c8e8):** per-torrent speed limits (D59).
+- **Phase 15c (2026-11-22):** full IPv6 (D60).

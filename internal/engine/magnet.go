@@ -100,6 +100,7 @@ func (e *Engine) fetchMetadata(ctx context.Context, t *entry, state resume.State
 		Announcer: e.cfg.Session.Announcer,
 		Port:      e.ln.Port(),
 		PEX:       e.cfg.Session.PEX,
+		IPv4Only:  !e.cfg.EnableIPv6,
 		Retry:     e.cfg.Session.AnnounceRetry, // 0 = the fetcher's default
 		Logger:    e.log,
 	}

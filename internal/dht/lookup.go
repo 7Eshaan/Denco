@@ -134,8 +134,8 @@ func (s *Server) lookup(ctx context.Context, target ID, getPeers bool) lookupRes
 		r.c.state = answered
 		r.c.ID = r.m.id
 		r.c.token, _ = bencode.GetString(r.m.body, "token")
-		nodes, _ := bencode.GetString(r.m.body, "nodes")
-		for _, n := range decodeNodes(nodes) {
+		nodes, _ := bencode.GetString(r.m.body, nodesKey(s.v6)) // our family's list (BEP 32)
+		for _, n := range decodeNodes(nodes, s.v6) {
 			add(n, false)
 		}
 		if getPeers {
