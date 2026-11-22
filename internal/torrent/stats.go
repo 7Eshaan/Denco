@@ -37,8 +37,10 @@ type Stats struct {
 	Seeds    int // connected peers that have everything
 	Leechers int // connected peers that don't
 	Known    int // addresses known to the swarm (any state)
-	// Encrypted counts connected peers using MSE with RC4 (D63).
+	// Encrypted counts connected peers using MSE with RC4 (D63); UTP
+	// those connected over uTP (D64).
 	Encrypted int
+	UTP       int
 
 	TrackerSeeders  int // -1 if unknown
 	TrackerLeechers int
@@ -65,6 +67,7 @@ type PeerInfo struct {
 	Client       string
 	Outgoing     bool
 	Encrypted    bool    // MSE with RC4 (D63)
+	UTP          bool    // over uTP, not TCP (D64)
 	Progress     float64 // fraction of pieces the peer has
 	Downloaded   int64
 	DownloadRate int64
@@ -139,6 +142,9 @@ func (s *Session) publish() {
 		if p.conn.Encrypted {
 			st.Encrypted++
 		}
+		if p.conn.UTP {
+			st.UTP++
+		}
 		if p.has.Full() {
 			st.Seeds++
 		} else {
@@ -149,6 +155,7 @@ func (s *Session) publish() {
 			Client:       peerid.ClientName(p.conn.Peer.PeerID),
 			Outgoing:     p.conn.Outgoing,
 			Encrypted:    p.conn.Encrypted,
+			UTP:          p.conn.UTP,
 			Progress:     float64(p.has.Count()) / float64(max(1, s.info.NumPieces())),
 			Downloaded:   p.downloaded,
 			DownloadRate: p.rate.perSecond(s.cfg.Tick),

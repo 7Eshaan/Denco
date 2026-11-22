@@ -1405,3 +1405,142 @@ One short entry per decision. Newest at the bottom. Format:
   plain but not with `prefer` were retested 3 times each way: they fail
   and succeed in both modes (busy peers), so no MSE fault. The only peer
   `require` lost was the one that needed the fallback.
+
+### D64 — uTP (BEP 29, Phase 15f)
+- **Decision:**
+  - **New package `internal/udpmux`:** one UDP socket per address family,
+    on the peer port's number, shared by the DHT and uTP — peers send uTP
+    to the same port number as TCP, and the DHT already lived there. A
+    reader goroutine hands each datagram to the first `Endpoint` whose
+    matcher accepts it (`IsDHT`: a bencoded dict, first byte `d`;
+    `IsUTP`: version 1, type ≤ 4, ≥ 20 bytes — disjoint); full queues
+    drop, like the network. `dht.Config.Conn` lets a node run on an
+    endpoint (`dht.PacketConn`); the engine opens the sockets (with the
+    old random-port fallback) whenever the DHT or uTP runs, and forwards
+    that UDP port on the router.
+  - **New package `internal/utp`** (stdlib only): `Socket` (dialer and
+    `net.Listener` over a `PacketConn`; connections keyed by sender and
+    connection ID; SYN repeated 3× over `ConnectTimeout`, default 2 s →
+    `ErrConnect`), `Conn` (a `net.Conn` with real deadlines), `Dialer`
+    (picks the IPv4 or IPv6 socket).
+    - Wire format per BEP 29: 20-byte header, selective-ack extension (up
+      to 64 packets past the ack), unknown extensions skipped. The SYN's
+      connection ID is the initiator's receive ID; a STATE's sequence
+      number is the next one and isn't consumed (so the initiator's ack
+      starts at the acceptor's STATE seq − 1), as libutp/libtorrent do.
+    - Datagrams ≤ 1232 bytes (fit any path MTU ≥ 1280, tunnels included;
+      no MTU discovery).
+    - Reliability: cumulative + selective acks; fast retransmit on 3
+      SACKed / 3 duplicate acks, with early retransmit (RFC 5827) when
+      few packets are in flight, and again if the resend is still missing
+      2 RTTs later; a tail-loss probe after 2 RTTs of silence; RTO
+      (RFC 6298 smoothing, 500 ms–30 s, doubling) marks everything in
+      flight lost and resends as the window allows. RTT samples: Karn's
+      rule, and per ack only the most recently sent packet (others may
+      have waited behind a hole — found by measurement: RTT estimates of
+      900 ms on loopback before).
+    - **LEDBAT:** the peer's `timestamp_difference` is our packets'
+      one-way delay plus a clock offset; base delay = lowest sample over
+      the last 2 minutes, queuing delay = lowest of the last 3 samples −
+      base. Target 100 ms; window += 3000 · off_target · acked / window
+      (≤ 3000 bytes per RTT), growth only while the window is what limits
+      us; slow start (doubling) until 50 ms of queuing or ssthresh; loss →
+      halve (once per RTT); timeout → one packet.
+    - Flow control: 1 MiB receive and send buffers per connection; the
+      advertised window is the free receive buffer; one packet may always
+      be in flight (probes a zero window); a reader freeing ¼ of the
+      buffer sends a window update; a packet that doesn't fit is
+      answered (keeps the sender alive) but not acked.
+    - Delayed acks: immediately for ≥ 2 packets, out-of-order data,
+      duplicates and FINs, otherwise within a 10 ms tick. Keep-alive ack
+      after 29 s of silence (NAT mappings). Dead after 30 s without any
+      packet while data is unacked (`ErrTimeout`).
+    - Close: buffered data, then FIN; the connection is forgotten once our
+      FIN is acked and the peer's FIN received (both closed), or reset
+      after 10 s of lingering. `ST_RESET` from the peer → `ErrReset`.
+      Packets for unknown connections are dropped, not reset (a reset
+      needs the peer's receive ID, which a stray packet doesn't reliably
+      give).
+  - **Policy `peer.Options.Transport`** (+ `UTP peer.UTPDialer`), config
+    `transport` (default `both`; restart to change):
+    - `both`: dial uTP first; if the peer doesn't answer uTP at all
+      (`ErrConnect` — the connection itself, not a later handshake
+      failure) dial TCP. The swarm remembers such a peer as TCP-only and
+      dials TCP from then on (`candidate.tcpOnly`), so the 2 s uTP try
+      is paid once per peer — libtorrent does the same. Incoming: both.
+    - `tcp`: no uTP socket at all.
+    - `utp`: dial uTP only; incoming TCP peers are hung up on
+      (`Listener.RefuseTCP`; the port stays bound).
+    The zero value of `peer.Options` is TCP only, so library callers and
+    tests are unchanged.
+  - **Integration:** MSE (D63) runs on top of either transport; the
+    peer wire code doesn't know which carries it (`peer.Conn.UTP` from the
+    connection's local address type). `torrent.Listener.Serve` accepts
+    from uTP sockets too (and closes them). An incoming uTP peer's address
+    is its UDP socket — usually its listen port.
+  - **Visible:** `PeerInfo.UTP`, `Stats.UTP`, `engine.Peer.UTP`,
+    `Overview.Transport/UTPPort/UTPPeers`; a VIA column (`tcp`, `utp`,
+    `http` for web seeds) in `denco peers`, the TUI peers tab (dropped
+    first on narrow screens) and `denco probe` (new `-transport` flag); a
+    "Transport" row in `denco status`; PEX sets the `0x04` (uTP) flag.
+    `denco download` (standalone, no daemon) stays TCP only.
+- **Alternatives:** dialing uTP and TCP at once and keeping the winner
+  (two connections to one peer, which peers treat as duplicates); TCP
+  first (uTP would hardly ever be used); trying uTP only for peers known
+  to support it from PEX flags (tracker and DHT peers carry no flags);
+  MTU discovery (more code for ~10% larger packets); a timer per
+  connection instead of one 10 ms ticker per socket.
+- **Tests:** utp — header round trip (SACK, unknown extensions, bad
+  packets, wrapping sequence numbers); 4 MiB each way at once; 10% loss +
+  5% duplicates + 20% reordering both ways, 1 MiB each way intact; 20
+  connections over one socket pair; unanswered SYN → `ErrConnect` after 3
+  SYNs and nothing left registered; Close delivers everything then EOF,
+  both sides forget the connection well before the linger time; read and
+  write deadlines (incl. one set while a Read waits); a slow reader holds
+  the sender back by the window; socket close resets the peer; a dead
+  peer → `ErrTimeout`; a timeout resends the first lost packet first;
+  LEDBAT (growth below target ≈ 3000 bytes/window, shrink above, no
+  growth when application-limited, slow start doubling and its exit,
+  2-minute base delay, loss halving once per RTT). udpmux — matchers, the
+  DHT answering and a uTP stream on one port, unmatched dropped, close.
+  peer — BitTorrent + MSE over uTP, fallback to TCP, `utp` doesn't fall
+  back. torrent — two nodes transfer over uTP (encrypted); a TCP-only peer
+  gets exactly one uTP attempt (3 SYNs) over several reconnects; PEX flag;
+  `RefuseTCP`. engine — two engines over uTP on the DHT's port; transport
+  settings. config, cli.
+  Mutation-checked: 28 mutations (LEDBAT sign, growth when
+  application-limited, slow-start exit, loss halving, base-delay expiry,
+  SACK ignored, receive window ignored, STATE seq consumed, SYN ID, closing
+  after our FIN only, out-of-order dropped, deadlines, timeout window,
+  dead-peer timeout, SYN repeats, resets, tail-loss probe, fast
+  retransmit, mux routing, TCP fallback, TCP-only remembered / used,
+  RefuseTCP, PEX flag, uTP counted, engine starting uTP, SYN window) —
+  each fails a test. Seven survived the first round: five were missing
+  unit tests (SACK, window, deadline on an idle conn, timeout window,
+  tail-loss probe), now added; one was dead code in `peer.Dial` (a
+  "uTP only" guard the uTP branch made unreachable), removed; and writing
+  those tests found a real slip — an accepted connection ignored the
+  window in the peer's SYN (4 packets until the first ack) — fixed and
+  tested.
+- **Found by measurement while building it:** with 10% loss, 1 MiB took
+  5–39 s: RTT estimates were inflated by packets acked only after a hole
+  was repaired, and lost retransmissions / tail losses waited for the
+  RTO. Taking the RTT from the newest acked packet, early retransmit,
+  repeated fast retransmit and the tail-loss probe brought it to ~2–3 s
+  with ~13% resent.
+- **Real-world check (2026-11-22, approved by the user):** `denco probe`
+  on the Fedora 45 Workstation swarm, one fixed list of 103 peers, MSE
+  preferred (handshake + bitfield, no download):
+  - `tcp`: 92 of 103 handshook.
+  - `utp`: 63 of 103, all over uTP — qBittorrent (57, libtorrent-
+    rasterbar's uTP), Transmission (3, libutp), Deluge (2), 1 unknown;
+    62 of them encrypted too (MSE over uTP works).
+  - `both`: 94 of 103, 66 over uTP, the rest reached by the TCP fallback
+    — more than TCP alone.
+  The ~30 peers that answer TCP but not uTP were retried with an 8 s
+  connect timeout (a temporary build, reverted): still no answer (1 that
+  did answer was answering at 2 s too), so it isn't our timeout. They
+  include rtorrent (no uTP at all) and clients whose UDP port is
+  presumably firewalled or not forwarded, or uTP turned off; those are
+  what the remembered TCP fallback is for. Throughput over uTP against
+  real peers wasn't measured (that needs a download).

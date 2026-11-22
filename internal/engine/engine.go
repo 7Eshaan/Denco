@@ -46,6 +46,8 @@ import (
 	"github.com/7Eshaan/Denco/internal/storage"
 	"github.com/7Eshaan/Denco/internal/torrent"
 	"github.com/7Eshaan/Denco/internal/tracker"
+	"github.com/7Eshaan/Denco/internal/udpmux"
+	"github.com/7Eshaan/Denco/internal/utp"
 	"github.com/7Eshaan/Denco/internal/webseed"
 )
 
@@ -109,9 +111,13 @@ type Engine struct {
 	started time.Time
 	down    *ratelimit.Limiter // shared by every connection
 	up      *ratelimit.Limiter
-	pacer   *torrent.Pacer  // paces every session under the download limit (D46)
-	dht     *dht.Dual       // nil when DHT is off
-	portmap *portmap.Mapper // nil when port forwarding is off
+	pacer   *torrent.Pacer // paces every session under the download limit (D46)
+	dht     *dht.Dual      // nil when DHT is off
+	// UDP (D64): one socket per family shared by the DHT and uTP (nil when
+	// neither runs, or no IPv6), and the uTP dialer (nil: transport tcp).
+	mux4, mux6 *udpmux.Mux
+	utp        *utp.Dialer
+	portmap    *portmap.Mapper // nil when port forwarding is off
 
 	mu        sync.Mutex
 	seedRatio float64       // current limits (Config values, then SetSeedLimits)
@@ -233,11 +239,24 @@ func Open(cfg Config) (*Engine, error) {
 		byID:  map[int]*entry{}, byHash: map[metainfo.Hash]*entry{}, nextID: 1,
 		seedRatio: cfg.SeedRatio, seedTime: cfg.SeedTime,
 	}
-	if cfg.EnableDHT {
-		if e.dht, err = openDHT(cfg, ln.Port(), log); err != nil {
+	transport := cfg.Session.PeerOpts.Transport
+	if cfg.EnableDHT || transport != peer.TransportTCP {
+		if e.mux4, e.mux6, err = openUDP(cfg, ln.Port(), log); err != nil {
 			ln.Close()
 			return nil, err
 		}
+	}
+	if cfg.EnableDHT {
+		if e.dht, err = openDHT(cfg, e.mux4, e.mux6, log); err != nil {
+			e.closeShared()
+			return nil, err
+		}
+	}
+	if transport != peer.TransportTCP {
+		e.startUTP()
+	}
+	if transport == peer.TransportUTP {
+		ln.RefuseTCP()
 	}
 	if cfg.PortForward {
 		e.startPortMap()
@@ -256,8 +275,8 @@ func Open(cfg Config) (*Engine, error) {
 func (e *Engine) startPortMap() {
 	pc := e.cfg.PortMap
 	pc.Ports = []portmap.Port{{Proto: portmap.TCP, Internal: e.ln.Port()}}
-	if e.dht != nil {
-		pc.Ports = append(pc.Ports, portmap.Port{Proto: portmap.UDP, Internal: e.dht.Port()})
+	if e.mux4 != nil { // the DHT and uTP (D64)
+		pc.Ports = append(pc.Ports, portmap.Port{Proto: portmap.UDP, Internal: e.mux4.Port()})
 	}
 	pc.Logger = e.log
 	e.portmap = portmap.Start(pc)
@@ -285,33 +304,26 @@ func listen(addr string, opts peer.Options, log *slog.Logger) (*torrent.Listener
 	return torrent.Listen(net.JoinHostPort(host, "0"), opts, log)
 }
 
-// openDHT starts the DHT: an IPv4 node on UDP port `port` (the peer port's
-// number, as most clients do; a random one if that's taken) and, with
-// EnableIPv6, an IPv6 node on the same number (D60). No IPv6 on this
-// machine just means no IPv6 node.
-func openDHT(cfg Config, port uint16, log *slog.Logger) (*dht.Dual, error) {
+// openUDP opens the UDP sockets the DHT and uTP share (D64): IPv4 on
+// port `port` (the peer port's number, as most clients do; a random one
+// if that's taken) and, with EnableIPv6, IPv6 on the same number (D60).
+// No IPv6 on this machine just means no IPv6 socket.
+func openUDP(cfg Config, port uint16, log *slog.Logger) (v4, v6 *udpmux.Mux, err error) {
 	host, _, _ := net.SplitHostPort(cfg.ListenAddr)
-	open := func(dcfg dht.Config, addr string) (*dht.Server, error) {
-		dcfg.Addr = addr
-		d, err := dht.Open(dcfg)
+	open := func(network, addr string) (*udpmux.Mux, error) {
+		m, err := udpmux.Listen(network, addr)
 		if err != nil {
 			h, _, _ := net.SplitHostPort(addr)
-			log.Warn("DHT port unavailable; using a random port", "addr", addr, "err", err)
-			dcfg.Addr = net.JoinHostPort(h, "0")
-			d, err = dht.Open(dcfg)
+			log.Warn("UDP port unavailable; using a random port", "addr", addr, "err", err)
+			m, err = udpmux.Listen(network, net.JoinHostPort(h, "0"))
 		}
-		return d, err
+		return m, err
 	}
-	base := dht.Config{Bootstrap: cfg.DHTBootstrap, Logger: log}
-	v4cfg := base
-	v4cfg.StateFile = filepath.Join(cfg.StateDir, "dht.json")
-	v4, err := open(v4cfg, net.JoinHostPort(host, strconv.Itoa(int(port))))
-	if err != nil {
-		return nil, fmt.Errorf("engine: %w", err)
+	if v4, err = open("udp4", net.JoinHostPort(host, strconv.Itoa(int(port)))); err != nil {
+		return nil, nil, fmt.Errorf("engine: UDP port: %w", err)
 	}
-	d := &dht.Dual{V4: v4}
 	if !cfg.EnableIPv6 {
-		return d, nil
+		return v4, nil, nil
 	}
 	addr6 := cfg.DHT6Addr
 	if addr6 == "" {
@@ -322,17 +334,59 @@ func openDHT(cfg Config, port uint16, log *slog.Logger) (*dht.Dual, error) {
 		case err == nil && ip.Is6():
 			addr6 = net.JoinHostPort(host, strconv.Itoa(int(v4.Port())))
 		default:
-			return d, nil // bound to an IPv4 address (or a name): IPv4 only
+			return v4, nil, nil // bound to an IPv4 address (or a name): IPv4 only
 		}
+	}
+	if v6, err = open("udp6", addr6); err != nil {
+		log.Info("no IPv6 UDP socket (this machine may have no IPv6)", "err", err)
+		v6 = nil
+	}
+	return v4, v6, nil
+}
+
+// openDHT starts the DHT on the shared UDP sockets: an IPv4 node and, if
+// there is an IPv6 socket, an IPv6 node (BEP 32, D60).
+func openDHT(cfg Config, v4, v6 *udpmux.Mux, log *slog.Logger) (*dht.Dual, error) {
+	base := dht.Config{Bootstrap: cfg.DHTBootstrap, Logger: log}
+	v4cfg := base
+	v4cfg.StateFile = filepath.Join(cfg.StateDir, "dht.json")
+	v4cfg.Conn = v4.Endpoint(udpmux.IsDHT, 1024)
+	n4, err := dht.Open(v4cfg)
+	if err != nil {
+		return nil, fmt.Errorf("engine: %w", err)
+	}
+	d := &dht.Dual{V4: n4}
+	if v6 == nil {
+		return d, nil
 	}
 	v6cfg := base
 	v6cfg.IPv6 = true
 	v6cfg.StateFile = filepath.Join(cfg.StateDir, "dht6.json")
-	if d.V6, err = open(v6cfg, addr6); err != nil {
-		log.Info("no IPv6 DHT node (this machine may have no IPv6)", "err", err)
+	v6cfg.Conn = v6.Endpoint(udpmux.IsDHT, 1024)
+	if d.V6, err = dht.Open(v6cfg); err != nil {
+		log.Info("no IPv6 DHT node", "err", err)
 		d.V6 = nil
 	}
 	return d, nil
+}
+
+// startUTP runs uTP on the shared UDP sockets (D64): incoming uTP peers
+// reach the Listener, and sessions dial over e.utp.
+func (e *Engine) startUTP() {
+	var d utp.Dialer
+	for _, m := range []*udpmux.Mux{e.mux4, e.mux6} {
+		if m == nil {
+			continue
+		}
+		s := utp.NewSocket(m.Endpoint(udpmux.IsUTP, 4096), utp.Config{})
+		e.ln.Serve(s)
+		if m == e.mux4 {
+			d.V4 = s
+		} else {
+			d.V6 = s
+		}
+	}
+	e.utp = &d
 }
 
 // closeShared closes what all torrents share, once none is running.
@@ -343,7 +397,12 @@ func (e *Engine) closeShared() {
 	if e.dht != nil {
 		e.dht.Close() // saves its routing table for the next start
 	}
-	e.ln.Close()
+	e.ln.Close() // with the uTP sockets
+	for _, m := range []*udpmux.Mux{e.mux4, e.mux6} {
+		if m != nil {
+			m.Close()
+		}
+	}
 }
 
 // load restores every torrent in the resume store. Broken entries are
@@ -413,6 +472,11 @@ func (e *Engine) restoreEntry(en resume.Entry) (*entry, error) {
 func (e *Engine) peerOpts() peer.Options {
 	o := e.cfg.Session.PeerOpts
 	o.PeerID, o.Extensions, o.ReadLimiter, o.DHT = e.peerID, true, e.down, e.dht != nil
+	if e.utp != nil { // only when set: a nil *utp.Dialer in the interface isn't nil
+		o.UTP = e.utp
+	} else {
+		o.Transport = peer.TransportTCP
+	}
 	return o
 }
 

@@ -37,6 +37,9 @@ type candidate struct {
 	// plain: with encryption preferred, this peer didn't answer MSE and
 	// plain BitTorrent worked, so it is dialed plain from now on (D63).
 	plain bool
+	// tcpOnly: with transport both, this peer didn't answer uTP and TCP
+	// worked, so it is dialed over TCP from now on (D64).
+	tcpOnly bool
 }
 
 type candState int
@@ -190,6 +193,9 @@ func (s *Session) maintain(ctx context.Context) {
 		if opts.Encryption == peer.EncryptionPrefer && s.swarm.get(addr).plain {
 			opts.Encryption = peer.EncryptionOff // saves a doomed MSE attempt
 		}
+		if opts.Transport == peer.TransportBoth && s.swarm.get(addr).tcpOnly {
+			opts.Transport = peer.TransportTCP // saves a doomed uTP attempt
+		}
 		s.goHelper(func() {
 			c, err := peer.Dial(ctx, addr, s.mi.InfoHash, opts)
 			s.send(ctx, dialResult{addr: addr, conn: c, err: err})
@@ -208,6 +214,9 @@ func (s *Session) onDialResult(ctx context.Context, r dialResult) {
 	}
 	if s.cfg.PeerOpts.Encryption == peer.EncryptionPrefer && !r.conn.Encrypted {
 		s.swarm.get(r.addr).plain = true // Dial fell back: we only offer RC4
+	}
+	if o := s.cfg.PeerOpts; o.UTP != nil && o.Transport == peer.TransportBoth && !r.conn.UTP {
+		s.swarm.get(r.addr).tcpOnly = true // Dial fell back from uTP
 	}
 	if s.swarm.isBanned(r.addr) || s.peers[r.addr] != nil || len(s.peers) >= s.cfg.MaxPeers {
 		r.conn.Close()

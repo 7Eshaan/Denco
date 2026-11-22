@@ -85,7 +85,7 @@ func TestProbeCommand(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
 	s := out.String()
-	for _, want := range []string{"Probing 2 peers", "qBittorrent 4.6.3.0", "100% (3/3)", "✗", "rc4", "1 of 2 peers handshook successfully (1 encrypted)"} {
+	for _, want := range []string{"Probing 2 peers", "qBittorrent 4.6.3.0", "100% (3/3)", "✗", "rc4", "1 of 2 peers handshook successfully (1 encrypted, 0 over uTP)"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in:\n%s", want, s)
 		}

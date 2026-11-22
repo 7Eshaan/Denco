@@ -81,6 +81,10 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 	if err != nil {
 		return fail(err)
 	}
+	transport, err := peer.ParseTransport(cfg.Transport)
+	if err != nil {
+		return fail(err)
+	}
 	eng, err := engine.Open(engine.Config{
 		StateDir:      stateDir,
 		DownloadDir:   cfg.DownloadDir,
@@ -89,7 +93,7 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 		DownloadLimit: cfg.DownloadLimit,
 		UploadLimit:   cfg.UploadLimit,
 		Session: torrent.Config{MaxPeers: cfg.MaxConnectionsPerTorrent, PEX: cfg.EnablePEX,
-			PeerOpts: peer.Options{Encryption: enc}},
+			PeerOpts: peer.Options{Encryption: enc, Transport: transport}},
 		EnableDHT:    cfg.EnableDHT,
 		EnableIPv6:   cfg.EnableIPv6,
 		PortForward:  cfg.PortForwarding,

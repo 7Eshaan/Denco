@@ -77,6 +77,9 @@ func (s *Session) pexPeers() map[netip.AddrPort]byte {
 			if p.conn.Encrypted {
 				f |= peer.PEXEncryption // it speaks MSE
 			}
+			if p.conn.UTP {
+				f |= peer.PEXUTP // it speaks uTP
+			}
 			current[a] = f
 		}
 	}

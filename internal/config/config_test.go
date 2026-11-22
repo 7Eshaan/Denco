@@ -52,6 +52,7 @@ func TestParse(t *testing.T) {
 		"enable_pex: off",
 		"enable_ipv6: false",
 		"encryption: require",
+		"transport: utp",
 		"listen_port: 51413",
 		"resume_enabled: off\r", // Windows line ending
 		`resume_dir: "` + dl + ` #1"`,
@@ -72,6 +73,7 @@ func TestParse(t *testing.T) {
 		EnablePEX:                false,
 		EnableIPv6:               false,
 		Encryption:               "require",
+		Transport:                "utp",
 		ListenPort:               51413,
 		PortForwarding:           true, // not in the file: the default
 		AutoStart:                true,
@@ -341,8 +343,13 @@ func TestPortForwardingSetting(t *testing.T) {
 }
 
 func TestEncryptionSetting(t *testing.T) {
-	if d := Defaults(t.TempDir()); d.Encryption != "prefer" {
-		t.Errorf("default %q", d.Encryption)
+	if d := Defaults(t.TempDir()); d.Encryption != "prefer" || d.Transport != "both" {
+		t.Errorf("defaults %q, %q", d.Encryption, d.Transport)
+	}
+	for _, v := range []string{"udp", "TCP", ""} {
+		if _, err := Parse("transport: "+v, Defaults(t.TempDir())); err == nil {
+			t.Errorf("accepted transport: %q", v)
+		}
 	}
 	for _, v := range []string{"on", "true", "rc4", ""} {
 		if _, err := Parse("encryption: "+v, Defaults(t.TempDir())); err == nil {

@@ -207,10 +207,11 @@ denco config init                  # write a commented file with every setting
 | `download_limit`, `upload_limit` | `0` (unlimited) | Total speed, e.g. `2M`, `500K`, `1.5 MB/s` (a bare number is KB/s). |
 | `seed_ratio` | `0` (no limit) | Stop seeding a torrent at this ratio (uploaded ÷ downloaded). |
 | `seed_time` | `0` (no limit) | Stop seeding after this long, e.g. `24h`, `2d`. |
-| `listen_port` | `6881` | Port for incoming peers (TCP) and the DHT (UDP). A random one is used if it's taken. |
+| `listen_port` | `6881` | Port for incoming peers (TCP and uTP) and the DHT (UDP; uTP and the DHT share it). A random one is used if it's taken. |
 | `port_forwarding` | `true` | Ask your router to forward `listen_port` (UPnP / NAT-PMP). |
 | `enable_dht`, `enable_pex` | `true` | Find peers without trackers / exchange peer lists. |
 | `encryption` | `prefer` | Encrypt peer connections (MSE/PE), which hides BitTorrent traffic from ISP throttling: `prefer` = encrypted when the peer can, plain otherwise; `require` = encrypted peers only; `disable`. It's obfuscation, not privacy. |
+| `transport` | `both` | How to connect to peers: `both` = uTP first (it backs off when your connection gets busy, so downloads don't lag calls or games), TCP for peers without it; `tcp`; `utp` = uTP only. uTP uses the UDP port the DHT uses. |
 | `enable_ipv6` | `true` | Use IPv6 too: an IPv6 DHT node, announcing to trackers over IPv4 and IPv6, IPv6 peers. `false` = IPv4 only. |
 | `dht_bootstrap` | public routers | DHT entry points; `none` = only remembered nodes. |
 | `resume_enabled`, `resume_dir` | `true`, `<home>/resume` | Remember torrents across restarts. |
@@ -262,7 +263,7 @@ denco config set log_file ~/denco.log
 
 ## Limitations
 
-- No uTP, no BitTorrent v2 (web seeds:
+- No BitTorrent v2 (web seeds:
   only the BEP 19 kind, not BEP 17 `httpseeds`).
 - Web seeds on your own machine or local network are refused (a torrent
   mustn't make Denco contact local services).

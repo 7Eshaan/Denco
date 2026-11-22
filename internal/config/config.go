@@ -43,6 +43,7 @@ type Config struct {
 	EnablePEX                bool   // peer exchange (BEP 11); never for private torrents
 	EnableIPv6               bool   // IPv6 DHT node, dual-stack tracker announces, IPv6 peers (D60)
 	Encryption               string // MSE policy: prefer, require or disable (D63)
+	Transport                string // both, tcp or utp (D64)
 	ListenPort               int
 	PortForwarding           bool // ask the router to forward ListenPort (UPnP / NAT-PMP)
 	ResumeEnabled            bool
@@ -77,6 +78,7 @@ func Defaults(home string) Config {
 		EnablePEX:                true, // like mainstream clients; private torrents never use it
 		EnableIPv6:               true,
 		Encryption:               "prefer", // like mainstream clients
+		Transport:                "both",
 		ListenPort:               6881,
 		PortForwarding:           DefaultPortForwarding,
 		ResumeEnabled:            true,
@@ -142,6 +144,15 @@ var settings = []Setting{
 				return err
 			}
 			c.Encryption = v
+			return nil
+		}},
+	{Name: "transport", Help: "how to connect to peers: both = uTP first, TCP when a peer has no uTP; tcp; utp = uTP only",
+		get: func(c *Config) string { return c.Transport },
+		set: func(c *Config, v string) error {
+			if _, err := peer.ParseTransport(v); err != nil {
+				return err
+			}
+			c.Transport = v
 			return nil
 		}},
 	{Name: "listen_port", Help: "TCP port for incoming peers (0 = random); a random one is used if it's taken",

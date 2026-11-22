@@ -36,6 +36,8 @@ a client command starts one (D52): it runs its own executable as
 | `internal/version` | ✅ | The one version source (D54): `Tag` (stamped by release builds via `-ldflags`), `String`/`Short`, `Client` ("Denco 0.1.0", BEP 10 `v`), `UserAgent` ("Denco/0.1.0", trackers and .torrent downloads), `PeerIDDigits` ("0100"). Stdlib only. |
 | `internal/tracker` | ✅ | `Client.Announce` (one announce, HTTP(S) or UDP) and `List` (BEP 12 tiers, concurrent, fallback + promote). `Client` dispatches by scheme: HTTP(S) in `http.go`, UDP (BEP 15 + BEP 41) in `udp.go`. |
 | `internal/peer` | ✅ | Peer wire protocol: `Handshake`, `Message` codec + typed constructors/parsers, `Conn` (Dial/Accept/AcceptFrom with the MSE policy `Encryption` and plain fallback (D63), reader + writer goroutines, keep-alive, idle timeout, optional read limiter), BEP 10 `ExtHandshake` (`extension.go`), BEP 11 `PEX` message codec (`pex.go`). |
+| `internal/udpmux` | ✅ | One UDP socket shared by protocols (D64): `Listen`, `Endpoint(match, queue)` (a UDP-socket-like view: `ReadFromUDPAddrPort`/`WriteToUDPAddrPort`/`LocalAddr`/`Close`), matchers `IsDHT`, `IsUTP`. Stdlib only. |
+| `internal/utp` | ✅ | uTP, BEP 29 (D64): `Socket` (dialer + `net.Listener` over a `PacketConn`, SYN retries, one ticker for all timers), `Conn` (`net.Conn` with deadlines; SACK, fast/early retransmit, tail-loss probe, RTO; LEDBAT window; flow control; FIN/linger/reset), `Dialer` (IPv4/IPv6 sockets). Stdlib only. |
 | `internal/mse` | ✅ | Message Stream Encryption (D63): `Initiate` / `Receive` (768-bit DH, sync-hash and VC scans, crypto_provide/select, RC4 with 1 KiB discarded, IA), `Conn` (a `net.Conn` that en/decrypts), `Req2` (obfuscated info hash). Stdlib only. |
 | `internal/metadata` | ✅ | BEP 9: `Message` encode/decode, `Piece`, `Assembler` (SHA-1 check, reset on mismatch), `Fetcher` (announce + up to 10 peers, each assembling its own full copy; bans a peer whose copy fails the hash; with `PEX`, also learns peers from one ut_pex message per peer — receive only; `Status`, `Peers`). |
 | `internal/bitfield` | ✅ | Fixed-size piece set in wire format (high bit = piece 0); validated `FromBytes`. |
@@ -65,6 +67,8 @@ Dependency direction (lower never imports higher):
 `version` (stdlib only) by `peerid`, `tracker`, `metadata`, `torrent`, `cli`;
 `webseed` (uses `metainfo`, `version`) by `torrent`, `cli` and `tui` (host names for display);
 `mse` (stdlib only) by `peer` (handshakes), `torrent` (Listener index) and `cli` (tests);
+`udpmux` (stdlib only) by `engine` (and `dht`'s tests); `utp` (stdlib only) by `engine`, `cli`
+(probe) and tests — `peer` sees it only as `peer.UTPDialer`, `dht` takes any `dht.PacketConn`;
 `config` uses `peer` for `ParseEncryption`;
 `tui` (uses `ipc`, `engine` view types, `format`) by `cli` only.
 
@@ -141,6 +145,11 @@ Dependency direction (lower never imports higher):
   (`Resume`/`Pause` end it); `List()` is in queue order; `Torrent.Queue`/`QueueLength`
   (place among incomplete torrents, from 1; 0 = complete) and `Torrent.Forced`;
   `resume.State.Queue/Forced`; `ipc.Client.MoveInQueue/ForceStart`; `tui.Client` gained both.
+- uTP (D64): `peer.Options.UTP` (`peer.UTPDialer`) / `Transport` (`TransportTCP` = zero value /
+  `Both` / `UTP`, `ParseTransport`), `peer.Conn.UTP`; `utp.NewSocket(pc, utp.Config)`, `Socket.Dial/
+  Accept/Close/Port`, `utp.Dialer{V4, V6}`, `ErrConnect/ErrReset/ErrTimeout`; `udpmux.Listen`,
+  `Mux.Endpoint`; `dht.Config.Conn`; `torrent.Listener.Serve/RefuseTCP`; `PeerInfo.UTP`, `Stats.UTP`;
+  `engine.Peer.UTP`, `Overview.Transport/UTPPort/UTPPeers`; `config.Config.Transport` (`transport`).
 - Encryption (D63): `peer.Options.Encryption` (`EncryptionOff` = zero value / `Prefer` / `Require`,
   `ParseEncryption`, `String` = config spelling), `peer.AcceptFrom(nc, peer.Torrents, opts)`,
   `peer.Conn.Encrypted`, `ErrPlaintextRefused`/`ErrEncryptedRefused`; `mse.Initiate/Receive/Req2`;

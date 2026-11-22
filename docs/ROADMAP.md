@@ -80,8 +80,9 @@ so older references stay valid.
   - [x] **15e — Protocol encryption (MSE/PE).** `encryption:
         prefer|require|disable` (D63); checked on a real swarm: encrypted
         handshakes with qBittorrent, Transmission, rtorrent and Deluge.
-  - [ ] **15f — uTP (BEP 29).** LEDBAT over a UDP socket shared with the
-        DHT; `transport: both|tcp|utp`; needs a real-world check.
+  - [x] **15f — uTP (BEP 29).** LEDBAT over a UDP socket shared with the
+        DHT; `transport: both|tcp|utp` (D64); checked on a real swarm: uTP
+        handshakes with qBittorrent, Transmission and Deluge.
 
 Out of scope for now (may revisit): BitTorrent v2, GUI (uTP, MSE and web
 seeds moved into Phase 15 on 2026-11-21).

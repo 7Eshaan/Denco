@@ -315,6 +315,7 @@ var (
 	}
 	peerCols = []tcol{
 		{title: "ADDRESS", w: 21}, {title: "CLIENT", w: 18, drop: 4}, {title: "DIR", w: 3, drop: 3},
+		{title: "VIA", w: 4, drop: 7},
 		{title: "ENC", w: 3, drop: 6},
 		{title: "HAS", w: 6, right: true, drop: 2}, {title: "DOWN", w: 10, right: true},
 		{title: "UP", w: 10, right: true, drop: 1}, {title: "STATUS", w: 8, flex: true, drop: 5},
@@ -365,7 +366,7 @@ func (m *model) detailTable(st styler) []string {
 			if p.WebSeed != "" {
 				dir, status = "web", clean(p.WebSeedNote)
 			}
-			data = append(data, []tcell{cell(peerAddr(p)), cell(clean(p.Client), cGray), cell(dir, cGray), cell(peerEnc(p), cGreen),
+			data = append(data, []tcell{cell(peerAddr(p)), cell(clean(p.Client), cGray), cell(dir, cGray), cell(peerVia(p), cGray), cell(peerEnc(p), cGreen),
 				cell(fmt.Sprintf("%.1f%%", p.Progress*100)), cell(format.Speed(p.DownloadRate), cCyan),
 				cell(format.Speed(p.UploadRate), cMagenta), cell(status, cGray)})
 		}
@@ -429,4 +430,15 @@ func peerEnc(p engine.Peer) string {
 		return "tls"
 	}
 	return ""
+}
+
+// peerVia is the VIA cell: tcp, utp (D64) or http for a web seed.
+func peerVia(p engine.Peer) string {
+	switch {
+	case p.WebSeed != "":
+		return "http"
+	case p.UTP:
+		return "utp"
+	}
+	return "tcp"
 }

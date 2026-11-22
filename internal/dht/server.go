@@ -52,8 +52,11 @@ type Config struct {
 	// IPv6 makes this an IPv6 node (BEP 32): it listens on udp6, keeps its
 	// own routing table of IPv6 nodes and exchanges "nodes6". Run one node
 	// per address family (Dual).
-	IPv6      bool
-	Addr      string   // UDP address to listen on, e.g. ":6881"
+	IPv6 bool
+	Addr string // UDP address to listen on, e.g. ":6881"
+	// Conn, if set, is used instead of opening Addr: a socket shared with
+	// uTP (udpmux, D64). The Server closes it on Close.
+	Conn      PacketConn
 	Bootstrap []string // host:port routers; nil = none (tests); see DefaultBootstrap
 	StateFile string   // where the node ID and good nodes are kept ("" = not saved)
 	Logger    *slog.Logger
@@ -64,12 +67,21 @@ type Config struct {
 	MaxQPS        int           // incoming queries per second we answer; default 500
 }
 
+// PacketConn is the part of a UDP socket the node uses; *net.UDPConn and
+// udpmux.Endpoint have it.
+type PacketConn interface {
+	ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error)
+	WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error)
+	LocalAddr() net.Addr
+	Close() error
+}
+
 // Server is one DHT node.
 type Server struct {
 	cfg   Config
 	v6    bool // an IPv6 node (BEP 32)
 	log   *slog.Logger
-	conn  *net.UDPConn
+	conn  PacketConn
 	id    ID
 	table *table
 	tok   *tokens
@@ -135,13 +147,17 @@ func Open(cfg Config) (*Server, error) {
 	if cfg.IPv6 {
 		network = "udp6" // IPv6 only: the IPv4 node is a separate Server
 	}
-	ua, err := net.ResolveUDPAddr(network, cfg.Addr)
-	if err != nil {
-		return nil, fmt.Errorf("dht: %w", err)
-	}
-	conn, err := net.ListenUDP(network, ua)
-	if err != nil {
-		return nil, fmt.Errorf("dht: %w", err)
+	conn := cfg.Conn
+	if conn == nil {
+		ua, err := net.ResolveUDPAddr(network, cfg.Addr)
+		if err != nil {
+			return nil, fmt.Errorf("dht: %w", err)
+		}
+		uc, err := net.ListenUDP(network, ua)
+		if err != nil {
+			return nil, fmt.Errorf("dht: %w", err)
+		}
+		conn = uc
 	}
 	st := loadState(cfg.StateFile, log)
 	ctx, cancel := context.WithCancel(context.Background())

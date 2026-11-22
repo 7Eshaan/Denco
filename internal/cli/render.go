@@ -357,7 +357,7 @@ func renderPeers(w io.Writer, t engine.Torrent, peers []engine.Peer) {
 		return
 	}
 	tw := newTable(w)
-	fmt.Fprintln(tw, "ADDRESS\tCLIENT\tDIR\tENC\tHAS\tDOWN\tUP\tSTATUS")
+	fmt.Fprintln(tw, "ADDRESS\tCLIENT\tDIR\tVIA\tENC\tHAS\tDOWN\tUP\tSTATUS")
 	for _, p := range peers {
 		dir := "out"
 		if p.Incoming {
@@ -374,7 +374,7 @@ func renderPeers(w io.Writer, t engine.Torrent, peers []engine.Peer) {
 		case strings.HasPrefix(p.WebSeed, "https://"):
 			enc = "tls"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.1f%%\t%s\t%s\t%s\n", addr, short(p.Client, 24), dir, enc, p.Progress*100,
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%.1f%%\t%s\t%s\t%s\n", addr, short(p.Client, 24), dir, peerVia(p), enc, p.Progress*100,
 			format.Speed(p.DownloadRate), format.Speed(p.UploadRate), status)
 	}
 	tw.Flush()
@@ -449,6 +449,7 @@ func renderStatus(w io.Writer, st ipc.Status) {
 	}
 	row("IPv6", ipv6)
 	row("Encryption", describeEncryption(st.Encryption, st.EncryptedPeers, st.Peers))
+	row("Transport", describeTransport(st.Transport, st.UTPPort, st.UTPPeers, st.Peers))
 	row("Limits", fmt.Sprintf("↓ %s  ↑ %s", config.DescribeRate(st.DownLimit), config.DescribeRate(st.UpLimit)))
 	row("Seeding", describeSeedLimits(st.SeedRatio, st.SeedTime))
 	row("Speed", fmt.Sprintf("↓ %s  ↑ %s", format.Speed(st.DownloadRate), format.Speed(st.UploadRate)))
@@ -473,4 +474,35 @@ func describeEncryption(policy string, encrypted, peers int) string {
 		s += fmt.Sprintf(" · %d of %d peer%s encrypted", encrypted, peers, plural(peers))
 	}
 	return s
+}
+
+// describeTransport explains the transport setting (D64) and how many
+// connected peers use uTP.
+func describeTransport(transport string, utpPort uint16, utpPeers, peers int) string {
+	var s string
+	switch {
+	case transport == "tcp":
+		return "tcp: TCP only"
+	case utpPort == 0:
+		s = transport + ": uTP not running"
+	case transport == "utp":
+		s = fmt.Sprintf("utp: uTP only, UDP port %d", utpPort)
+	default:
+		s = fmt.Sprintf("both: uTP (UDP port %d) first, TCP for peers without it", utpPort)
+	}
+	if peers > 0 {
+		s += fmt.Sprintf(" · %d of %d peer%s over uTP", utpPeers, peers, plural(peers))
+	}
+	return s
+}
+
+// peerVia is the VIA column: how the peer is connected (D64).
+func peerVia(p engine.Peer) string {
+	switch {
+	case p.WebSeed != "":
+		return "http"
+	case p.UTP:
+		return "utp"
+	}
+	return "tcp"
 }

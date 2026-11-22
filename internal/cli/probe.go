@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/format"
 	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/peerid"
+	"github.com/7Eshaan/Denco/internal/utp"
 )
 
 // cmdProbe is a developer command that exercises the peer wire protocol
@@ -30,12 +32,14 @@ func cmdProbe(args []string, stdout, stderr io.Writer) int {
 	parallel := fs.Int("parallel", 10, "connections attempted at once")
 	wait := fs.Duration("wait", 5*time.Second, "how long to wait for each peer's bitfield")
 	encFlag := fs.String("encryption", "prefer", "prefer, require or disable (MSE, as the encryption setting)")
+	trFlag := fs.String("transport", "both", "both, tcp or utp (as the transport setting)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	enc, encErr := peer.ParseEncryption(*encFlag)
-	if fs.NArg() != 1 || *port > 65535 || *maxPeers < 1 || *parallel < 1 || encErr != nil {
-		fmt.Fprintln(stderr, "usage: denco probe [-n N] [-parallel N] [-wait D] [-encryption prefer|require|disable] <file.torrent | magnet-uri>")
+	transport, trErr := peer.ParseTransport(*trFlag)
+	if fs.NArg() != 1 || *port > 65535 || *maxPeers < 1 || *parallel < 1 || encErr != nil || trErr != nil {
+		fmt.Fprintln(stderr, "usage: denco probe [-n N] [-parallel N] [-wait D] [-encryption prefer|require|disable] [-transport both|tcp|utp] <file.torrent | magnet-uri>")
 		return 2
 	}
 
@@ -69,7 +73,12 @@ func cmdProbe(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "Probing %d peers…\n\n", len(addrs))
 
-	opts := peer.Options{PeerID: id, Extensions: true, Encryption: enc}
+	opts := peer.Options{PeerID: id, Extensions: true, Encryption: enc, Transport: transport}
+	if transport != peer.TransportTCP {
+		d, closeUTP := probeUTP()
+		defer closeUTP()
+		opts.UTP = d
+	}
 	reports := probeAll(ctx, addrs, t, opts, *parallel, *wait)
 	printProbe(stdout, reports, t.numPieces)
 	return 0
@@ -85,6 +94,7 @@ type probeReport struct {
 	rtt    time.Duration
 	// encrypted: MSE with RC4 (D63).
 	encrypted bool
+	utp       bool // over uTP (D64)
 }
 
 func probeAll(ctx context.Context, addrs []netip.AddrPort, t *target, opts peer.Options, parallel int, wait time.Duration) []probeReport {
@@ -121,6 +131,7 @@ func probeOne(ctx context.Context, a netip.AddrPort, t *target, opts peer.Option
 	r.rtt = time.Since(start)
 	r.client = peerid.ClientName(c.Peer.PeerID)
 	r.encrypted = c.Encrypted
+	r.utp = c.UTP
 	r.ext = c.Peer.SupportsExtensions()
 	r.dht = c.Peer.SupportsDHT()
 
@@ -175,14 +186,18 @@ func printProbe(w io.Writer, reports []probeReport, numPieces int) {
 		return (reports[i].err == nil) && (reports[j].err != nil)
 	})
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "PEER\tCLIENT\tHAS\tEXT\tDHT\tENC\tCONNECT\tSTATUS")
-	ok, encrypted := 0, 0
+	fmt.Fprintln(tw, "PEER\tCLIENT\tHAS\tEXT\tDHT\tVIA\tENC\tCONNECT\tSTATUS")
+	ok, encrypted, overUTP := 0, 0, 0
 	for _, r := range reports {
 		if r.err != nil {
-			fmt.Fprintf(tw, "%s\t\t\t\t\t\t\t✗ %v\n", r.addr, shortErr(r.err))
+			fmt.Fprintf(tw, "%s\t\t\t\t\t\t\t\t✗ %v\n", r.addr, shortErr(r.err))
 			continue
 		}
 		ok++
+		via := "tcp"
+		if r.utp {
+			via, overUTP = "utp", overUTP+1
+		}
 		enc := "no"
 		if r.encrypted {
 			enc, encrypted = "rc4", encrypted+1
@@ -194,10 +209,10 @@ func printProbe(w io.Writer, reports []probeReport, numPieces int) {
 		case r.have >= 0:
 			has = fmt.Sprintf("%d pieces", r.have)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t✓\n", r.addr, r.client, has, yesNo(r.ext), yesNo(r.dht), enc, r.rtt.Round(time.Millisecond))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t✓\n", r.addr, r.client, has, yesNo(r.ext), yesNo(r.dht), via, enc, r.rtt.Round(time.Millisecond))
 	}
 	tw.Flush()
-	fmt.Fprintf(w, "\n%d of %d peers handshook successfully (%d encrypted).\n", ok, len(reports), encrypted)
+	fmt.Fprintf(w, "\n%d of %d peers handshook successfully (%d encrypted, %d over uTP).\n", ok, len(reports), encrypted, overUTP)
 }
 
 func dedupAddrs(in []netip.AddrPort) []netip.AddrPort {
@@ -226,4 +241,23 @@ func shortErr(err error) string {
 		s = s[:67] + "..."
 	}
 	return s
+}
+
+// probeUTP opens uTP sockets on random UDP ports, IPv4 and (if this
+// machine has it) IPv6, for probing over uTP (D64).
+func probeUTP() (*utp.Dialer, func()) {
+	d := &utp.Dialer{}
+	if pc, err := net.ListenUDP("udp4", nil); err == nil {
+		d.V4 = utp.NewSocket(pc, utp.Config{})
+	}
+	if pc, err := net.ListenUDP("udp6", nil); err == nil {
+		d.V6 = utp.NewSocket(pc, utp.Config{})
+	}
+	return d, func() {
+		for _, s := range []*utp.Socket{d.V4, d.V6} {
+			if s != nil {
+				s.Close()
+			}
+		}
+	}
 }

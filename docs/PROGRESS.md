@@ -4,7 +4,21 @@
 2026-11-21: queue control, per-torrent limits, full IPv6, web seeds,
 MSE/PE, uTP; sub-phases 15a–15f in ROADMAP).
 
-**Phase 15e — protocol encryption (D63) · ✅ done, not committed yet.**
+**Phase 15f — uTP (D64) · ✅ done, not committed yet.**
+New `internal/udpmux` (one UDP socket per family on the peer port's
+number, shared by the DHT and uTP) and `internal/utp` (BEP 29: SACK,
+fast/early retransmit, tail-loss probe, RTO; LEDBAT with a 100 ms target
+and slow start; flow control; FIN/linger/reset; real deadlines). Setting
+`transport: both|tcp|utp` (default both): dial uTP first, TCP for peers
+that don't answer uTP — remembered, so the 2 s try is paid once per peer;
+`utp` refuses incoming TCP. PEX uTP flag; VIA column in `denco peers`,
+the TUI peers tab and `denco probe` (new `-transport` flag);
+"Transport" row in `denco status`. `denco download` stays TCP only.
+Checked on the real network (user approved): on the Fedora 45 swarm, 63
+of 103 peers connected over uTP (qBittorrent, Transmission, Deluge; MSE on
+top), and `both` reached 94 vs. 92 with TCP alone (D64).
+
+**Phase 15e — protocol encryption (D63) · ✅ done, committed as ff013ea.**
 New `internal/mse` (MSE/PE handshake: 768-bit DH, sync scans, RC4 with
 1 KiB discarded, our BitTorrent handshake as the initial payload).
 Setting `encryption: prefer|require|disable` (default prefer): dial
@@ -114,9 +128,9 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** the user commits 15e (D63) and checks CI; then **15f —
-uTP (BEP 29)** (LEDBAT, a UDP socket shared with the DHT, `transport:
-both|tcp|utp`; also needs a user-approved real-world check).
+**Next action:** the user commits 15f (D64) and checks CI. That finishes
+Phase 15 (all six user-selected features). Then: pick the next set from
+the qBittorrent comparison, or a release (v0.3.0 with Phase 15).
 Optional, any time: a release (v0.2.1 for the D57 fix, or v0.3.0 once
 some of Phase 15 is in). Open items, if wanted: the plain
 CLI should `clean` torrent names too (D55), the user's router check
@@ -184,7 +198,31 @@ CLI should `clean` torrent names too (D55), the user's router check
 ## Open questions for the user
 - (none open)
 
-## Last test run (2026-11-22, Phase 15e, D63)
+## Last test run (2026-11-22, Phase 15f, D64)
+- `go test -race -count=1 ./...` — all 28 packages pass (new: `udpmux`,
+  `utp`)
+- stress `-race -count=5 -cpu=1,2,8` torrent, peer, utp, udpmux, engine
+  (15 runs each) — all pass; utp and peer again after the last fixes
+- `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
+  linux/windows/darwin × amd64/arm64 — all build · external deps: none
+- new tests: utp (header, 4 MiB both ways, 10% loss + dup + reorder, 20
+  connections, unanswered SYN, close/EOF/linger, deadlines incl. an idle
+  read deadline, slow reader, socket close → reset, dead peer, timeout
+  resend and window, SACK, receive window, tail-loss probe, windows from
+  the handshake, LEDBAT ×6); udpmux (matchers, DHT + uTP on one port,
+  unmatched, close); peer (BitTorrent + MSE over uTP, TCP fallback,
+  `ParseTransport`); torrent (uTP transfer, TCP-only peer remembered after
+  exactly 3 SYNs, PEX flag, `RefuseTCP`); engine (two engines over uTP on
+  the DHT port, transport settings); config. Mutation-checked: 28
+  mutations, each fails a test (7 survived at first: 5 tests added, 1 dead
+  code removed, and a real bug found and fixed — the acceptor ignored the
+  SYN's window)
+- real-world (approved): `denco probe` on the Fedora 45 swarm, 103 fixed
+  peers — tcp 92 ok, utp 63 ok (qBittorrent 57, Transmission 3, Deluge 2,
+  1 unknown), both 94 ok (66 over uTP); the uTP-silent peers stay silent
+  with an 8 s connect timeout too
+
+## Previous test run (2026-11-22, Phase 15e, D63)
 - `go test -race -count=1 ./...` — all 26 packages pass (new: `mse`)
 - stress `-race -count=5 -cpu=1,2,8` torrent, peer, mse — all pass; the
   new torrent encryption tests also 10× at 1/2/8 CPUs
@@ -441,4 +479,5 @@ CLI should `clean` torrent names too (D55), the user's router check
 - **After Phase 15d (2026-11-22, commit c0ebd42):** two flaky DHT tests
   made deterministic (D62, CI failure on macOS); then a direct test of the
   bucket-filling rules (D62, commit 041fb83).
-- **Phase 15e (2026-11-22):** protocol encryption, MSE/PE (D63).
+- **Phase 15e (2026-11-22, commit ff013ea):** protocol encryption, MSE/PE (D63).
+- **Phase 15f (2026-11-22):** uTP (D64).

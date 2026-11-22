@@ -32,6 +32,8 @@ type Listener struct {
 	// encrypted peer reveals about the torrent it wants (D63).
 	obfuscated map[[20]byte]metainfo.Hash
 	closed     bool
+	extra      []net.Listener // uTP sockets (D64), closed with the Listener
+	refuseTCP  bool           // transport utp: incoming TCP peers are hung up on
 
 	sem chan struct{}
 	wg  sync.WaitGroup
@@ -56,8 +58,30 @@ func Listen(addr string, opts peer.Options, log *slog.Logger) (*Listener, error)
 		sem:        make(chan struct{}, maxPendingHandshakes),
 	}
 	l.wg.Add(1)
-	go l.serve()
+	go l.serve(ln, true)
 	return l, nil
+}
+
+// Serve also accepts peers from ln — a uTP socket (D64). The Listener
+// closes it on Close.
+func (l *Listener) Serve(ln net.Listener) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		ln.Close()
+		return
+	}
+	l.extra = append(l.extra, ln)
+	l.wg.Add(1)
+	go l.serve(ln, false)
+}
+
+// RefuseTCP hangs up on incoming TCP peers (transport utp, D64); the TCP
+// port stays bound.
+func (l *Listener) RefuseTCP() {
+	l.mu.Lock()
+	l.refuseTCP = true
+	l.mu.Unlock()
 }
 
 // Port returns the port actually listened on (useful with ":0").
@@ -114,8 +138,12 @@ func (t listenerTorrents) FindObfuscated(req2 [20]byte) (metainfo.Hash, bool) {
 func (l *Listener) Close() error {
 	l.mu.Lock()
 	l.closed = true
+	extra := l.extra
 	l.mu.Unlock()
 	err := l.ln.Close()
+	for _, ln := range extra {
+		ln.Close()
+	}
 	l.wg.Wait()
 	return err
 }
@@ -126,10 +154,10 @@ func (l *Listener) isClosed() bool {
 	return l.closed
 }
 
-func (l *Listener) serve() {
+func (l *Listener) serve(ln net.Listener, tcp bool) {
 	defer l.wg.Done()
 	for {
-		nc, err := l.ln.Accept()
+		nc, err := ln.Accept()
 		if err != nil {
 			if l.isClosed() || errors.Is(err, net.ErrClosed) {
 				return
@@ -137,6 +165,15 @@ func (l *Listener) serve() {
 			l.log.Warn("accept failed", "err", err)
 			time.Sleep(100 * time.Millisecond) // e.g. out of file descriptors
 			continue
+		}
+		if tcp {
+			l.mu.Lock()
+			refuse := l.refuseTCP
+			l.mu.Unlock()
+			if refuse {
+				nc.Close()
+				continue
+			}
 		}
 		select {
 		case l.sem <- struct{}{}:

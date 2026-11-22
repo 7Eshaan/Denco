@@ -27,6 +27,10 @@ type Options struct {
 	// Encryption is the MSE policy (D63); the zero value is plain
 	// BitTorrent only.
 	Encryption Encryption
+	// UTP, if set, connects over uTP (BEP 29, D64), and Transport says
+	// when: the zero value is TCP only.
+	UTP       UTPDialer
+	Transport Transport
 
 	DialTimeout       time.Duration // TCP connect; default 10s
 	HandshakeTimeout  time.Duration // whole handshake exchange; default 10s
@@ -69,6 +73,44 @@ func (o *Options) handshake(infoHash metainfo.Hash) *Handshake {
 		h.SetDHT()
 	}
 	return h
+}
+
+// UTPDialer opens uTP connections (utp.Dialer).
+type UTPDialer interface {
+	Dial(ctx context.Context, addr netip.AddrPort) (net.Conn, error)
+}
+
+// Transport says which transports outgoing connections use (D64).
+type Transport int
+
+const (
+	// TransportTCP: TCP only.
+	TransportTCP Transport = iota
+	// TransportBoth: uTP first; TCP when the peer doesn't answer uTP.
+	TransportBoth
+	// TransportUTP: uTP only.
+	TransportUTP
+)
+
+// String is the config spelling: tcp, both, utp.
+func (t Transport) String() string {
+	switch t {
+	case TransportBoth:
+		return "both"
+	case TransportUTP:
+		return "utp"
+	}
+	return "tcp"
+}
+
+// ParseTransport reads the config spelling.
+func ParseTransport(s string) (Transport, error) {
+	for _, t := range []Transport{TransportTCP, TransportBoth, TransportUTP} {
+		if s == t.String() {
+			return t, nil
+		}
+	}
+	return 0, fmt.Errorf("transport must be both, tcp or utp, not %q", s)
 }
 
 // Encryption is a policy for Message Stream Encryption (package mse).
@@ -134,6 +176,7 @@ type Conn struct {
 	Peer      Handshake // the handshake the peer sent us
 	Outgoing  bool      // true if we dialed, false if they connected to us
 	Encrypted bool      // MSE with RC4: everything after the handshake is encrypted
+	UTP       bool      // over uTP (D64), not TCP
 
 	nc   net.Conn
 	opts Options
@@ -162,31 +205,59 @@ type Conn struct {
 // Options.ReadLimiter. It takes effect from the next socket read.
 func (c *Conn) SetTorrentLimiter(lim *ratelimit.Limiter) { c.torrentLim.Store(lim) }
 
-// Dial connects to addr and performs the handshake for infoHash. With
+// Dial connects to addr and performs the handshake for infoHash.
+//
+// Transport (D64): with TransportBoth it tries uTP first and, if the peer
+// doesn't answer uTP at all, TCP. Encryption (D63): with
 // EncryptionPrefer, a peer that doesn't answer the encrypted handshake is
-// dialed again in plain BitTorrent (a second TCP connection: a peer that
-// saw MSE's random bytes has hung up).
+// dialed again in plain BitTorrent over the same transport (a new
+// connection: a peer that saw MSE's random bytes has hung up).
 func Dial(ctx context.Context, addr netip.AddrPort, infoHash metainfo.Hash, opts Options) (*Conn, error) {
 	o := opts.withDefaults()
-	if o.Encryption == EncryptionOff {
-		return dial(ctx, addr, infoHash, o, false)
+	if o.UTP != nil && o.Transport != TransportTCP {
+		c, connected, err := dialEncrypted(ctx, addr, infoHash, o, true)
+		if err == nil || connected || o.Transport == TransportUTP || ctx.Err() != nil {
+			return c, err
+		}
 	}
-	c, err := dial(ctx, addr, infoHash, o, true)
+	c, _, err := dialEncrypted(ctx, addr, infoHash, o, false)
+	return c, err
+}
+
+// dialEncrypted dials over one transport, applying the encryption
+// policy. connected reports whether the transport connection itself was
+// made (a later failure isn't worth trying another transport for).
+func dialEncrypted(ctx context.Context, addr netip.AddrPort, infoHash metainfo.Hash, o Options, viaUTP bool) (*Conn, bool, error) {
+	if o.Encryption == EncryptionOff {
+		return dial(ctx, addr, infoHash, o, viaUTP, false)
+	}
+	c, connected, err := dial(ctx, addr, infoHash, o, viaUTP, true)
 	if err != nil && o.Encryption == EncryptionPrefer && errors.Is(err, mse.ErrNotMSE) && ctx.Err() == nil {
-		return dial(ctx, addr, infoHash, o, false)
+		return dial(ctx, addr, infoHash, o, viaUTP, false)
 	}
 	if errors.Is(err, mse.ErrNotMSE) {
 		err = fmt.Errorf("%w: %w", ErrPlaintextRefused, err)
 	}
-	return c, err
+	return c, connected, err
 }
 
-func dial(ctx context.Context, addr netip.AddrPort, infoHash metainfo.Hash, o Options, encrypt bool) (*Conn, error) {
-	d := net.Dialer{Timeout: o.DialTimeout}
-	nc, err := d.DialContext(ctx, "tcp", addr.String())
-	if err != nil {
-		return nil, fmt.Errorf("peer %s: dial: %w", addr, err)
+func dial(ctx context.Context, addr netip.AddrPort, infoHash metainfo.Hash, o Options, viaUTP, encrypt bool) (*Conn, bool, error) {
+	var nc net.Conn
+	var err error
+	if viaUTP {
+		nc, err = o.UTP.Dial(ctx, addr)
+	} else {
+		d := net.Dialer{Timeout: o.DialTimeout}
+		nc, err = d.DialContext(ctx, "tcp", addr.String())
 	}
+	if err != nil {
+		return nil, false, fmt.Errorf("peer %s: dial: %w", addr, err)
+	}
+	c, err := handshakeOut(ctx, nc, addr, infoHash, o, encrypt)
+	return c, true, err
+}
+
+func handshakeOut(ctx context.Context, nc net.Conn, addr netip.AddrPort, infoHash metainfo.Hash, o Options, encrypt bool) (*Conn, error) {
 	stop := cancelOnDone(ctx, nc)
 	defer stop()
 
@@ -336,7 +407,9 @@ func (o *Options) chooseMethod(provide uint32) uint32 {
 
 func start(nc net.Conn, addr netip.AddrPort, theirs Handshake, outgoing bool, o Options) *Conn {
 	ctx, cancel := context.WithCancel(context.Background())
+	_, overUDP := nc.LocalAddr().(*net.UDPAddr)
 	c := &Conn{
+		UTP:      overUDP,
 		ctx:      ctx,
 		cancel:   cancel,
 		Remote:   addr,
@@ -591,8 +664,12 @@ func ctxErr(ctx context.Context, err error) error {
 }
 
 func addrPortOf(a net.Addr) netip.AddrPort {
-	if tcp, ok := a.(*net.TCPAddr); ok {
-		ap := tcp.AddrPort()
+	switch a := a.(type) {
+	case *net.TCPAddr:
+		ap := a.AddrPort()
+		return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
+	case *net.UDPAddr: // uTP
+		ap := a.AddrPort()
 		return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
 	}
 	ap, _ := netip.ParseAddrPort(a.String())

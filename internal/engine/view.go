@@ -115,6 +115,7 @@ type Peer struct {
 	Client       string         `json:"client"`
 	Incoming     bool           `json:"incoming"`
 	Encrypted    bool           `json:"encrypted,omitempty"` // MSE with RC4 (D63)
+	UTP          bool           `json:"utp,omitempty"`       // over uTP, not TCP (D64)
 	Progress     float64        `json:"progress"`            // 0..1
 	DownloadRate int64          `json:"download_rate"`
 	UploadRate   int64          `json:"upload_rate"`
@@ -153,13 +154,18 @@ type Overview struct {
 	DHT6Good  int             `json:"dht6_good_nodes"`
 	PortMap   *portmap.Status `json:"port_forwarding,omitempty"` // nil = off
 	// Encryption (D63): the MSE policy, and how many connected peers use it.
-	Encryption     string        `json:"encryption"`
-	EncryptedPeers int           `json:"encrypted_peers"`
-	SeedRatio      float64       `json:"seed_ratio"` // global seeding limits; 0 = none
-	SeedTime       time.Duration `json:"seed_time"`
-	Torrents       int           `json:"torrents"`
-	ByState        map[State]int `json:"by_state"`
-	Complete       int           `json:"complete"`
+	Encryption     string `json:"encryption"`
+	EncryptedPeers int    `json:"encrypted_peers"`
+	// Transport (D64): the setting, the uTP port (0 = no uTP) and how many
+	// connected peers use uTP.
+	Transport string        `json:"transport"`
+	UTPPort   uint16        `json:"utp_port,omitempty"`
+	UTPPeers  int           `json:"utp_peers"`
+	SeedRatio float64       `json:"seed_ratio"` // global seeding limits; 0 = none
+	SeedTime  time.Duration `json:"seed_time"`
+	Torrents  int           `json:"torrents"`
+	ByState   map[State]int `json:"by_state"`
+	Complete  int           `json:"complete"`
 
 	DownloadRate int64 `json:"download_rate"`
 	UploadRate   int64 `json:"upload_rate"`
@@ -233,7 +239,7 @@ func (e *Engine) Peers(ref string) ([]Peer, error) {
 	var out []Peer
 	for _, p := range sess.Peers() {
 		out = append(out, Peer{
-			Addr: p.Addr, Client: p.Client, Incoming: !p.Outgoing, Encrypted: p.Encrypted, Progress: p.Progress,
+			Addr: p.Addr, Client: p.Client, Incoming: !p.Outgoing, Encrypted: p.Encrypted, UTP: p.UTP, Progress: p.Progress,
 			DownloadRate: p.DownloadRate, UploadRate: p.UploadRate,
 			Downloaded: p.Downloaded, Uploaded: p.Uploaded,
 			PeerChoking: p.Choking, Interested: p.Interested,
@@ -258,6 +264,10 @@ func (e *Engine) Overview() Overview {
 	}
 	o.IPv6 = e.cfg.EnableIPv6
 	o.Encryption = e.cfg.Session.PeerOpts.Encryption.String()
+	o.Transport = e.cfg.Session.PeerOpts.Transport.String()
+	if e.utp != nil && e.utp.V4 != nil {
+		o.UTPPort = e.utp.V4.Port()
+	}
 	if e.dht != nil {
 		ds := e.dht.V4.Stats()
 		o.DHT, o.DHTPort, o.DHTNodes, o.DHTGood = true, e.dht.Port(), ds.Nodes, ds.GoodNodes
@@ -289,6 +299,7 @@ func (e *Engine) Overview() Overview {
 			o.Downloaded += st.Downloaded
 			o.Uploaded += st.Uploaded
 			o.EncryptedPeers += st.Encrypted
+			o.UTPPeers += st.UTP
 		}
 	}
 	return o
