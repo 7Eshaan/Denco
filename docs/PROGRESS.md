@@ -4,7 +4,24 @@
 (16a–16d; the user dropped Scoop/winget and 16e on 2026-11-22). Phase 15
 (qBittorrent parity, part 1) is complete.
 
-**Phase 16d — Homebrew (D68) · ✅ done, not committed yet.**
+**install.ps1 on real Windows · verified 2026-11-22** — the user ran the
+`irm … | iex` one-liner on a Windows PC: it picked the amd64 build from
+the v0.3.2 release and installed it, and `denco` worked. (Covers the
+download, checksum and `denco setup` with the registry PATH; not yet the
+double-click offer or `-remove`.)
+
+**Release v0.3.2 (Phase 16d) · published 2026-11-22** — CI green. The
+first run's `homebrew` job skipped (no `TAP_TOKEN` yet, its warning
+worked as meant); after the user created the public `homebrew-tap` repo
+and the secret, a re-run of that job pushed `Formula/denco.rb`. Checked:
+its four URLs and checksums match the release's SHA256SUMS. Verified
+for real on the user's Mac (arm64): `brew install 7Eshaan/tap/denco`
+tapped, verified and installed 0.3.2 into the Cellar; the curl copy in
+`~/.local/bin` was removed first; `denco version` says v0.3.2 from
+/opt/homebrew/bin; `denco setup` on it prints the Homebrew note and
+changes nothing (D68's guard, exit 0).
+
+**Phase 16d — Homebrew (D68) · ✅ done, committed as dcc435e.**
 `brew install 7Eshaan/tap/denco` (macOS, Linux): `scripts/brew-formula.sh`
 writes the formula from a release's SHA256SUMS (prebuilt archives, four
 platforms); a new `homebrew` job in release.yml pushes it to the user's
@@ -187,12 +204,12 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** the user commits 16d, creates the `homebrew-tap` repo
-and the `TAP_TOKEN` secret, then tags v0.3.2. After that: check the
-tap got `Formula/denco.rb` and try `brew install 7Eshaan/tap/denco` (after
-`denco setup -remove`). No phase is planned after 16. Still open: a
-real-Windows try (install.ps1, double-click → install offer → dashboard,
-`denco setup -remove`); the real-download smoke test with the uTP + MSE
+**Next action:** none planned; Phase 16 is done and verified. The
+TAP_TOKEN expires; renew it then (the homebrew job fails with an auth
+error). No phase is planned after 16. Still open: on
+real Windows, the double-click → install offer → dashboard path and
+`denco setup -remove` (install.ps1 itself is verified, below); the
+real-download smoke test with the uTP + MSE
 defaults (offered, not run).
 Optional, any time: a release (v0.2.1 for the D57 fix, or v0.3.0 once
 some of Phase 15 is in). Open items, if wanted: the plain
@@ -602,4 +619,4 @@ CLI should `clean` torrent names too (D55), the user's router check
 - **Phase 16a (2026-11-22):** double-click opens the dashboard (D65).
 - **Phase 16b (2026-11-22, commit b54a4e3, with 16a):** `denco setup` (D66).
 - **Phase 16c (2026-11-22):** install scripts (D67).
-- **Phase 16d (2026-11-22):** Homebrew tap (D68); Scoop, winget and 16e dropped.
+- **Phase 16d (2026-11-22, commit dcc435e, release v0.3.2):** Homebrew tap (D68); Scoop, winget and 16e dropped.
