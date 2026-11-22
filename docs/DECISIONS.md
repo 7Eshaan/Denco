@@ -1262,3 +1262,37 @@ One short entry per decision. Newest at the bottom. Format:
   CLI and TUI rendering. Mutation-checked: 8 mutations each fail a test
   (one survived at first — the wrong-range fixture also sent too few
   bytes; fixed to send the right length from the wrong place).
+
+### D62 — Fix: two DHT tests expected what random IDs can make impossible
+- **Context:** CI (macOS, 2026-11-22, the 15d commit) failed
+  `TestLookupAsksRoutersForUnknownRegions`: "condition not met in time".
+  Not caused by 15c/15d — both tests date from Phase 11 — but reproduced
+  locally (5 of 300 runs), and a package-wide stress run found a second
+  one, `TestNewNodeFillsShallowBuckets` (2 of 450).
+- **Causes (both in the tests, not the DHT):**
+  1. The first test waited for the router to hold 12 of 16 nodes. Node IDs
+     are random and a bucket holds K = 8 (D42); when 13+ of the 16 land in
+     the router's bucket 0 (697/65536 ≈ 1.1%) it can hold at most 11.
+     Confirmed by logging: both failing runs had 13 IDs in bucket 0.
+  2. The second counted every network node in a region as findable. A
+     node joins others' tables only after answering their verification
+     ping; under load those pings can be lost, and once the node knows
+     enough peers it stops querying, so in this small network with no
+     torrent traffic nobody ever knows it (logged: "known by 0 of 39
+     nodes"). In the real DHT its later lookups get it verified. A first
+     guess — the tests' 500 ms query timeout — was tested and rejected:
+     with 3 s the failure rate under the same load was unchanged.
+- **Fix:** the first test waits for min(12, what the router's buckets can
+  hold) and is made deterministic (the probe node shares the router's
+  first ID bit, and the network surely has a node in the router's bucket
+  0, which is the region the lookup must find). The second test counts
+  only nodes some other node knows, re-counted while it waits.
+- **Verified:** the first test 2000 runs + 510 under race at 1/2/8 CPUs;
+  the second 150 under CPU load at 1 CPU (was 2 failures in 120); the
+  whole package 300 times under race — all pass. The first test still
+  fails every time when routers aren't asked for unknown regions.
+- **Found, not fixed:** `TestNewNodeFillsShallowBuckets` barely guards
+  the rule it is named for — with random lookup targets instead of
+  per-bucket ones, it fails ~1 time in 10, before and after this fix. So
+  D42's "every rule has a test that fails without it" isn't true for the
+  bucket-targeting rule.

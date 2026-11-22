@@ -501,23 +501,39 @@ func TestNewNodeFillsShallowBuckets(t *testing.T) {
 		}
 		return out
 	}
-	// Fill to what exists: a bucket can't hold more nodes than the network
-	// has in its range.
-	in := make([]int, 2)
-	for _, n := range nodes {
-		if b := s.table.bucket(n.ID()); b == 0 || b == 1 {
-			in[b]++
+	// Fill to what can be found: a bucket can't hold more nodes than the
+	// network has in its range *that some other node knows*. A node joins
+	// others' tables only after answering their verification ping (D42);
+	// if those pings were lost (a loaded machine) and it then stopped
+	// querying — it already knows enough nodes — nobody knows it, and no
+	// lookup can find it. In the real DHT its later lookups get it verified;
+	// this little network has no such traffic. Counting it made the target
+	// unreachable (seen in CI-like stress: "network has [21 4] nodes",
+	// bucket 1 stuck at 3, the 4th known by 0 of 39 nodes).
+	findable := func() []int {
+		in := make([]int, 2)
+		for _, n := range nodes {
+			b := s.table.bucket(n.ID())
+			if b != 0 && b != 1 {
+				continue
+			}
+			for _, o := range nodes {
+				if o != n && o.table.has(NodeInfo{ID: n.ID(), Addr: n.Addr()}) {
+					in[b]++
+					break
+				}
+			}
 		}
+		return in
 	}
-	want0, want1 := min(K, in[0]), min(K/2, in[1])
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		sz := sizes()
-		if sz[0] >= want0 && sz[1] >= want1 {
+		sz, in := sizes(), findable()
+		if sz[0] >= min(K, in[0]) && sz[1] >= min(K/2, in[1]) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("bucket sizes %v; network has %v nodes in buckets 0,1", sz, in)
+			t.Fatalf("bucket sizes %v; the network knows %v nodes in buckets 0,1", sz, in)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -528,12 +544,35 @@ func TestNewNodeFillsShallowBuckets(t *testing.T) {
 // the ID space dead-ends among our own neighbours.
 func TestLookupAsksRoutersForUnknownRegions(t *testing.T) {
 	router := testServer(t, Config{})
-	for i := 0; i < 16; i++ { // a network the router knows, both halves
-		testServer(t, Config{Bootstrap: []string{router.Addr().String()}})
+	// s shares the router's first ID bit, so s's far half is exactly the
+	// router's bucket 0: what the lookup must find through the router.
+	var s *Server
+	for s == nil {
+		if c := testServer(t, Config{}); router.table.bucket(c.ID()) >= 1 {
+			s = c
+		}
 	}
-	waitFor(t, func() bool { return router.Stats().GoodNodes >= 12 })
+	// A network the router knows: at least 16 nodes, at least one of them in
+	// the router's bucket 0 (= s's far half).
+	perBucket := map[int]int{}
+	for n := 0; n < 16 || perBucket[0] == 0; n++ {
+		node := testServer(t, Config{Bootstrap: []string{router.Addr().String()}})
+		perBucket[router.table.bucket(node.ID())]++
+	}
+	// Wait for what the router's table can hold: K per bucket. The IDs are
+	// random, so with 16 nodes a bucket can overflow (13 of 16 in bucket 0
+	// happens 1% of the time) — a fixed count like 12 was then out of reach.
+	room := 0
+	for _, c := range perBucket {
+		room += min(K, c)
+	}
+	waitFor(t, func() bool {
+		router.table.mu.Lock()
+		far := len(router.table.buckets[0])
+		router.table.mu.Unlock()
+		return router.Stats().GoodNodes >= min(12, room) && far > 0
+	})
 
-	s := testServer(t, Config{})
 	// K isolated nodes in s's own half: they know nobody.
 	for near := 0; near < K; {
 		n := testServer(t, Config{})

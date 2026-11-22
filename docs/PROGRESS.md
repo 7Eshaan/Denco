@@ -4,7 +4,15 @@
 2026-11-21: queue control, per-torrent limits, full IPv6, web seeds,
 MSE/PE, uTP; sub-phases 15a–15f in ROADMAP).
 
-**Phase 15d — web seeds (D61) · ✅ done, not committed yet.**
+**2026-11-22:** CI failure fixed (D62): macOS CI failed
+`TestLookupAsksRoutersForUnknownRegions` on the 15d commit. Two DHT tests
+(both from Phase 11) expected node counts that random IDs sometimes make
+impossible: ~1.1% and ~0.4% flakes, reproduced and explained by logging.
+Test-only fix, verified with thousands of runs incl. under CPU load and
+the race detector. Not committed yet. Found along the way: the
+shallow-bucket test barely detects the rule it's named for (D62).
+
+**Phase 15d — web seeds (D61) · ✅ done, committed as d0bd898.**
 New `internal/webseed` (BEP 19 URLs, ranged GETs per file with exact
 Content-Range checks, Retry-After, no-ranges detection, local/private
 addresses refused at connect time, no proxies, timeouts). Sessions run
@@ -88,7 +96,8 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** the user commits 15d; then **15e — protocol encryption
+**Next action:** the user commits the DHT test fix (D62) and checks CI is
+green; then **15e — protocol encryption
 (MSE/PE)** (plan: `internal/mse` — 768-bit DH, the VC scan with padding,
 crypto_provide/select, RC4 with 1 KiB discarded, hashed info-hash lookup
 for incoming; `encryption: prefer|require|disable` (default prefer:
@@ -394,4 +403,6 @@ web seeds, v2, GUI).
   force start (D58).
 - **Phase 15b (2026-11-21, commit 4c4c8e8):** per-torrent speed limits (D59).
 - **Phase 15c (2026-11-22, commit d97cff6):** full IPv6 (D60).
-- **Phase 15d (2026-11-22):** web seeds (D61).
+- **Phase 15d (2026-11-22, commit d0bd898):** web seeds (D61).
+- **After Phase 15d (2026-11-22):** two flaky DHT tests made
+  deterministic (D62, CI failure on macOS).
