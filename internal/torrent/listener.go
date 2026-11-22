@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/7Eshaan/Denco/internal/metainfo"
+	"github.com/7Eshaan/Denco/internal/mse"
 	"github.com/7Eshaan/Denco/internal/peer"
 )
 
@@ -27,7 +28,10 @@ type Listener struct {
 
 	mu       sync.Mutex
 	sessions map[metainfo.Hash]*Session
-	closed   bool
+	// obfuscated maps mse.Req2(info hash) to the info hash: all an
+	// encrypted peer reveals about the torrent it wants (D63).
+	obfuscated map[[20]byte]metainfo.Hash
+	closed     bool
 
 	sem chan struct{}
 	wg  sync.WaitGroup
@@ -44,11 +48,12 @@ func Listen(addr string, opts peer.Options, log *slog.Logger) (*Listener, error)
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	l := &Listener{
-		ln:       ln,
-		opts:     opts,
-		log:      log,
-		sessions: make(map[metainfo.Hash]*Session),
-		sem:      make(chan struct{}, maxPendingHandshakes),
+		ln:         ln,
+		opts:       opts,
+		log:        log,
+		sessions:   make(map[metainfo.Hash]*Session),
+		obfuscated: make(map[[20]byte]metainfo.Hash),
+		sem:        make(chan struct{}, maxPendingHandshakes),
 	}
 	l.wg.Add(1)
 	go l.serve()
@@ -73,6 +78,7 @@ func (l *Listener) Addr() netip.AddrPort {
 func (l *Listener) Add(s *Session) {
 	l.mu.Lock()
 	l.sessions[s.mi.InfoHash] = s
+	l.obfuscated[mse.Req2(s.mi.InfoHash)] = s.mi.InfoHash
 	l.mu.Unlock()
 }
 
@@ -81,6 +87,7 @@ func (l *Listener) Remove(s *Session) {
 	l.mu.Lock()
 	if l.sessions[s.mi.InfoHash] == s {
 		delete(l.sessions, s.mi.InfoHash)
+		delete(l.obfuscated, mse.Req2(s.mi.InfoHash))
 	}
 	l.mu.Unlock()
 }
@@ -89,6 +96,18 @@ func (l *Listener) lookup(h metainfo.Hash) *Session {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.sessions[h]
+}
+
+// listenerTorrents lets peer.AcceptFrom find sessions, plain or encrypted.
+type listenerTorrents struct{ l *Listener }
+
+func (t listenerTorrents) Has(h metainfo.Hash) bool { return t.l.lookup(h) != nil }
+
+func (t listenerTorrents) FindObfuscated(req2 [20]byte) (metainfo.Hash, bool) {
+	t.l.mu.Lock()
+	defer t.l.mu.Unlock()
+	h, ok := t.l.obfuscated[req2]
+	return h, ok
 }
 
 // Close stops accepting and waits for in-flight handshakes to finish.
@@ -135,7 +154,7 @@ func (l *Listener) serve() {
 }
 
 func (l *Listener) handshake(nc net.Conn) {
-	c, err := peer.Accept(nc, func(h metainfo.Hash) bool { return l.lookup(h) != nil }, l.opts)
+	c, err := peer.AcceptFrom(nc, listenerTorrents{l}, l.opts)
 	if err != nil {
 		l.log.Debug("incoming handshake failed", "err", err)
 		return

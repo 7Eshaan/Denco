@@ -91,18 +91,23 @@ func runDownload(ctx context.Context, e *env, args []string) int {
 	if o.verbose {
 		logger = slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
+	enc, err := peer.ParseEncryption(cfg.Encryption)
+	if err != nil {
+		return fail(err)
+	}
 	id := peerid.New()
-	ln, err := listen(uint16(o.port), id, logger, stderr)
+	ln, err := listen(uint16(o.port), peer.Options{PeerID: id, Encryption: enc}, logger, stderr)
 	if err != nil {
 		return fail(err)
 	}
 	defer ln.Close()
 
 	scfg := torrent.Config{
-		PeerID: id,
-		Port:   ln.Port(),
-		NoSeed: !o.seed,
-		Logger: logger,
+		PeerID:   id,
+		Port:     ln.Port(),
+		NoSeed:   !o.seed,
+		Logger:   logger,
+		PeerOpts: peer.Options{Encryption: enc},
 	}
 	if op.prev != nil { // keep a file selection made in the daemon
 		scfg.Wanted = pieces.Wanted(&mi.Info, pieces.SkipSet(op.prev.Skip, len(mi.Info.Files)))
@@ -298,8 +303,7 @@ func daemonRunning(ctx context.Context, e *env) bool {
 
 // listen opens the peer port, falling back to a random free port if the
 // requested one is taken (e.g. another client is running).
-func listen(port uint16, id peerid.ID, log *slog.Logger, stderr io.Writer) (*torrent.Listener, error) {
-	opts := peer.Options{PeerID: id}
+func listen(port uint16, opts peer.Options, log *slog.Logger, stderr io.Writer) (*torrent.Listener, error) {
 	ln, err := torrent.Listen(fmt.Sprintf(":%d", port), opts, log)
 	if err == nil || port == 0 {
 		return ln, err

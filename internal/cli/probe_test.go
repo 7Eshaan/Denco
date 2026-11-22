@@ -15,6 +15,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/bencode"
 	"github.com/7Eshaan/Denco/internal/bitfield"
 	"github.com/7Eshaan/Denco/internal/metainfo"
+	"github.com/7Eshaan/Denco/internal/mse"
 	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/peerid"
 )
@@ -52,7 +53,8 @@ func TestProbeCommand(t *testing.T) {
 		}
 		var seederID peerid.ID
 		copy(seederID[:], "-qB4630-abcdefghijkl")
-		c, err := peer.Accept(nc, func(h metainfo.Hash) bool { return h == mi.InfoHash }, peer.Options{PeerID: seederID})
+		// It speaks MSE, so the probe's default (prefer) encrypts.
+		c, err := peer.AcceptFrom(nc, probeTorrent(mi.InfoHash), peer.Options{PeerID: seederID, Encryption: peer.EncryptionPrefer})
 		if err != nil {
 			return
 		}
@@ -83,7 +85,7 @@ func TestProbeCommand(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
 	s := out.String()
-	for _, want := range []string{"Probing 2 peers", "qBittorrent 4.6.3.0", "100% (3/3)", "✗", "1 of 2 peers handshook"} {
+	for _, want := range []string{"Probing 2 peers", "qBittorrent 4.6.3.0", "100% (3/3)", "✗", "rc4", "1 of 2 peers handshook successfully (1 encrypted)"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in:\n%s", want, s)
 		}
@@ -105,4 +107,12 @@ func TestProbeNoPeers(t *testing.T) {
 	if code := run([]string{"probe"}, &out, &errOut); code != 2 {
 		t.Errorf("no args exit = %d", code)
 	}
+}
+
+// probeTorrent serves one torrent to plain and encrypted peers.
+type probeTorrent metainfo.Hash
+
+func (p probeTorrent) Has(h metainfo.Hash) bool { return h == metainfo.Hash(p) }
+func (p probeTorrent) FindObfuscated(req2 [20]byte) (metainfo.Hash, bool) {
+	return metainfo.Hash(p), req2 == mse.Req2(p)
 }

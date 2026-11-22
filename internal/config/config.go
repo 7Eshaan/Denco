@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/7Eshaan/Denco/internal/dht"
+	"github.com/7Eshaan/Denco/internal/peer"
 )
 
 // FileName is the config file's name inside the denco home directory.
@@ -41,6 +42,7 @@ type Config struct {
 	DHTBootstrap             string // comma-separated host:port routers; "" = none
 	EnablePEX                bool   // peer exchange (BEP 11); never for private torrents
 	EnableIPv6               bool   // IPv6 DHT node, dual-stack tracker announces, IPv6 peers (D60)
+	Encryption               string // MSE policy: prefer, require or disable (D63)
 	ListenPort               int
 	PortForwarding           bool // ask the router to forward ListenPort (UPnP / NAT-PMP)
 	ResumeEnabled            bool
@@ -74,6 +76,7 @@ func Defaults(home string) Config {
 		DHTBootstrap:             DefaultDHTBootstrap,
 		EnablePEX:                true, // like mainstream clients; private torrents never use it
 		EnableIPv6:               true,
+		Encryption:               "prefer", // like mainstream clients
 		ListenPort:               6881,
 		PortForwarding:           DefaultPortForwarding,
 		ResumeEnabled:            true,
@@ -132,6 +135,15 @@ var settings = []Setting{
 	{Name: "enable_ipv6", Help: "use IPv6 too: an IPv6 DHT node, announcing to trackers over both, IPv6 peers",
 		get: func(c *Config) string { return strconv.FormatBool(c.EnableIPv6) },
 		set: func(c *Config, v string) error { return setBool(&c.EnableIPv6, v) }},
+	{Name: "encryption", Help: "encrypt peer connections (MSE): prefer = encrypted when the peer can, require = only encrypted, disable",
+		get: func(c *Config) string { return c.Encryption },
+		set: func(c *Config, v string) error {
+			if _, err := peer.ParseEncryption(v); err != nil {
+				return err
+			}
+			c.Encryption = v
+			return nil
+		}},
 	{Name: "listen_port", Help: "TCP port for incoming peers (0 = random); a random one is used if it's taken",
 		get: func(c *Config) string { return strconv.Itoa(c.ListenPort) },
 		set: func(c *Config, v string) error { return setInt(&c.ListenPort, v, 0, 65535) }},

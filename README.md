@@ -210,6 +210,7 @@ denco config init                  # write a commented file with every setting
 | `listen_port` | `6881` | Port for incoming peers (TCP) and the DHT (UDP). A random one is used if it's taken. |
 | `port_forwarding` | `true` | Ask your router to forward `listen_port` (UPnP / NAT-PMP). |
 | `enable_dht`, `enable_pex` | `true` | Find peers without trackers / exchange peer lists. |
+| `encryption` | `prefer` | Encrypt peer connections (MSE/PE), which hides BitTorrent traffic from ISP throttling: `prefer` = encrypted when the peer can, plain otherwise; `require` = encrypted peers only; `disable`. It's obfuscation, not privacy. |
 | `enable_ipv6` | `true` | Use IPv6 too: an IPv6 DHT node, announcing to trackers over IPv4 and IPv6, IPv6 peers. `false` = IPv4 only. |
 | `dht_bootstrap` | public routers | DHT entry points; `none` = only remembered nodes. |
 | `resume_enabled`, `resume_dir` | `true`, `<home>/resume` | Remember torrents across restarts. |
@@ -261,7 +262,7 @@ denco config set log_file ~/denco.log
 
 ## Limitations
 
-- No uTP, no protocol encryption (MSE), no BitTorrent v2 (web seeds:
+- No uTP, no BitTorrent v2 (web seeds:
   only the BEP 19 kind, not BEP 17 `httpseeds`).
 - Web seeds on your own machine or local network are refused (a torrent
   mustn't make Denco contact local services).

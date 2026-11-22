@@ -222,7 +222,8 @@ func Open(cfg Config) (*Engine, error) {
 		id = peerid.New()
 	}
 	down, up := ratelimit.New(cfg.DownloadLimit), ratelimit.New(cfg.UploadLimit)
-	ln, err := listen(cfg.ListenAddr, peer.Options{PeerID: id, ReadLimiter: down, Extensions: true, DHT: cfg.EnableDHT}, log)
+	ln, err := listen(cfg.ListenAddr, peer.Options{PeerID: id, ReadLimiter: down, Extensions: true, DHT: cfg.EnableDHT,
+		Encryption: cfg.Session.PeerOpts.Encryption}, log)
 	if err != nil {
 		return nil, fmt.Errorf("engine: peer port: %w", err)
 	}

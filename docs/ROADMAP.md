@@ -77,8 +77,9 @@ so older references stay valid.
         families (BEP 7), /64 bans, wider address columns.
   - [x] **15d — Web seeds (BEP 19).** HTTP range downloads as pseudo-peers;
         private/loopback URLs refused by default.
-  - [ ] **15e — Protocol encryption (MSE/PE).** `encryption:
-        prefer|require|disable`; needs a short user-approved real-world check.
+  - [x] **15e — Protocol encryption (MSE/PE).** `encryption:
+        prefer|require|disable` (D63); checked on a real swarm: encrypted
+        handshakes with qBittorrent, Transmission, rtorrent and Deluge.
   - [ ] **15f — uTP (BEP 29).** LEDBAT over a UDP socket shared with the
         DHT; `transport: both|tcp|utp`; needs a real-world check.
 

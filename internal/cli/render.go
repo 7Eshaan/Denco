@@ -357,7 +357,7 @@ func renderPeers(w io.Writer, t engine.Torrent, peers []engine.Peer) {
 		return
 	}
 	tw := newTable(w)
-	fmt.Fprintln(tw, "ADDRESS\tCLIENT\tDIR\tHAS\tDOWN\tUP\tSTATUS")
+	fmt.Fprintln(tw, "ADDRESS\tCLIENT\tDIR\tENC\tHAS\tDOWN\tUP\tSTATUS")
 	for _, p := range peers {
 		dir := "out"
 		if p.Incoming {
@@ -367,7 +367,14 @@ func renderPeers(w io.Writer, t engine.Torrent, peers []engine.Peer) {
 		if p.WebSeed != "" { // D61
 			addr, dir, status = webseed.Host(p.WebSeed), "web", p.WebSeedNote
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%.1f%%\t%s\t%s\t%s\n", addr, short(p.Client, 24), dir, p.Progress*100,
+		enc := ""
+		switch {
+		case p.Encrypted: // D63
+			enc = "rc4"
+		case strings.HasPrefix(p.WebSeed, "https://"):
+			enc = "tls"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.1f%%\t%s\t%s\t%s\n", addr, short(p.Client, 24), dir, enc, p.Progress*100,
 			format.Speed(p.DownloadRate), format.Speed(p.UploadRate), status)
 	}
 	tw.Flush()
@@ -441,10 +448,29 @@ func renderStatus(w io.Writer, st ipc.Status) {
 		ipv6 = "on: trackers hear from us over IPv4 and IPv6, IPv6 peers welcome"
 	}
 	row("IPv6", ipv6)
+	row("Encryption", describeEncryption(st.Encryption, st.EncryptedPeers, st.Peers))
 	row("Limits", fmt.Sprintf("↓ %s  ↑ %s", config.DescribeRate(st.DownLimit), config.DescribeRate(st.UpLimit)))
 	row("Seeding", describeSeedLimits(st.SeedRatio, st.SeedTime))
 	row("Speed", fmt.Sprintf("↓ %s  ↑ %s", format.Speed(st.DownloadRate), format.Speed(st.UploadRate)))
 	row("This session", fmt.Sprintf("↓ %s  ↑ %s", format.Bytes(st.Downloaded), format.Bytes(st.Uploaded)))
 	row("Connected peers", fmt.Sprint(st.Peers))
 	tw.Flush()
+}
+
+// describeEncryption explains the encryption setting (D63) and how many
+// connected peers are encrypted.
+func describeEncryption(policy string, encrypted, peers int) string {
+	var s string
+	switch policy {
+	case "prefer":
+		s = "prefer: encrypted (MSE/RC4) when the peer can, plain otherwise"
+	case "require":
+		s = "require: encrypted (MSE/RC4) peers only"
+	default:
+		s = "disable: plain BitTorrent only"
+	}
+	if peers > 0 && policy != "disable" {
+		s += fmt.Sprintf(" · %d of %d peer%s encrypted", encrypted, peers, plural(peers))
+	}
+	return s
 }

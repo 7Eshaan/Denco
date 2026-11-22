@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	"errors"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -98,6 +99,7 @@ type seeder struct {
 
 	accepts    atomic.Int64
 	blocksSent atomic.Int64
+	refusedMSE atomic.Int64 // encrypted handshakes it refused
 	mu         sync.Mutex
 	requested  map[uint32]bool // piece indexes ever requested
 }
@@ -144,6 +146,9 @@ func (s *seeder) serve() {
 func (s *seeder) handle(nc net.Conn) {
 	known := func(h metainfo.Hash) bool { return h == s.f.mi.InfoHash }
 	c, err := peer.Accept(nc, known, peer.Options{PeerID: peerid.New()})
+	if errors.Is(err, peer.ErrEncryptedRefused) {
+		s.refusedMSE.Add(1) // it speaks plain BitTorrent only
+	}
 	if err != nil {
 		return
 	}

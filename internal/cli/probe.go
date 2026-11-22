@@ -29,11 +29,13 @@ func cmdProbe(args []string, stdout, stderr io.Writer) int {
 	maxPeers := fs.Int("n", 30, "max peers to try")
 	parallel := fs.Int("parallel", 10, "connections attempted at once")
 	wait := fs.Duration("wait", 5*time.Second, "how long to wait for each peer's bitfield")
+	encFlag := fs.String("encryption", "prefer", "prefer, require or disable (MSE, as the encryption setting)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() != 1 || *port > 65535 || *maxPeers < 1 || *parallel < 1 {
-		fmt.Fprintln(stderr, "usage: denco probe [-n N] [-parallel N] [-wait D] <file.torrent | magnet-uri>")
+	enc, encErr := peer.ParseEncryption(*encFlag)
+	if fs.NArg() != 1 || *port > 65535 || *maxPeers < 1 || *parallel < 1 || encErr != nil {
+		fmt.Fprintln(stderr, "usage: denco probe [-n N] [-parallel N] [-wait D] [-encryption prefer|require|disable] <file.torrent | magnet-uri>")
 		return 2
 	}
 
@@ -67,7 +69,7 @@ func cmdProbe(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "Probing %d peers…\n\n", len(addrs))
 
-	opts := peer.Options{PeerID: id, Extensions: true}
+	opts := peer.Options{PeerID: id, Extensions: true, Encryption: enc}
 	reports := probeAll(ctx, addrs, t, opts, *parallel, *wait)
 	printProbe(stdout, reports, t.numPieces)
 	return 0
@@ -81,6 +83,8 @@ type probeReport struct {
 	dht    bool
 	have   int // pieces from bitfield/have messages; -1 if no bitfield seen
 	rtt    time.Duration
+	// encrypted: MSE with RC4 (D63).
+	encrypted bool
 }
 
 func probeAll(ctx context.Context, addrs []netip.AddrPort, t *target, opts peer.Options, parallel int, wait time.Duration) []probeReport {
@@ -116,6 +120,7 @@ func probeOne(ctx context.Context, a netip.AddrPort, t *target, opts peer.Option
 	defer c.Close()
 	r.rtt = time.Since(start)
 	r.client = peerid.ClientName(c.Peer.PeerID)
+	r.encrypted = c.Encrypted
 	r.ext = c.Peer.SupportsExtensions()
 	r.dht = c.Peer.SupportsDHT()
 
@@ -170,14 +175,18 @@ func printProbe(w io.Writer, reports []probeReport, numPieces int) {
 		return (reports[i].err == nil) && (reports[j].err != nil)
 	})
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "PEER\tCLIENT\tHAS\tEXT\tDHT\tCONNECT\tSTATUS")
-	ok := 0
+	fmt.Fprintln(tw, "PEER\tCLIENT\tHAS\tEXT\tDHT\tENC\tCONNECT\tSTATUS")
+	ok, encrypted := 0, 0
 	for _, r := range reports {
 		if r.err != nil {
-			fmt.Fprintf(tw, "%s\t\t\t\t\t\t✗ %v\n", r.addr, shortErr(r.err))
+			fmt.Fprintf(tw, "%s\t\t\t\t\t\t\t✗ %v\n", r.addr, shortErr(r.err))
 			continue
 		}
 		ok++
+		enc := "no"
+		if r.encrypted {
+			enc, encrypted = "rc4", encrypted+1
+		}
 		has := "no bitfield"
 		switch {
 		case r.have >= 0 && numPieces > 0:
@@ -185,10 +194,10 @@ func printProbe(w io.Writer, reports []probeReport, numPieces int) {
 		case r.have >= 0:
 			has = fmt.Sprintf("%d pieces", r.have)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t✓\n", r.addr, r.client, has, yesNo(r.ext), yesNo(r.dht), r.rtt.Round(time.Millisecond))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t✓\n", r.addr, r.client, has, yesNo(r.ext), yesNo(r.dht), enc, r.rtt.Round(time.Millisecond))
 	}
 	tw.Flush()
-	fmt.Fprintf(w, "\n%d of %d peers handshook successfully.\n", ok, len(reports))
+	fmt.Fprintf(w, "\n%d of %d peers handshook successfully (%d encrypted).\n", ok, len(reports), encrypted)
 }
 
 func dedupAddrs(in []netip.AddrPort) []netip.AddrPort {

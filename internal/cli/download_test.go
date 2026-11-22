@@ -325,7 +325,7 @@ func TestListenFallsBackWhenPortBusy(t *testing.T) {
 	port := uint16(busy.Addr().(*net.TCPAddr).Port)
 
 	var errOut bytes.Buffer
-	ln, err := listen(port, peerid.New(), nil, &errOut)
+	ln, err := listen(port, peer.Options{PeerID: peerid.New()}, nil, &errOut)
 	if err != nil {
 		t.Fatal(err)
 	}

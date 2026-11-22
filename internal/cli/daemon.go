@@ -17,6 +17,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/config"
 	"github.com/7Eshaan/Denco/internal/engine"
 	"github.com/7Eshaan/Denco/internal/ipc"
+	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/torrent"
 )
 
@@ -76,6 +77,10 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 		}
 		defer os.RemoveAll(stateDir)
 	}
+	enc, err := peer.ParseEncryption(cfg.Encryption)
+	if err != nil {
+		return fail(err)
+	}
 	eng, err := engine.Open(engine.Config{
 		StateDir:      stateDir,
 		DownloadDir:   cfg.DownloadDir,
@@ -83,14 +88,15 @@ func runDaemon(ctx context.Context, e *env, args []string, stopping func()) int 
 		MaxActive:     cfg.MaxActiveDownloads,
 		DownloadLimit: cfg.DownloadLimit,
 		UploadLimit:   cfg.UploadLimit,
-		Session:       torrent.Config{MaxPeers: cfg.MaxConnectionsPerTorrent, PEX: cfg.EnablePEX},
-		EnableDHT:     cfg.EnableDHT,
-		EnableIPv6:    cfg.EnableIPv6,
-		PortForward:   cfg.PortForwarding,
-		SeedRatio:     cfg.SeedRatio,
-		SeedTime:      cfg.SeedTime,
-		DHTBootstrap:  cfg.DHTRouters(),
-		Logger:        log,
+		Session: torrent.Config{MaxPeers: cfg.MaxConnectionsPerTorrent, PEX: cfg.EnablePEX,
+			PeerOpts: peer.Options{Encryption: enc}},
+		EnableDHT:    cfg.EnableDHT,
+		EnableIPv6:   cfg.EnableIPv6,
+		PortForward:  cfg.PortForwarding,
+		SeedRatio:    cfg.SeedRatio,
+		SeedTime:     cfg.SeedTime,
+		DHTBootstrap: cfg.DHTRouters(),
+		Logger:       log,
 	})
 	if err != nil {
 		return fail(err)

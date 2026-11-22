@@ -34,6 +34,9 @@ type candidate struct {
 	state    candState
 	failures int       // consecutive failed or useless connections
 	nextTry  time.Time // don't dial before this
+	// plain: with encryption preferred, this peer didn't answer MSE and
+	// plain BitTorrent worked, so it is dialed plain from now on (D63).
+	plain bool
 }
 
 type candState int
@@ -183,8 +186,12 @@ func (s *Session) maintain(ctx context.Context) {
 		return
 	}
 	for _, addr := range s.swarm.next(room, time.Now()) {
+		opts := s.cfg.PeerOpts
+		if opts.Encryption == peer.EncryptionPrefer && s.swarm.get(addr).plain {
+			opts.Encryption = peer.EncryptionOff // saves a doomed MSE attempt
+		}
 		s.goHelper(func() {
-			c, err := peer.Dial(ctx, addr, s.mi.InfoHash, s.cfg.PeerOpts)
+			c, err := peer.Dial(ctx, addr, s.mi.InfoHash, opts)
 			s.send(ctx, dialResult{addr: addr, conn: c, err: err})
 			if ctx.Err() != nil && c != nil {
 				c.Close() // shutdown raced with a successful dial
@@ -198,6 +205,9 @@ func (s *Session) onDialResult(ctx context.Context, r dialResult) {
 		s.log.Debug("dial failed", "peer", r.addr, "err", r.err)
 		s.swarm.dialFailed(r.addr, time.Now())
 		return
+	}
+	if s.cfg.PeerOpts.Encryption == peer.EncryptionPrefer && !r.conn.Encrypted {
+		s.swarm.get(r.addr).plain = true // Dial fell back: we only offer RC4
 	}
 	if s.swarm.isBanned(r.addr) || s.peers[r.addr] != nil || len(s.peers) >= s.cfg.MaxPeers {
 		r.conn.Close()

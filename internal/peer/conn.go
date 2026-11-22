@@ -2,6 +2,7 @@ package peer
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/7Eshaan/Denco/internal/metainfo"
+	"github.com/7Eshaan/Denco/internal/mse"
 	"github.com/7Eshaan/Denco/internal/peerid"
 	"github.com/7Eshaan/Denco/internal/ratelimit"
 )
@@ -22,6 +24,9 @@ type Options struct {
 	PeerID     peerid.ID // our peer ID
 	Extensions bool      // advertise BEP 10 extension protocol
 	DHT        bool      // advertise BEP 5 DHT
+	// Encryption is the MSE policy (D63); the zero value is plain
+	// BitTorrent only.
+	Encryption Encryption
 
 	DialTimeout       time.Duration // TCP connect; default 10s
 	HandshakeTimeout  time.Duration // whole handshake exchange; default 10s
@@ -66,7 +71,46 @@ func (o *Options) handshake(infoHash metainfo.Hash) *Handshake {
 	return h
 }
 
+// Encryption is a policy for Message Stream Encryption (package mse).
+type Encryption int
+
+const (
+	// EncryptionOff: plain BitTorrent only; encrypted peers are refused.
+	EncryptionOff Encryption = iota
+	// EncryptionPrefer: dial encrypted, falling back to plain when a peer
+	// doesn't answer MSE; accept both.
+	EncryptionPrefer
+	// EncryptionRequire: encrypted (RC4) connections only, both ways.
+	EncryptionRequire
+)
+
+// String is the config spelling: disable, prefer, require.
+func (e Encryption) String() string {
+	switch e {
+	case EncryptionPrefer:
+		return "prefer"
+	case EncryptionRequire:
+		return "require"
+	}
+	return "disable"
+}
+
+// ParseEncryption reads the config spelling.
+func ParseEncryption(s string) (Encryption, error) {
+	for _, e := range []Encryption{EncryptionOff, EncryptionPrefer, EncryptionRequire} {
+		if s == e.String() {
+			return e, nil
+		}
+	}
+	return 0, fmt.Errorf("encryption must be prefer, require or disable, not %q", s)
+}
+
 var (
+	// ErrPlaintextRefused: encryption is required and the peer spoke plain
+	// BitTorrent (incoming), or didn't answer MSE (outgoing).
+	ErrPlaintextRefused = errors.New("peer: encryption required")
+	// ErrEncryptedRefused: encryption is disabled and the peer used MSE.
+	ErrEncryptedRefused = errors.New("peer: encrypted connection while encryption is disabled")
 	// ErrInfoHashMismatch: the peer answered for a different torrent.
 	ErrInfoHashMismatch = errors.New("peer: info hash mismatch")
 	// ErrUnknownTorrent: an incoming peer asked for a torrent we don't have.
@@ -86,9 +130,10 @@ var (
 // When either fails, or Close is called, the connection shuts down once:
 // Done() closes, Incoming() closes, and Err() reports the first error.
 type Conn struct {
-	Remote   netip.AddrPort
-	Peer     Handshake // the handshake the peer sent us
-	Outgoing bool      // true if we dialed, false if they connected to us
+	Remote    netip.AddrPort
+	Peer      Handshake // the handshake the peer sent us
+	Outgoing  bool      // true if we dialed, false if they connected to us
+	Encrypted bool      // MSE with RC4: everything after the handshake is encrypted
 
 	nc   net.Conn
 	opts Options
@@ -117,9 +162,26 @@ type Conn struct {
 // Options.ReadLimiter. It takes effect from the next socket read.
 func (c *Conn) SetTorrentLimiter(lim *ratelimit.Limiter) { c.torrentLim.Store(lim) }
 
-// Dial connects to addr and performs the handshake for infoHash.
+// Dial connects to addr and performs the handshake for infoHash. With
+// EncryptionPrefer, a peer that doesn't answer the encrypted handshake is
+// dialed again in plain BitTorrent (a second TCP connection: a peer that
+// saw MSE's random bytes has hung up).
 func Dial(ctx context.Context, addr netip.AddrPort, infoHash metainfo.Hash, opts Options) (*Conn, error) {
 	o := opts.withDefaults()
+	if o.Encryption == EncryptionOff {
+		return dial(ctx, addr, infoHash, o, false)
+	}
+	c, err := dial(ctx, addr, infoHash, o, true)
+	if err != nil && o.Encryption == EncryptionPrefer && errors.Is(err, mse.ErrNotMSE) && ctx.Err() == nil {
+		return dial(ctx, addr, infoHash, o, false)
+	}
+	if errors.Is(err, mse.ErrNotMSE) {
+		err = fmt.Errorf("%w: %w", ErrPlaintextRefused, err)
+	}
+	return c, err
+}
+
+func dial(ctx context.Context, addr netip.AddrPort, infoHash metainfo.Hash, o Options, encrypt bool) (*Conn, error) {
 	d := net.Dialer{Timeout: o.DialTimeout}
 	nc, err := d.DialContext(ctx, "tcp", addr.String())
 	if err != nil {
@@ -129,7 +191,19 @@ func Dial(ctx context.Context, addr netip.AddrPort, infoHash metainfo.Hash, opts
 	defer stop()
 
 	nc.SetDeadline(time.Now().Add(o.HandshakeTimeout))
-	if _, err := o.handshake(infoHash).WriteTo(nc); err != nil {
+	ours := o.handshake(infoHash).MarshalBinary()
+	encrypted := false
+	if encrypt {
+		// Our handshake rides along as MSE's initial payload. RC4 only:
+		// offering plaintext too would let the peer skip encryption, and
+		// a peer that can't do RC4 is retried in plain by Dial anyway.
+		mc, _, err := mse.Initiate(nc, infoHash, mse.RC4, ours)
+		if err != nil {
+			nc.Close()
+			return nil, fmt.Errorf("peer %s: %w", addr, ctxErr(ctx, err))
+		}
+		nc, encrypted = mc, true
+	} else if _, err := nc.Write(ours); err != nil {
 		nc.Close()
 		return nil, fmt.Errorf("peer %s: sending handshake: %w", addr, ctxErr(ctx, err))
 	}
@@ -147,36 +221,117 @@ func Dial(ctx context.Context, addr netip.AddrPort, infoHash metainfo.Hash, opts
 		return nil, fmt.Errorf("peer %s: %w", addr, ErrSelfConnection)
 	}
 	nc.SetDeadline(time.Time{})
-	return start(nc, addr, *theirs, true, o), nil
+	c := start(nc, addr, *theirs, true, o)
+	c.Encrypted = encrypted
+	return c, nil
 }
+
+// Torrents is what an accepting side serves: torrents by info hash, and
+// by mse.Req2 of their info hash, which is all an encrypted peer reveals.
+type Torrents interface {
+	Has(metainfo.Hash) bool
+	FindObfuscated(req2 [20]byte) (metainfo.Hash, bool)
+}
+
+// knownFunc serves the torrents known reports, to plain peers only.
+type knownFunc func(metainfo.Hash) bool
+
+func (k knownFunc) Has(h metainfo.Hash) bool                    { return k(h) }
+func (knownFunc) FindObfuscated([20]byte) (metainfo.Hash, bool) { return metainfo.Hash{}, false }
 
 // Accept performs the handshake on an incoming connection. known reports
 // whether we serve a torrent; the peer speaks first, so we learn which
-// torrent it wants before replying.
+// torrent it wants before replying. Encrypted peers can't be served
+// through Accept (their torrent can't be found from known): see
+// AcceptFrom.
 func Accept(nc net.Conn, known func(metainfo.Hash) bool, opts Options) (*Conn, error) {
+	return AcceptFrom(nc, knownFunc(known), opts)
+}
+
+// plainPrefix is how every plain BitTorrent handshake starts. An MSE peer
+// starts with its random public key instead.
+const plainPrefix = "\x13" + protocolID
+
+// AcceptFrom performs the handshake on an incoming connection, plain or
+// encrypted as opts.Encryption allows.
+func AcceptFrom(nc net.Conn, torrents Torrents, opts Options) (*Conn, error) {
 	o := opts.withDefaults()
 	addr := addrPortOf(nc.RemoteAddr())
 	nc.SetDeadline(time.Now().Add(o.HandshakeTimeout))
-
-	theirs, err := ReadHandshake(nc)
-	if err != nil {
+	fail := func(err error) (*Conn, error) {
 		nc.Close()
 		return nil, fmt.Errorf("peer %s: %w", addr, err)
 	}
-	if !known(theirs.InfoHash) {
-		nc.Close()
-		return nil, fmt.Errorf("peer %s: %w %s", addr, ErrUnknownTorrent, theirs.InfoHash)
+
+	var prefix [len(plainPrefix)]byte
+	if _, err := io.ReadFull(nc, prefix[:1]); err != nil {
+		return fail(fmt.Errorf("reading handshake: %w", err))
+	}
+	// A plain handshake's first byte is 19; with encryption off, anything
+	// else is rejected without waiting for more. It is most likely MSE.
+	if prefix[0] != plainPrefix[0] && o.Encryption == EncryptionOff {
+		return fail(fmt.Errorf("%w (%w: protocol length %d)", ErrEncryptedRefused, ErrBadHandshake, prefix[0]))
+	}
+	if _, err := io.ReadFull(nc, prefix[1:]); err != nil {
+		return fail(fmt.Errorf("reading handshake: %w", err))
+	}
+	var (
+		r         io.Reader = io.MultiReader(bytes.NewReader(prefix[:]), nc)
+		encrypted bool
+		skey      metainfo.Hash
+	)
+	switch {
+	case string(prefix[:]) == plainPrefix:
+		if o.Encryption == EncryptionRequire {
+			return fail(ErrPlaintextRefused)
+		}
+	case o.Encryption == EncryptionOff:
+		return fail(fmt.Errorf("%w (%w: not a BitTorrent handshake)", ErrEncryptedRefused, ErrBadHandshake))
+	default:
+		find := func(req2 [20]byte) ([20]byte, bool) { return torrents.FindObfuscated(req2) }
+		mc, h, _, err := mse.Receive(nc, prefix[:], find, o.chooseMethod)
+		if errors.Is(err, mse.ErrUnknownTorrent) {
+			return fail(fmt.Errorf("%w (encrypted)", ErrUnknownTorrent))
+		}
+		if err != nil {
+			return fail(err)
+		}
+		nc, r, skey, encrypted = mc, mc, h, mc.Encrypted()
+	}
+	theirs, err := ReadHandshake(r)
+	if err != nil {
+		return fail(err)
+	}
+	if skey != (metainfo.Hash{}) && theirs.InfoHash != skey {
+		// The MSE handshake named one torrent and the BitTorrent one another.
+		return fail(ErrInfoHashMismatch)
+	}
+	if !torrents.Has(theirs.InfoHash) {
+		return fail(fmt.Errorf("%w %s", ErrUnknownTorrent, theirs.InfoHash))
 	}
 	if theirs.PeerID == o.PeerID {
-		nc.Close()
-		return nil, fmt.Errorf("peer %s: %w", addr, ErrSelfConnection)
+		return fail(ErrSelfConnection)
 	}
 	if _, err := o.handshake(theirs.InfoHash).WriteTo(nc); err != nil {
-		nc.Close()
-		return nil, fmt.Errorf("peer %s: sending handshake: %w", addr, err)
+		return fail(fmt.Errorf("sending handshake: %w", err))
 	}
 	nc.SetDeadline(time.Time{})
-	return start(nc, addr, *theirs, false, o), nil
+	c := start(nc, addr, *theirs, false, o)
+	c.Encrypted = encrypted
+	return c, nil
+}
+
+// chooseMethod answers an encrypted peer's crypto_provide: RC4 when
+// offered, plaintext-after-the-handshake only when encryption is merely
+// preferred.
+func (o *Options) chooseMethod(provide uint32) uint32 {
+	switch {
+	case provide&mse.RC4 != 0:
+		return mse.RC4
+	case provide&mse.Plaintext != 0 && o.Encryption == EncryptionPrefer:
+		return mse.Plaintext
+	}
+	return 0
 }
 
 func start(nc net.Conn, addr netip.AddrPort, theirs Handshake, outgoing bool, o Options) *Conn {

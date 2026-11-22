@@ -35,12 +35,13 @@ a client command starts one (D52): it runs its own executable as
 | `internal/peerid` | ✅ | Generate our 20-byte peer ID (`-DN0100-…` for v0.1.0; digits from `version`, D54); `ClientName` decodes other clients' IDs. |
 | `internal/version` | ✅ | The one version source (D54): `Tag` (stamped by release builds via `-ldflags`), `String`/`Short`, `Client` ("Denco 0.1.0", BEP 10 `v`), `UserAgent` ("Denco/0.1.0", trackers and .torrent downloads), `PeerIDDigits` ("0100"). Stdlib only. |
 | `internal/tracker` | ✅ | `Client.Announce` (one announce, HTTP(S) or UDP) and `List` (BEP 12 tiers, concurrent, fallback + promote). `Client` dispatches by scheme: HTTP(S) in `http.go`, UDP (BEP 15 + BEP 41) in `udp.go`. |
-| `internal/peer` | ✅ | Peer wire protocol: `Handshake`, `Message` codec + typed constructors/parsers, `Conn` (Dial/Accept, reader + writer goroutines, keep-alive, idle timeout, optional read limiter), BEP 10 `ExtHandshake` (`extension.go`), BEP 11 `PEX` message codec (`pex.go`). |
+| `internal/peer` | ✅ | Peer wire protocol: `Handshake`, `Message` codec + typed constructors/parsers, `Conn` (Dial/Accept/AcceptFrom with the MSE policy `Encryption` and plain fallback (D63), reader + writer goroutines, keep-alive, idle timeout, optional read limiter), BEP 10 `ExtHandshake` (`extension.go`), BEP 11 `PEX` message codec (`pex.go`). |
+| `internal/mse` | ✅ | Message Stream Encryption (D63): `Initiate` / `Receive` (768-bit DH, sync-hash and VC scans, crypto_provide/select, RC4 with 1 KiB discarded, IA), `Conn` (a `net.Conn` that en/decrypts), `Req2` (obfuscated info hash). Stdlib only. |
 | `internal/metadata` | ✅ | BEP 9: `Message` encode/decode, `Piece`, `Assembler` (SHA-1 check, reset on mismatch), `Fetcher` (announce + up to 10 peers, each assembling its own full copy; bans a peer whose copy fails the hash; with `PEX`, also learns peers from one ut_pex message per peer — receive only; `Status`, `Peers`). |
 | `internal/bitfield` | ✅ | Fixed-size piece set in wire format (high bit = piece 0); validated `FromBytes`. |
 | `internal/storage` | ✅ | `Layout` (OS-safe paths, sanitising, collisions, containment) and `Storage` (ReadAt/WriteAt across files, handle LRU, no-overwrite, ReadOnly, safe DeleteFiles). |
 | `internal/pieces` | ✅ | `Check`/`VerifyPiece`/`Recheck` (parallel hashing), `Manager` (peers finish their own pieces then rarest-first new ones (D51), random-first, endgame, memory budget, block ownership, wanted-pieces mask), `Wanted`/`SkipSet` (file selection → pieces, D44). |
-| `internal/torrent` | ✅ | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/IP bans, request pipelining, snub detection, hash+write workers, announce loop, uploading (validation, cancel, per-peer uploader), tit-for-tat choker + optimistic unchoke, seeding, pause uploads, peer exchange (`pex.go`, D41), file selection (`SetWanted`, partial seeds, D44), pacing under a download limit (`pace.go`: `Pacer`, scaled snub timeout and pipeline, D46), web seeds as pseudo-peers (`webseed.go`, D61), Stats/Peers. `Listener`: one TCP port routing incoming peers by info hash. |
+| `internal/torrent` | ✅ | `Session`: event loop owning Manager + peers + swarm; dialing/backoff/IP bans, request pipelining, snub detection, hash+write workers, announce loop, uploading (validation, cancel, per-peer uploader), tit-for-tat choker + optimistic unchoke, seeding, pause uploads, peer exchange (`pex.go`, D41), file selection (`SetWanted`, partial seeds, D44), pacing under a download limit (`pace.go`: `Pacer`, scaled snub timeout and pipeline, D46), web seeds as pseudo-peers (`webseed.go`, D61), Stats/Peers. `Listener`: one TCP port routing incoming peers by info hash (plain) or `mse.Req2` of it (encrypted, D63). |
 | `internal/engine` | ✅ | `Engine`: torrent table (IDs, info-hash dedup), shared Listener + peer ID, resume store, download queue (`MaxActive`), per-torrent run goroutine (magnet: fetch metadata → open storage → restore/recheck → Session + Saver → final save), Add/AddMagnet/Pause/Resume/Remove(+delete files)/List/Get/Files/Peers/Overview, `SetLimits`, `SetFilesWanted` (D44), seeding controls in `seeding.go` (`SetUploadsPaused`, `SetSeedMode`, `SetSeedLimits`, ratio, per-run seeding watcher, finished state; D45), automatic retry of failed torrents (`retry.go`, D47), the download queue — order keys, `MoveInQueue`, `ForceStart` (`queue.go`, D58), per-torrent speed limits (`limits.go`, D59), one `torrent.Pacer` for all sessions, an optional `portmap.Mapper` for the peer (TCP) and DHT (UDP) ports (D49). `commands.go`, `view.go`, `magnet.go`. |
 | `internal/resume` | ✅ | `Store` (atomic save/load/list/delete of `<hash>.json` + `<hash>.torrent`), `Restore` (trust rules, partial recheck), `Saver` (periodic/no-op-skipping saves with lifetime totals). |
 | `internal/ipc` | ✅ | Daemon file (`Info`, atomic 0600 write), `NewHandler`/`Serve` (loopback HTTP API over an `*engine.Engine`, bearer-token auth, error→status mapping), `Client` (+ `Connect`, stale-file detection). |
@@ -63,6 +64,8 @@ Dependency direction (lower never imports higher):
 `portmap` (stdlib only) by `engine` (and `cli` for its status type);
 `version` (stdlib only) by `peerid`, `tracker`, `metadata`, `torrent`, `cli`;
 `webseed` (uses `metainfo`, `version`) by `torrent`, `cli` and `tui` (host names for display);
+`mse` (stdlib only) by `peer` (handshakes), `torrent` (Listener index) and `cli` (tests);
+`config` uses `peer` for `ParseEncryption`;
 `tui` (uses `ipc`, `engine` view types, `format`) by `cli` only.
 
 ## Key data types (implemented)
@@ -138,6 +141,11 @@ Dependency direction (lower never imports higher):
   (`Resume`/`Pause` end it); `List()` is in queue order; `Torrent.Queue`/`QueueLength`
   (place among incomplete torrents, from 1; 0 = complete) and `Torrent.Forced`;
   `resume.State.Queue/Forced`; `ipc.Client.MoveInQueue/ForceStart`; `tui.Client` gained both.
+- Encryption (D63): `peer.Options.Encryption` (`EncryptionOff` = zero value / `Prefer` / `Require`,
+  `ParseEncryption`, `String` = config spelling), `peer.AcceptFrom(nc, peer.Torrents, opts)`,
+  `peer.Conn.Encrypted`, `ErrPlaintextRefused`/`ErrEncryptedRefused`; `mse.Initiate/Receive/Req2`;
+  `torrent.PeerInfo.Encrypted`, `Stats.Encrypted`; `engine.Peer.Encrypted`,
+  `Overview.Encryption/EncryptedPeers`; `config.Config.Encryption` (`encryption`).
 - Web seeds (D61): `torrent.Config.WebSeeds *webseed.Client` (nil = `webseed.Default()`);
   `Stats.WebSeeds/WebSeedsActive`, `PeerInfo.WebSeed/WebSeedNote`; `engine.Torrent.
   WebSeeds/WebSeedsActive`, `engine.Peer.WebSeed/WebSeedNote`; `engine.Config.WebSeedLocal`

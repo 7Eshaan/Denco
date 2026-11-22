@@ -4,6 +4,21 @@
 2026-11-21: queue control, per-torrent limits, full IPv6, web seeds,
 MSE/PE, uTP; sub-phases 15a–15f in ROADMAP).
 
+**Phase 15e — protocol encryption (D63) · ✅ done, not committed yet.**
+New `internal/mse` (MSE/PE handshake: 768-bit DH, sync scans, RC4 with
+1 KiB discarded, our BitTorrent handshake as the initial payload).
+Setting `encryption: prefer|require|disable` (default prefer): dial
+encrypted (RC4 only), fall back to plain for peers that don't answer MSE
+and remember them; incoming plain and encrypted both accepted (require:
+encrypted only). Listener finds torrents by the obfuscated hash. PEX
+encryption flag; ENC column in `denco peers`, the TUI peers tab and
+`denco probe` (new `-encryption` flag); "Encryption" row in `denco
+status`; `denco download` follows the setting. Checked on the real network (user
+approved): on the Fedora 45 swarm, 67 of 68 reachable peers handshook
+encrypted with `prefer` (qBittorrent, Transmission, rtorrent, Deluge),
+the other through the plain fallback; `require` reached 69 of 79 vs. 62
+plain (D63).
+
 **2026-11-22:** CI failure fixed (D62): macOS CI failed
 `TestLookupAsksRoutersForUnknownRegions` on the 15d commit. Two DHT tests
 (both from Phase 11) expected node counts that random IDs sometimes make
@@ -12,8 +27,8 @@ Test-only fix, verified with thousands of runs incl. under CPU load and
 the race detector. Committed as c0ebd42. Found along the way: the
 shallow-bucket test barely detected the rule it's named for (~1/10);
 added `TestBucketFillTargetsEachSparseBucket`, a direct test with a spy
-node that catches each bucket-filling rule's mutation 10/10 (D62) — not
-committed yet.
+node that catches each bucket-filling rule's mutation 10/10 (D62) —
+committed as 041fb83.
 
 **Phase 15d — web seeds (D61) · ✅ done, committed as d0bd898.**
 New `internal/webseed` (BEP 19 URLs, ranged GETs per file with exact
@@ -99,20 +114,14 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** the user commits the new bucket-fill test (D62) and
-checks CI is green; then **15e — protocol encryption
-(MSE/PE)** (plan: `internal/mse` — 768-bit DH, the VC scan with padding,
-crypto_provide/select, RC4 with 1 KiB discarded, hashed info-hash lookup
-for incoming; `encryption: prefer|require|disable` (default prefer:
-encrypted first, plaintext fallback remembered per peer); PEX encryption
-flag; VIA column with an E flag. Needs a short user-approved real-world
-check against public peers).
+**Next action:** the user commits 15e (D63) and checks CI; then **15f —
+uTP (BEP 29)** (LEDBAT, a UDP socket shared with the DHT, `transport:
+both|tcp|utp`; also needs a user-approved real-world check).
 Optional, any time: a release (v0.2.1 for the D57 fix, or v0.3.0 once
 some of Phase 15 is in). Open items, if wanted: the plain
 CLI should `clean` torrent names too (D55), the user's router check
 (D50), one memory budget for all torrents (D51), `denco service install`
-(D52), signing/Homebrew/Scoop (D53), and the out-of-scope list (uTP, MSE,
-web seeds, v2, GUI).
+(D52), signing/Homebrew/Scoop (D53), and the out-of-scope list (v2, GUI).
 
 ## Known issues
 - TUI on Windows (D55): raw mode, VT output and size polling are compiled
@@ -173,9 +182,31 @@ web seeds, v2, GUI).
   the daemon in-process), so it hasn't actually been run on Windows.
 
 ## Open questions for the user
-- MSE encryption stays out of scope? (UPnP/NAT-PMP: confirmed, done in 12d.)
+- (none open)
 
-## Last test run (2026-11-22, Phase 15d, D61)
+## Last test run (2026-11-22, Phase 15e, D63)
+- `go test -race -count=1 ./...` — all 26 packages pass (new: `mse`)
+- stress `-race -count=5 -cpu=1,2,8` torrent, peer, mse — all pass; the
+  new torrent encryption tests also 10× at 1/2/8 CPUs
+- `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
+  linux/windows/darwin × amd64/arm64 — all build · external deps: none
+- new tests: mse `TestHandshakeAndStream`, `TestReceiveMatchesSpec`,
+  `TestInitiateMatchesSpec` (the other side written by hand from the
+  spec), `TestReceiveRefuses`, `TestInitiateAgainstPlainPeer`,
+  `TestRandomPad`; peer `TestEncryptionPolicies` (all 9 pairs),
+  `TestEncryptionRefusalErrors`, `TestAcceptEncryptedHashMismatch`,
+  `TestAcceptPlaintextMethod`, `TestParseEncryption`; torrent
+  `TestEncryptedTransfer`, `TestPlainPeerRemembered`,
+  `TestPEXEncryptionFlag`; config `TestEncryptionSetting`; cli probe test
+  with an MSE seeder. Mutation-checked: 14 mutations, each fails a test
+  (2 survived at first; tests fixed)
+- found by a test: a test that only counted connections at the end
+  raced the seed-to-seed disconnect; it now checks during the transfer
+- real-world (approved): `denco probe` on the Fedora 45 swarm, a fixed list
+  of 79 peers — disable 62 ok, prefer 68 ok (67 rc4 + 1 fallback),
+  require 69 ok (all rc4); qBittorrent, Transmission, rtorrent, Deluge
+
+## Previous test run (2026-11-22, Phase 15d, D61)
 - `go test -race -count=1 ./...` — all 25 packages pass (new: `webseed`)
 - stress `-race -count=5 -cpu=1,2,8` webseed, magnet, engine, cli, tui,
   torrent, peer (15 runs each) — all pass
@@ -409,4 +440,5 @@ web seeds, v2, GUI).
 - **Phase 15d (2026-11-22, commit d0bd898):** web seeds (D61).
 - **After Phase 15d (2026-11-22, commit c0ebd42):** two flaky DHT tests
   made deterministic (D62, CI failure on macOS); then a direct test of the
-  bucket-filling rules (D62).
+  bucket-filling rules (D62, commit 041fb83).
+- **Phase 15e (2026-11-22):** protocol encryption, MSE/PE (D63).

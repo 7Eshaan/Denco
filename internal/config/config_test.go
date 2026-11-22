@@ -51,6 +51,7 @@ func TestParse(t *testing.T) {
 		"dht_bootstrap: 10.0.0.1:6881, example.org:25401",
 		"enable_pex: off",
 		"enable_ipv6: false",
+		"encryption: require",
 		"listen_port: 51413",
 		"resume_enabled: off\r", // Windows line ending
 		`resume_dir: "` + dl + ` #1"`,
@@ -70,6 +71,7 @@ func TestParse(t *testing.T) {
 		DHTBootstrap:             "10.0.0.1:6881,example.org:25401",
 		EnablePEX:                false,
 		EnableIPv6:               false,
+		Encryption:               "require",
 		ListenPort:               51413,
 		PortForwarding:           true, // not in the file: the default
 		AutoStart:                true,
@@ -335,5 +337,16 @@ func TestPortForwardingSetting(t *testing.T) {
 	}
 	if err := c.Set("port_forwarding", "off"); err != nil || c.PortForwarding {
 		t.Errorf("port_forwarding off: %v, %v", c.PortForwarding, err)
+	}
+}
+
+func TestEncryptionSetting(t *testing.T) {
+	if d := Defaults(t.TempDir()); d.Encryption != "prefer" {
+		t.Errorf("default %q", d.Encryption)
+	}
+	for _, v := range []string{"on", "true", "rc4", ""} {
+		if _, err := Parse("encryption: "+v, Defaults(t.TempDir())); err == nil {
+			t.Errorf("accepted encryption: %q", v)
+		}
 	}
 }

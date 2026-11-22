@@ -1307,3 +1307,101 @@ One short entry per decision. Newest at the bottom. Format:
   lookup as tried each fail 10/10 (the old test: ~1/10 for the first).
   Not flaky: 1000 plain runs, 300 under race on a loaded machine (1/2/8
   CPUs). The end-to-end test stays as the integration check.
+
+### D63 — Protocol encryption (MSE/PE, Phase 15e)
+- **Decision:**
+  - **New package `internal/mse`** (stdlib only: `math/big`, `crypto/rc4`,
+    `crypto/sha1`): `Initiate` (connecting side) and `Receive` (accepting
+    side) run the MSE handshake — 768-bit DH (the spec's prime, G = 2,
+    160-bit private keys; public keys 0, 1, ≥ P−1 refused), random 0–512
+    byte PadA/PadB, the `req1` sync hash and the `req2 xor req3`
+    obfuscated torrent, VC, crypto_provide/select, RC4 keyed
+    `HASH(keyA|keyB, S, SKEY)` with the first 1 KiB discarded. Both scans
+    are bounded (532 / 520 bytes). The result is a `*mse.Conn` (a
+    `net.Conn`: decrypting Read, encrypting Write into its own buffer,
+    deadlines passed through), so `peer.Conn` runs unchanged on top. We
+    send PadC/PadD empty: PadA/PadB already hide the lengths.
+  - **Our BitTorrent handshake rides as MSE's initial payload (IA)**: no
+    extra round trip.
+  - **Policy `peer.Options.Encryption`**, config `encryption`
+    (default `prefer`, like mainstream clients; daemon restart to change):
+    - `prefer`: dial with MSE offering **RC4 only**; a peer that doesn't
+      answer it (hangs up, resets, never sends the marker — `ErrNotMSE`)
+      is redialed in plain BitTorrent on a new TCP connection (a peer that
+      saw MSE's random key has hung up). The swarm then remembers that
+      address as plain and dials it plain from then on (no doomed MSE
+      attempt each reconnect). Incoming: plain and MSE both accepted;
+      for MSE we select RC4 when offered, plaintext-after-the-header
+      otherwise.
+    - `require`: RC4 only, both ways; no fallback; plain incoming
+      handshakes refused (`ErrPlaintextRefused`).
+    - `disable`: plain only; an incoming first byte that isn't 19 is
+      refused at once (`ErrEncryptedRefused`).
+    The zero value of `peer.Options` is `disable`, so library callers and
+    tests keep plain BitTorrent unless they ask.
+  - **Telling plain from MSE on incoming:** read 20 bytes; a plain
+    handshake starts with `\x13BitTorrent protocol`, MSE with a random key
+    (equal by chance with probability 2⁻¹⁶⁰). The bytes are replayed into
+    whichever handshake follows.
+  - **Finding the torrent:** an encrypted peer only reveals
+    `HASH("req2", info hash)`. The Listener keeps a second index
+    `mse.Req2(hash) → hash` beside its sessions (`peer.Torrents` interface,
+    `peer.AcceptFrom`); `peer.Accept(known)` stays for plain-only callers.
+    The info hash in the BitTorrent handshake must equal the MSE one.
+  - **Why RC4 only when dialing:** offering plaintext too would let a peer
+    pick "encrypted header, plain payload", which ISPs' DPI still sees
+    after the first packet; a peer that can't do RC4 is still reached
+    through the plain fallback (prefer) — at the cost of one extra TCP
+    connection the first time.
+  - **Visible:** `Conn.Encrypted`, `PeerInfo.Encrypted`, `Stats.Encrypted`,
+    `engine.Peer.Encrypted`, `Overview.Encryption/EncryptedPeers`; an ENC
+    column (`rc4`, `tls` for https web seeds, blank) in `denco peers` and
+    the TUI peers tab (dropped first on narrow screens); an "Encryption"
+    row in `denco status` (policy, N of M peers encrypted); PEX sets the
+    `0x01` (supports encryption) flag for encrypted peers; `denco probe
+    -encryption prefer|require|disable` and an ENC column there, for
+    checking real swarms. `denco download` follows the setting too.
+- **Alternatives:** offering plaintext as well (more peers reachable
+  without a second connection, weaker obfuscation); trying plain first
+  (fast, defeats the point); per-torrent policies (no client needs them);
+  live changes (an existing connection can't change its encryption; a
+  restart is honest about that).
+- **It is obfuscation, not security:** no authentication, RC4 is broken;
+  the docs say so.
+- **Tests:** mse — both sides of the package agree for RC4 / plaintext
+  selection with 1 MiB each way at once; the other side played **by hand
+  from the spec's formulas** (not the package's helpers) with 300 bytes of
+  PadA, 17 of PadC, 400 of PadB, 33 of PadD and payload in the same packet
+  as step 4, so a mistake made symmetrically on both sides still fails;
+  refusals (unknown torrent, no common method, no marker in 532 bytes,
+  weak keys), a plain peer hanging up fails fast. peer — every dial ×
+  accept policy pair (9; prefer→disable takes exactly two connections),
+  refusal errors, the MSE/BT info hash mismatch, a plaintext-only offer
+  accepted by prefer and refused by require. torrent — two nodes transfer
+  encrypted (require seed, prefer leecher) and both count it; a plain-only
+  peer reached by fallback is remembered (exactly one refused MSE attempt
+  over several reconnects); PEX flag. config, cli (status row, probe with
+  an MSE seeder).
+  Mutation-checked: 14 mutations (keys swapped on both sides, no 1 KiB
+  discard, short PadA scan, weak keys accepted, IA not decrypted, require
+  accepting a plaintext offer or plain incoming, no fallback, no hash
+  match, plain not remembered or ignored, no PEX flag, no obfuscated
+  index, encrypted not counted) — each fails a test. Two survived at first
+  (the weak-key test passed by timing out; nothing offered plaintext-only
+  to `require`); both tests fixed.
+- **Real-world check (2026-11-22, approved by the user):** `denco probe`
+  on the Fedora 45 Workstation torrent (Fedora's tracker; Debian's was
+  down and Ubuntu's returns only its own seed). One fixed list of 79
+  peers that had answered, probed in each mode (handshake + bitfield, no
+  download):
+  - `disable`: 62 of 79 handshook (plain).
+  - `prefer`: 68 of 79, **67 encrypted**, 1 qBittorrent peer reached
+    through the plain fallback.
+  - `require`: 69 of 79, all encrypted — more than plain: many peers
+    refuse plain connections themselves.
+  Encrypted handshakes worked with qBittorrent 4.6–5.3 (libtorrent-
+  rasterbar), Transmission 4.1, rtorrent (libtorrent 0.13/0.14) and
+  Deluge 2.2 — the major MSE implementations. Three peers that connected
+  plain but not with `prefer` were retested 3 times each way: they fail
+  and succeed in both modes (busy peers), so no MSE fault. The only peer
+  `require` lost was the one that needed the fallback.

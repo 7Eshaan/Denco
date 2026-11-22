@@ -114,7 +114,8 @@ type Peer struct {
 	Addr         netip.AddrPort `json:"addr"`
 	Client       string         `json:"client"`
 	Incoming     bool           `json:"incoming"`
-	Progress     float64        `json:"progress"` // 0..1
+	Encrypted    bool           `json:"encrypted,omitempty"` // MSE with RC4 (D63)
+	Progress     float64        `json:"progress"`            // 0..1
 	DownloadRate int64          `json:"download_rate"`
 	UploadRate   int64          `json:"upload_rate"`
 	Downloaded   int64          `json:"downloaded"`
@@ -151,11 +152,14 @@ type Overview struct {
 	DHT6Nodes int             `json:"dht6_nodes"`
 	DHT6Good  int             `json:"dht6_good_nodes"`
 	PortMap   *portmap.Status `json:"port_forwarding,omitempty"` // nil = off
-	SeedRatio float64         `json:"seed_ratio"`                // global seeding limits; 0 = none
-	SeedTime  time.Duration   `json:"seed_time"`
-	Torrents  int             `json:"torrents"`
-	ByState   map[State]int   `json:"by_state"`
-	Complete  int             `json:"complete"`
+	// Encryption (D63): the MSE policy, and how many connected peers use it.
+	Encryption     string        `json:"encryption"`
+	EncryptedPeers int           `json:"encrypted_peers"`
+	SeedRatio      float64       `json:"seed_ratio"` // global seeding limits; 0 = none
+	SeedTime       time.Duration `json:"seed_time"`
+	Torrents       int           `json:"torrents"`
+	ByState        map[State]int `json:"by_state"`
+	Complete       int           `json:"complete"`
 
 	DownloadRate int64 `json:"download_rate"`
 	UploadRate   int64 `json:"upload_rate"`
@@ -229,7 +233,7 @@ func (e *Engine) Peers(ref string) ([]Peer, error) {
 	var out []Peer
 	for _, p := range sess.Peers() {
 		out = append(out, Peer{
-			Addr: p.Addr, Client: p.Client, Incoming: !p.Outgoing, Progress: p.Progress,
+			Addr: p.Addr, Client: p.Client, Incoming: !p.Outgoing, Encrypted: p.Encrypted, Progress: p.Progress,
 			DownloadRate: p.DownloadRate, UploadRate: p.UploadRate,
 			Downloaded: p.Downloaded, Uploaded: p.Uploaded,
 			PeerChoking: p.Choking, Interested: p.Interested,
@@ -253,6 +257,7 @@ func (e *Engine) Overview() Overview {
 		Downloaded: e.finished.down, Uploaded: e.finished.up,
 	}
 	o.IPv6 = e.cfg.EnableIPv6
+	o.Encryption = e.cfg.Session.PeerOpts.Encryption.String()
 	if e.dht != nil {
 		ds := e.dht.V4.Stats()
 		o.DHT, o.DHTPort, o.DHTNodes, o.DHTGood = true, e.dht.Port(), ds.Nodes, ds.GoodNodes
@@ -283,6 +288,7 @@ func (e *Engine) Overview() Overview {
 			st := t.sess.Stats()
 			o.Downloaded += st.Downloaded
 			o.Uploaded += st.Uploaded
+			o.EncryptedPeers += st.Encrypted
 		}
 	}
 	return o
