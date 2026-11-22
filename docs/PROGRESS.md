@@ -9,8 +9,11 @@ MSE/PE, uTP; sub-phases 15a–15f in ROADMAP).
 (both from Phase 11) expected node counts that random IDs sometimes make
 impossible: ~1.1% and ~0.4% flakes, reproduced and explained by logging.
 Test-only fix, verified with thousands of runs incl. under CPU load and
-the race detector. Not committed yet. Found along the way: the
-shallow-bucket test barely detects the rule it's named for (D62).
+the race detector. Committed as c0ebd42. Found along the way: the
+shallow-bucket test barely detected the rule it's named for (~1/10);
+added `TestBucketFillTargetsEachSparseBucket`, a direct test with a spy
+node that catches each bucket-filling rule's mutation 10/10 (D62) — not
+committed yet.
 
 **Phase 15d — web seeds (D61) · ✅ done, committed as d0bd898.**
 New `internal/webseed` (BEP 19 URLs, ranged GETs per file with exact
@@ -96,8 +99,8 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** the user commits the DHT test fix (D62) and checks CI is
-green; then **15e — protocol encryption
+**Next action:** the user commits the new bucket-fill test (D62) and
+checks CI is green; then **15e — protocol encryption
 (MSE/PE)** (plan: `internal/mse` — 768-bit DH, the VC scan with padding,
 crypto_provide/select, RC4 with 1 KiB discarded, hashed info-hash lookup
 for incoming; `encryption: prefer|require|disable` (default prefer:
@@ -404,5 +407,6 @@ web seeds, v2, GUI).
 - **Phase 15b (2026-11-21, commit 4c4c8e8):** per-torrent speed limits (D59).
 - **Phase 15c (2026-11-22, commit d97cff6):** full IPv6 (D60).
 - **Phase 15d (2026-11-22, commit d0bd898):** web seeds (D61).
-- **After Phase 15d (2026-11-22):** two flaky DHT tests made
-  deterministic (D62, CI failure on macOS).
+- **After Phase 15d (2026-11-22, commit c0ebd42):** two flaky DHT tests
+  made deterministic (D62, CI failure on macOS); then a direct test of the
+  bucket-filling rules (D62).

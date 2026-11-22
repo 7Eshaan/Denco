@@ -1291,8 +1291,19 @@ One short entry per decision. Newest at the bottom. Format:
   the second 150 under CPU load at 1 CPU (was 2 failures in 120); the
   whole package 300 times under race — all pass. The first test still
   fails every time when routers aren't asked for unknown regions.
-- **Found, not fixed:** `TestNewNodeFillsShallowBuckets` barely guards
+- **Found, then fixed:** `TestNewNodeFillsShallowBuckets` barely guarded
   the rule it is named for — with random lookup targets instead of
-  per-bucket ones, it fails ~1 time in 10, before and after this fix. So
-  D42's "every rule has a test that fails without it" isn't true for the
-  bucket-targeting rule.
+  per-bucket ones it failed only ~1 time in 10 (before and after the fix
+  above): in a 40-node network random lookups fill the shallow buckets
+  most of the time too. So D42's "every rule has a test that fails
+  without it" wasn't true for the bucket-filling rules. New
+  `TestBucketFillTargetsEachSparseBucket` tests them directly: a new node
+  whose only contact (from its state file) is a spy node that records
+  every lookup target and ignores bucket 3's first query. It checks that
+  the startup round sends exactly one lookup aimed inside each of buckets
+  0…7, that the next round retries only the lookup that reached nobody,
+  and that a third round asks nothing. Mutation-checked, 10 runs each:
+  random targets, no once-per-refresh limit, and counting an unanswered
+  lookup as tried each fail 10/10 (the old test: ~1/10 for the first).
+  Not flaky: 1000 plain runs, 300 under race on a loaded machine (1/2/8
+  CPUs). The end-to-end test stays as the integration check.
