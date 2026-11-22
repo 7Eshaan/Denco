@@ -120,7 +120,7 @@ func (e *Engine) fetchMetadata(ctx context.Context, t *entry, state resume.State
 		return state, err
 	}
 
-	raw, err := torrentFile(info, tiers)
+	raw, err := torrentFile(info, tiers, m.WebSeeds)
 	if err != nil {
 		return state, err
 	}
@@ -152,9 +152,13 @@ func (e *Engine) fetchMetadata(ctx context.Context, t *entry, state resume.State
 }
 
 // torrentFile wraps fetched metadata in a .torrent with the magnet's
-// trackers, so the torrent can be saved and restored like any other.
-func torrentFile(info []byte, tiers [][]string) ([]byte, error) {
+// trackers and web seeds, so the torrent can be saved and restored like
+// any other.
+func torrentFile(info []byte, tiers [][]string, webSeeds []string) ([]byte, error) {
 	root := map[string]any{"info": bencode.Raw(info), "created by": "Denco (from magnet link)"}
+	if len(webSeeds) > 0 {
+		root["url-list"] = webSeeds
+	}
 	if len(tiers) > 0 {
 		list := make([]any, len(tiers))
 		for i, tier := range tiers {

@@ -1206,3 +1206,59 @@ One short entry per decision. Newest at the bottom. Format:
   downloading from an IPv6-only seeder, /64 bans, the engine's IPv6 node
   and a magnet fetched and downloaded from an IPv6-only peer (and ignored
   with IPv6 off). Mutation-checked: 8 mutations, each fails a test.
+
+### D61 — Web seeds (BEP 19, Phase 15d)
+- **Decision:**
+  - **New package `internal/webseed`** (HTTP only): `URLFor` builds a
+    file's URL from a web seed base the BEP 19 way — a single-file
+    torrent's file is the URL itself (or URL + name if it ends in `/`), a
+    multi-file torrent's is `base/name/path…` with every part escaped,
+    using the torrent's own names, not the ones sanitised for this disk.
+    `Fetch` fills a byte span of the torrent with one ranged GET per file
+    it covers; the answer must be `206` with exactly the `Content-Range`
+    asked for (or `200` when the whole file was asked for), and exactly
+    that many bytes. `503`/`429` → `RetryError` with `Retry-After`; a
+    server ignoring ranges → `ErrNoRanges`.
+  - **Safety:** a torrent picks these URLs, so by default the connection
+    may not go to loopback, private (RFC 1918 / ULA), link-local, CGNAT,
+    multicast or unspecified addresses — checked when *connecting*, so it
+    also covers DNS names and redirects that lead there (`ErrLocalAddress`).
+    Only http/https, also on redirects (≤ 5); environment proxies are not
+    used; 30 s for response headers and 30 s between body reads.
+    `engine.Config.WebSeedLocal` lifts the address rule for tests only.
+  - **Session: a web seed is a pseudo-peer** that has every piece. The
+    loop gives an idle web seed a batch from `pieces.Manager.NextRequests`
+    (at least a piece, 256 KiB–4 MiB), a helper goroutine fetches it in
+    contiguous runs and hands the bytes back; the loop then treats them
+    like `piece` messages (BlockReceived → hash → write → have, endgame
+    cancels to real peers). The download limits (torrent's own, then
+    global) pace the body reads. After an error: retry with the peers'
+    backoff (RetryBase·2ⁿ, ≤ 30 min), or later if `Retry-After` says so; a
+    hard error (no ranges, local address, bad URL) or data failing the hash
+    check (alone at once, shared after 3 strikes — the peer rules) gives
+    it up for the rest of the run. Web seeds stop when the download is
+    complete. "Stalled" now means no peers *and* no web seed fetching.
+  - **Manager key:** the Manager knows peers by `netip.AddrPort`; a web
+    seed's key is `[::]:<index+1>` — no real peer can have the unspecified
+    address (the swarm drops it, nobody connects from it). Chosen over
+    changing the Manager's key type, which would have touched every
+    session and Manager call for no behavioural gain.
+  - **Magnets:** `ws=` parameters are parsed and written into the
+    `url-list` of the .torrent made from the fetched metadata (web seeds
+    can't serve metadata themselves).
+  - **Display:** web seeds are rows of `denco peers` and the TUI's peers
+    tab (host, "web", what it is doing); `info` and the TUI details show
+    "Web seeds: N (M downloading)".
+- **Alternatives:** BEP 17 (`httpseeds`, a server-side script protocol,
+  rare today) — not done; fetching single blocks per request (thousands of
+  HTTP requests per GB); trusting Content-Length alone (a server could send
+  the wrong part of the file).
+- **Tests:** webseed (URLs, a span across files incl. an empty one, the
+  address rule, 503/no ranges/wrong range/short body/stall/bad redirect),
+  torrent (download from a web seed alone, a lying web seed given up while
+  a peer finishes, 503s retried, the download limit pacing it, a local web
+  seed refused by default with no request reaching it), engine (a .torrent
+  with a web seed, and a magnet's `ws=` saved into its .torrent), magnet,
+  CLI and TUI rendering. Mutation-checked: 8 mutations each fail a test
+  (one survived at first — the wrong-range fixture also sent too few
+  bytes; fixed to send the right length from the wrong place).

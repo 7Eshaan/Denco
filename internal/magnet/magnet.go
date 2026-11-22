@@ -28,6 +28,7 @@ type Magnet struct {
 	Name     string           // "dn"; may be empty
 	Trackers []string         // "tr", de-duplicated, in order
 	Peers    []netip.AddrPort // "x.pe" with literal IP addresses (hostnames skipped)
+	WebSeeds []string         // "ws" (BEP 19 web seeds), de-duplicated, in order
 }
 
 const btihPrefix = "urn:btih:"
@@ -75,6 +76,14 @@ func Parse(uri string) (*Magnet, error) {
 			m.Trackers = append(m.Trackers, tr)
 		}
 	}
+	seenWS := make(map[string]bool)
+	for _, ws := range q["ws"] {
+		ws = strings.TrimSpace(ws)
+		if ws != "" && !seenWS[ws] {
+			seenWS[ws] = true
+			m.WebSeeds = append(m.WebSeeds, ws)
+		}
+	}
 	for _, pe := range q["x.pe"] {
 		if ap, err := netip.ParseAddrPort(pe); err == nil {
 			m.Peers = append(m.Peers, ap)
@@ -114,6 +123,10 @@ func (m *Magnet) String() string {
 	for _, tr := range m.Trackers {
 		b.WriteString("&tr=")
 		b.WriteString(url.QueryEscape(tr))
+	}
+	for _, ws := range m.WebSeeds {
+		b.WriteString("&ws=")
+		b.WriteString(url.QueryEscape(ws))
 	}
 	for _, p := range m.Peers {
 		b.WriteString("&x.pe=")

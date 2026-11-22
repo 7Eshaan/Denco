@@ -7,6 +7,7 @@ import (
 
 	"github.com/7Eshaan/Denco/internal/engine"
 	"github.com/7Eshaan/Denco/internal/format"
+	"github.com/7Eshaan/Denco/internal/webseed"
 )
 
 // Details layout:
@@ -99,6 +100,9 @@ func (m *model) detailInfo() []infoItem {
 			peers += fmt.Sprintf(" · DHT found %d", t.DHTPeers)
 		}
 		items = append(items, item("Peers", peers))
+		if t.WebSeeds > 0 {
+			items = append(items, item("Web seeds", fmt.Sprintf("%d (%d downloading)", t.WebSeeds, t.WebSeedsActive)))
+		}
 	}
 	items = append(items, item("Ratio", fmt.Sprintf("%s · ↑ %s uploaded · ↓ %s downloaded",
 		ratioText(t.Ratio), format.Bytes(t.Uploaded), format.Bytes(t.Downloaded))))
@@ -350,16 +354,19 @@ func (m *model) detailTable(st styler) []string {
 		// longest one shown (to a cap), and narrow screens cut it (D60).
 		cols = slices.Clone(peerCols)
 		for _, p := range m.peers {
-			cols[0].w = max(cols[0].w, min(maxAddrWidth, width(p.Addr.String())))
+			cols[0].w = max(cols[0].w, min(maxAddrWidth, width(peerAddr(p))))
 		}
 		for _, p := range m.peers {
-			dir := "out"
+			dir, status := "out", peerStatus(p)
 			if p.Incoming {
 				dir = "in"
 			}
-			data = append(data, []tcell{cell(p.Addr.String()), cell(clean(p.Client), cGray), cell(dir, cGray),
+			if p.WebSeed != "" {
+				dir, status = "web", clean(p.WebSeedNote)
+			}
+			data = append(data, []tcell{cell(peerAddr(p)), cell(clean(p.Client), cGray), cell(dir, cGray),
 				cell(fmt.Sprintf("%.1f%%", p.Progress*100)), cell(format.Speed(p.DownloadRate), cCyan),
-				cell(format.Speed(p.UploadRate), cMagenta), cell(peerStatus(p), cGray)})
+				cell(format.Speed(p.UploadRate), cMagenta), cell(status, cGray)})
 		}
 		switch {
 		case !running(m.detail):
@@ -380,6 +387,14 @@ func (m *model) detailTable(st styler) []string {
 		out = append(out, "")
 	}
 	return out
+}
+
+// peerAddr is a peer's address, or a web seed's host (D61).
+func peerAddr(p engine.Peer) string {
+	if p.WebSeed != "" {
+		return clean(webseed.Host(p.WebSeed))
+	}
+	return p.Addr.String()
 }
 
 // peerStatus says in words what flows over a connection.

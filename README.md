@@ -25,6 +25,8 @@ ID  NAME                             SIZE      PROGRESS  STATUS       DOWN      
   fetched from peers, BEP 9)
 - HTTP and UDP trackers (BEP 3, 12, 15), **DHT** (BEP 5), **peer exchange**
   (BEP 11) — DHT and PEX are never used for private torrents
+- **Web seeds** (BEP 19): `url-list` in a .torrent or `ws=` in a magnet —
+  pieces come from plain HTTP(S) mirrors too, verified like any other
 - **IPv6** throughout: IPv6 peers, an IPv6 DHT next to the IPv4 one
   (BEP 32), and trackers hear from us over both (BEP 7)
 - Multi-file torrents, **choosing files** (skip/want, also while running)
@@ -259,7 +261,10 @@ denco config set log_file ~/denco.log
 
 ## Limitations
 
-- No uTP, no protocol encryption (MSE), no web seeds, no BitTorrent v2.
+- No uTP, no protocol encryption (MSE), no BitTorrent v2 (web seeds:
+  only the BEP 19 kind, not BEP 17 `httpseeds`).
+- Web seeds on your own machine or local network are refused (a torrent
+  mustn't make Denco contact local services).
 - No IPv6 firewall pinholes on the router (IPv6 has no NAT, but some
   routers block incoming IPv6 connections by default).
 - No graphical app — the CLI and the terminal dashboard only.

@@ -91,6 +91,9 @@ type Torrent struct {
 	TrackerLeechers int    `json:"tracker_leechers"`
 	TrackerError    string `json:"tracker_error,omitempty"`
 	DHTPeers        int    `json:"dht_peers"` // found by the last DHT lookup
+	// Web seeds (D61): how many the torrent has, and how many are fetching.
+	WebSeeds       int `json:"web_seeds,omitempty"`
+	WebSeedsActive int `json:"web_seeds_active,omitempty"`
 
 	AddedAt     time.Time `json:"added_at"`
 	CompletedAt time.Time `json:"completed_at,omitempty"`
@@ -120,6 +123,10 @@ type Peer struct {
 	Interested   bool           `json:"interested"`      // we want their data
 	AmChoking    bool           `json:"am_choking"`      // we choke them
 	PeerWants    bool           `json:"peer_interested"` // they want our data
+	// A web seed (D61) has its URL here instead of an address, and a note
+	// saying what it is doing.
+	WebSeed     string `json:"web_seed,omitempty"`
+	WebSeedNote string `json:"web_seed_note,omitempty"`
 }
 
 // Overview is the whole client's status.
@@ -227,6 +234,7 @@ func (e *Engine) Peers(ref string) ([]Peer, error) {
 			Downloaded: p.Downloaded, Uploaded: p.Uploaded,
 			PeerChoking: p.Choking, Interested: p.Interested,
 			AmChoking: p.AmChoking, PeerWants: p.PeerInterest,
+			WebSeed: p.WebSeed, WebSeedNote: p.WebSeedNote,
 		})
 	}
 	return out, nil
@@ -325,6 +333,7 @@ func (e *Engine) view(t *entry, q *queueRanks) Torrent {
 	info := &t.mi.Info
 	v.HasMetadata, v.Dir = true, t.layout.Root
 	v.Private, v.Files, v.PieceLength = info.Private, len(info.Files), info.PieceLength
+	v.WebSeeds = len(t.mi.URLList)
 	v.TotalBytes, v.PiecesTotal = info.TotalLength, info.NumPieces()
 	have := t.haveLocked()
 	v.WantedBytes, v.DoneBytes, v.SkippedFiles = selection(info, t.layout, have, t.skipLocked())
@@ -339,6 +348,7 @@ func (e *Engine) view(t *entry, q *queueRanks) Torrent {
 		v.TrackerSeeders, v.TrackerLeechers = st.TrackerSeeders, st.TrackerLeechers
 		v.TrackerError = st.TrackerError
 		v.DHTPeers = st.DHTPeers
+		v.WebSeedsActive = st.WebSeedsActive
 	}
 	v.Complete = have.Covers(t.wantLocked())
 	if v.Complete {

@@ -4,7 +4,17 @@
 2026-11-21: queue control, per-torrent limits, full IPv6, web seeds,
 MSE/PE, uTP; sub-phases 15a–15f in ROADMAP).
 
-**Phase 15c — full IPv6 (D60) · ✅ done, not committed yet.**
+**Phase 15d — web seeds (D61) · ✅ done, not committed yet.**
+New `internal/webseed` (BEP 19 URLs, ranged GETs per file with exact
+Content-Range checks, Retry-After, no-ranges detection, local/private
+addresses refused at connect time, no proxies, timeouts). Sessions run
+each url-list entry as a pseudo-peer fed by the piece Manager; data goes
+through the normal hash/write path, paced by the download limits; errors
+back off, bad data or hard errors give a web seed up for the run. Magnet
+`ws=` kept in the .torrent made from metadata. Web seeds listed in
+`denco peers` / TUI peers tab, counted in `info` / TUI details.
+
+**Phase 15c — full IPv6 (D60) · ✅ done, committed as d97cff6.**
 IPv6 DHT node next to the IPv4 one (BEP 32: `dht.Config.IPv6`, `nodes6`,
 18-byte values, own table and `dht6.json`; `dht.Dual` merges lookups);
 trackers announced to over IPv4 and IPv6 separately and merged (BEP 7,
@@ -78,13 +88,13 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** the user commits 15c; then **15d — web seeds (BEP 19)**
-(plan: `url-list` / magnet `ws=`; a web seed is a pseudo-peer goroutine
-fetching whole pieces with HTTP Range requests through the normal
-BlockReceived/hash/write path; the piece manager's peer key generalised
-to name web seeds; download limit applies; 503/Retry-After backoff; hash
-failures strike a web seed like a peer; URLs resolving to loopback/private
-addresses refused by default; web seeds shown in peers and details).
+**Next action:** the user commits 15d; then **15e — protocol encryption
+(MSE/PE)** (plan: `internal/mse` — 768-bit DH, the VC scan with padding,
+crypto_provide/select, RC4 with 1 KiB discarded, hashed info-hash lookup
+for incoming; `encryption: prefer|require|disable` (default prefer:
+encrypted first, plaintext fallback remembered per peer); PEX encryption
+flag; VIA column with an E flag. Needs a short user-approved real-world
+check against public peers).
 Optional, any time: a release (v0.2.1 for the D57 fix, or v0.3.0 once
 some of Phase 15 is in). Open items, if wanted: the plain
 CLI should `clean` torrent names too (D55), the user's router check
@@ -153,7 +163,26 @@ web seeds, v2, GUI).
 ## Open questions for the user
 - MSE encryption stays out of scope? (UPnP/NAT-PMP: confirmed, done in 12d.)
 
-## Last test run (2026-11-22, Phase 15c, D60)
+## Last test run (2026-11-22, Phase 15d, D61)
+- `go test -race -count=1 ./...` — all 25 packages pass (new: `webseed`)
+- stress `-race -count=5 -cpu=1,2,8` webseed, magnet, engine, cli, tui,
+  torrent, peer (15 runs each) — all pass
+- `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
+  linux/windows/darwin × amd64/arm64 — all build · external deps: none
+- new tests: webseed `TestURLFor`, `TestFetchAcrossFiles`,
+  `TestFetchRefusesLocalAddresses`, `TestFetchErrors`; torrent
+  `TestDownloadFromWebSeed`, `TestBadWebSeedIsGivenUp`,
+  `TestWebSeedRetriesWhenBusy`, `TestWebSeedHonoursDownloadLimit`,
+  `TestLocalWebSeedRefusedByDefault`; engine `TestWebSeedThroughEngine`;
+  magnet `TestWebSeedsInMagnet`; cli `TestRenderWebSeeds`; tui
+  `TestWebSeedInPeersTab`. Mutation-checked: 8 mutations, each fails a
+  test (the Content-Range check survived the first fixture; fixed)
+- found by a test: the TUI details' Peers line was too long with web seeds
+  added to it; they got their own "Web seeds" line
+- not checked against a real public web seed (would need a public
+  download; none was made)
+
+## Previous test run (2026-11-22, Phase 15c, D60)
 - `go test -race -count=1 ./...` — all 24 packages pass, the IPv6 tests
   really ran (this machine has ::1 and localhost → 127.0.0.1 + ::1)
 - stress `-race -count=5 -cpu=1,2,8` dht, tracker, metadata, engine,
@@ -364,4 +393,5 @@ web seeds, v2, GUI).
 - **Phase 15a (2026-11-21, commit 98d64c2):** download queue control and
   force start (D58).
 - **Phase 15b (2026-11-21, commit 4c4c8e8):** per-torrent speed limits (D59).
-- **Phase 15c (2026-11-22):** full IPv6 (D60).
+- **Phase 15c (2026-11-22, commit d97cff6):** full IPv6 (D60).
+- **Phase 15d (2026-11-22):** web seeds (D61).

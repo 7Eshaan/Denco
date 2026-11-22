@@ -8,6 +8,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/bitfield"
 	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/peerid"
+	"github.com/7Eshaan/Denco/internal/pieces"
 )
 
 // peerState is everything the session knows about one connected peer.
@@ -210,18 +211,23 @@ func (s *Session) onPiece(p *peerState, m *peer.Message) {
 		s.downloaded.Add(n)
 		p.lastProgress = time.Now()
 	}
-	// Endgame: tell the other peers we no longer need this block.
-	for _, other := range r.Cancel {
-		if op := s.peers[other]; op != nil {
-			b := peer.Block{Index: index, Begin: begin, Length: uint32(len(data))}
-			delete(op.pending, b)
-			s.sendTo(op, peer.Cancel(b))
-		}
-	}
+	s.cancelElsewhere(r.Cancel, peer.Block{Index: index, Begin: begin, Length: uint32(len(data))})
 	if r.Complete {
 		s.verifyAndWrite(s.ctx(), int(index), r.Data, r.Contributors)
 	}
 	s.fillRequests(p)
+}
+
+// cancelElsewhere tells the other peers that were asked for b (endgame)
+// that we no longer need it. Web seeds aren't told: their fetch simply
+// delivers a duplicate the Manager ignores.
+func (s *Session) cancelElsewhere(others []pieces.PeerKey, b peer.Block) {
+	for _, other := range others {
+		if op := s.peers[other]; op != nil {
+			delete(op.pending, b)
+			s.sendTo(op, peer.Cancel(b))
+		}
+	}
 }
 
 // bothSeeds drops p if we and it are both complete: neither can give the

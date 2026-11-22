@@ -287,3 +287,18 @@ func TestIPv6PeerAddressesFit(t *testing.T) {
 		}
 	}
 }
+
+// Web seeds (D61) appear in the peers tab by host, with what they're doing.
+func TestWebSeedInPeersTab(t *testing.T) {
+	m := detailsModel(120, 20)
+	m.detail.WebSeeds, m.detail.WebSeedsActive = 1, 1
+	m.peers = []engine.Peer{{WebSeed: "https://cdimage.example.org/pub/", WebSeedNote: "retrying in 30s: HTTP 503",
+		Client: "web seed", Progress: 1}}
+	m.tab = tabPeers
+	got := screenText(m)
+	for _, want := range []string{"cdimage.example.org", "web seed", "web", "retrying in 30s", "Web seeds", "1 (1 downloading)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+}

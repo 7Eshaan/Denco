@@ -46,6 +46,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/storage"
 	"github.com/7Eshaan/Denco/internal/torrent"
 	"github.com/7Eshaan/Denco/internal/tracker"
+	"github.com/7Eshaan/Denco/internal/webseed"
 )
 
 // Config configures an Engine. StateDir and DownloadDir are required.
@@ -68,8 +69,12 @@ type Config struct {
 	// DHT6Addr overrides where the IPv6 node listens (tests); by default it
 	// is the peer port's number on every IPv6 address, or nothing when
 	// ListenAddr names an IPv4 address.
-	EnableIPv6   bool
-	DHT6Addr     string
+	EnableIPv6 bool
+	DHT6Addr   string
+	// WebSeedLocal lets web seeds be on this machine or the local network
+	// (tests only: a torrent mustn't make the daemon contact local
+	// services, D61).
+	WebSeedLocal bool
 	DHTBootstrap []string
 	// Seeding limits (D45): a complete torrent stops seeding ("finished")
 	// at this ratio or after this much seeding time; 0 = no limit. A
@@ -578,6 +583,9 @@ func (e *Engine) run(ctx context.Context, t *entry, state resume.State) runResul
 		cfg.DHT = e.dht
 	}
 	cfg.IPv4Only = !e.cfg.EnableIPv6
+	if e.cfg.WebSeedLocal {
+		cfg.WebSeeds = webseed.NewClient(true)
+	}
 	prev := state
 	prev.Fresh, prev.Existing, prev.Paused = false, false, false // from now on the files are ours
 

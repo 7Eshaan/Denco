@@ -13,6 +13,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/format"
 	"github.com/7Eshaan/Denco/internal/ipc"
 	"github.com/7Eshaan/Denco/internal/portmap"
+	"github.com/7Eshaan/Denco/internal/webseed"
 )
 
 // Rendering of the daemon's data for the terminal. Pure functions of their
@@ -268,6 +269,9 @@ func renderInfo(w io.Writer, t engine.Torrent) {
 		if t.DHTPeers > 0 {
 			row("DHT", fmt.Sprintf("%d peer%s in the last lookup", t.DHTPeers, plural(t.DHTPeers)))
 		}
+		if t.WebSeeds > 0 {
+			row("Web seeds", fmt.Sprintf("%d (%d downloading; 'denco peers %d' shows them)", t.WebSeeds, t.WebSeedsActive, t.ID))
+		}
 		if t.TrackerSeeders >= 0 {
 			row("Swarm (trackers)", fmt.Sprintf("%d seeds, %d leechers", t.TrackerSeeders, max(t.TrackerLeechers, 0)))
 		}
@@ -359,8 +363,12 @@ func renderPeers(w io.Writer, t engine.Torrent, peers []engine.Peer) {
 		if p.Incoming {
 			dir = "in"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%.1f%%\t%s\t%s\t%s\n", p.Addr, short(p.Client, 24), dir, p.Progress*100,
-			format.Speed(p.DownloadRate), format.Speed(p.UploadRate), peerStatus(p))
+		addr, status := p.Addr.String(), peerStatus(p)
+		if p.WebSeed != "" { // D61
+			addr, dir, status = webseed.Host(p.WebSeed), "web", p.WebSeedNote
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%.1f%%\t%s\t%s\t%s\n", addr, short(p.Client, 24), dir, p.Progress*100,
+			format.Speed(p.DownloadRate), format.Speed(p.UploadRate), status)
 	}
 	tw.Flush()
 }

@@ -42,6 +42,8 @@ type Stats struct {
 	TrackerLeechers int
 	TrackerError    string // last error when no tracker is working
 	DHTPeers        int    // peers the last DHT lookup found (0 without DHT)
+	WebSeeds        int    // web seeds of the torrent (D61)
+	WebSeedsActive  int    // of which fetching right now
 }
 
 // ETA estimates time to completion; negative means unknown.
@@ -70,6 +72,10 @@ type PeerInfo struct {
 	AmChoking    bool // we choke them
 	PeerInterest bool // they're interested in us
 	Pending      int  // our outstanding requests
+	// WebSeed is set for a web seed (D61): its URL (Addr is then zero), and
+	// WebSeedNote says what it is doing ("downloading", "retrying in…").
+	WebSeed     string
+	WebSeedNote string
 }
 
 type snapshot struct {
@@ -120,6 +126,7 @@ func (s *Session) publish() {
 		TrackerSeeders:  s.tracker.seeders,
 		TrackerLeechers: s.tracker.leechers,
 		DHTPeers:        s.dhtPeers,
+		WebSeeds:        len(s.webSeeds),
 	}
 	if !s.tracker.working {
 		st.TrackerError = s.tracker.lastErr
@@ -147,6 +154,16 @@ func (s *Session) publish() {
 			Pending:      len(p.pending),
 		})
 	}
+	now := time.Now()
+	for _, ws := range s.webSeeds {
+		if ws.busy {
+			st.WebSeedsActive++
+		}
+		peers = append(peers, PeerInfo{
+			WebSeed: ws.url, WebSeedNote: ws.note(now), Client: "web seed", Outgoing: true, Progress: 1,
+			Downloaded: ws.downloaded, DownloadRate: ws.rate.perSecond(s.cfg.Tick),
+		})
+	}
 	sort.Slice(peers, func(i, j int) bool {
 		return peers[i].DownloadRate+peers[i].UploadRate > peers[j].DownloadRate+peers[j].UploadRate
 	})
@@ -156,7 +173,7 @@ func (s *Session) publish() {
 		st.State = StateComplete
 	case s.m.Complete():
 		st.State = StateSeeding
-	case len(s.peers) == 0:
+	case len(s.peers) == 0 && st.WebSeedsActive == 0:
 		st.State = StateStalled
 	default:
 		st.State = StateDownloading

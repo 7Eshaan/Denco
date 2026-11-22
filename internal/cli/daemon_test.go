@@ -343,3 +343,20 @@ func TestRenderStatusIPv6(t *testing.T) {
 		t.Errorf("IPv6 off:\n%s", b.String())
 	}
 }
+
+func TestRenderWebSeeds(t *testing.T) {
+	var b bytes.Buffer
+	tor := engine.Torrent{ID: 4, Name: "debian.iso", State: engine.StateDownloading, HasMetadata: true, WebSeeds: 2, WebSeedsActive: 1}
+	renderPeers(&b, tor, []engine.Peer{{WebSeed: "https://cdimage.example.org/debian/", WebSeedNote: "downloading",
+		Client: "web seed", Progress: 1, DownloadRate: 3_000_000}})
+	for _, want := range []string{"cdimage.example.org", "web seed", "web", "100.0%", "3.0 MB/s", "downloading"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("peers lack %q:\n%s", want, b.String())
+		}
+	}
+	b.Reset()
+	renderInfo(&b, tor)
+	if !strings.Contains(b.String(), "Web seeds:") || !strings.Contains(b.String(), "2 (1 downloading") {
+		t.Errorf("info:\n%s", b.String())
+	}
+}

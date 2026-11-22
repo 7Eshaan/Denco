@@ -75,7 +75,7 @@ so older references stay valid.
         global ones; pacing uses the tighter fair share.
   - [x] **15c — Full IPv6.** IPv6 DHT (BEP 32), announcing over both
         families (BEP 7), /64 bans, wider address columns.
-  - [ ] **15d — Web seeds (BEP 19).** HTTP range downloads as pseudo-peers;
+  - [x] **15d — Web seeds (BEP 19).** HTTP range downloads as pseudo-peers;
         private/loopback URLs refused by default.
   - [ ] **15e — Protocol encryption (MSE/PE).** `encryption:
         prefer|require|disable`; needs a short user-approved real-world check.

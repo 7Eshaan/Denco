@@ -44,6 +44,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/ratelimit"
 	"github.com/7Eshaan/Denco/internal/storage"
 	"github.com/7Eshaan/Denco/internal/tracker"
+	"github.com/7Eshaan/Denco/internal/webseed"
 )
 
 // Config tunes a session. Zero values use the defaults in withDefaults.
@@ -89,6 +90,10 @@ type Config struct {
 	// Pacer, if set, adapts the snub timeout and request pipeline to the
 	// download limit (PeerOpts.ReadLimiter) shared with other sessions (D46).
 	Pacer *Pacer
+
+	// WebSeeds fetches from the torrent's web seeds (BEP 19, D61); nil
+	// means webseed.Default(), which refuses local addresses.
+	WebSeeds *webseed.Client
 
 	Announcer tracker.Announcer // default &tracker.Client{}
 	Pieces    pieces.Config
@@ -136,6 +141,9 @@ func (c Config) withDefaults() Config {
 	if c.Announcer == nil {
 		c.Announcer = &tracker.Client{}
 	}
+	if c.WebSeeds == nil {
+		c.WebSeeds = webseed.Default()
+	}
 	if c.Logger == nil {
 		c.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -174,17 +182,19 @@ type Session struct {
 	left       atomic.Int64
 
 	// Loop-owned state. Only the loop goroutine touches these.
-	runCtx   context.Context // the context Run was started with
-	m        *pieces.Manager
-	peers    map[netip.AddrPort]*peerState
-	swarm    *swarm
-	hashing  int // pieces being verified/written
-	downRate rate
-	upRate   rate
-	tracker  trackerInfo
-	dhtPeers int   // peers the last DHT lookup found
-	paced    int64 // our share of Pacer's peer count
-	choke    chokeState
+	runCtx    context.Context // the context Run was started with
+	m         *pieces.Manager
+	peers     map[netip.AddrPort]*peerState
+	swarm     *swarm
+	hashing   int // pieces being verified/written
+	downRate  rate
+	upRate    rate
+	tracker   trackerInfo
+	dhtPeers  int   // peers the last DHT lookup found
+	paced     int64 // our share of Pacer's peer count
+	choke     chokeState
+	webSeeds  []*webSeed         // the torrent's url-list (webseed.go)
+	allPieces *bitfield.Bitfield // "has everything": what a web seed offers
 
 	snapMu sync.Mutex
 	snap   snapshot
@@ -221,6 +231,7 @@ func New(mi *metainfo.MetaInfo, st *storage.Storage, have *bitfield.Bitfield, cf
 		peers:     make(map[netip.AddrPort]*peerState),
 		swarm:     newSwarm(cfg.RetryBase),
 		tracker:   trackerInfo{seeders: -1, leechers: -1},
+		webSeeds:  newWebSeeds(mi.URLList),
 	}
 	s.m.SetWanted(cfg.Wanted)
 	s.left.Store(s.m.MissingBytes())
@@ -459,6 +470,7 @@ func (s *Session) loop(ctx context.Context) error {
 	}
 	s.drainExtra(ctx)
 	s.maintain(ctx) // dial immediately if we already know peers
+	s.runWebSeeds(ctx, time.Now())
 
 	for {
 		select {
@@ -473,6 +485,10 @@ func (s *Session) loop(ctx context.Context) error {
 				p.upRate.tick()
 				s.fillRequests(p) // safety net: never leave an unchoked peer idle
 			}
+			for _, ws := range s.webSeeds {
+				ws.rate.tick()
+			}
+			s.runWebSeeds(ctx, now)
 			s.updatePace()
 			s.checkTimeouts()
 			s.maybeRechoke(now)
@@ -516,6 +532,10 @@ func (s *Session) handle(ctx context.Context, ev any) error {
 			s.rechoke(time.Now(), false)
 		}
 		s.maintain(ctx)
+	case webData:
+		s.onWebData(e)
+	case webDone:
+		s.onWebDone(ctx, e)
 	case hashResult:
 		return s.onHashResult(e)
 	}
@@ -603,6 +623,10 @@ func (s *Session) markFull() {
 // shared blame bans after repeated failures.
 func (s *Session) blame(contributors []pieces.PeerKey) {
 	for _, addr := range contributors {
+		if ws := s.webSeedFor(addr); ws != nil {
+			s.blameWebSeed(ws, len(contributors) == 1)
+			continue
+		}
 		strikes := s.swarm.strike(addr)
 		if len(contributors) == 1 || strikes >= 3 {
 			s.log.Warn("banning peer for bad data", "peer", addr)

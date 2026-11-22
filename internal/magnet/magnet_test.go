@@ -2,7 +2,9 @@ package magnet
 
 import (
 	"errors"
+	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -104,5 +106,22 @@ func TestStringRoundTrip(t *testing.T) {
 func TestIsMagnet(t *testing.T) {
 	if !IsMagnet("magnet:?xt=x") || !IsMagnet("Magnet:?") || IsMagnet("file.torrent") || IsMagnet("magnet") {
 		t.Error("IsMagnet")
+	}
+}
+
+func TestWebSeedsInMagnet(t *testing.T) {
+	uri := "magnet:?xt=urn:btih:" + strings.Repeat("ab", 20) +
+		"&ws=" + url.QueryEscape("https://mirror.example/pub/") + "&ws=" + url.QueryEscape("https://mirror.example/pub/") +
+		"&ws=http%3A%2F%2Fother.example%2Fx.iso"
+	m, err := Parse(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.WebSeeds) != 2 || m.WebSeeds[0] != "https://mirror.example/pub/" || m.WebSeeds[1] != "http://other.example/x.iso" {
+		t.Fatalf("web seeds = %q", m.WebSeeds)
+	}
+	back, err := Parse(m.String())
+	if err != nil || len(back.WebSeeds) != 2 || back.WebSeeds[1] != m.WebSeeds[1] {
+		t.Fatalf("round trip: %q, %v", back.WebSeeds, err)
 	}
 }
