@@ -2,7 +2,8 @@
 // (DECISIONS D67) against a fake GitHub release served on loopback: the
 // "latest" redirect, the archive and SHA256SUMS, with a fake denco that
 // only records how it was run. Nothing is installed and no network
-// beyond loopback is used.
+// beyond loopback is used. brew_test.go tests scripts/brew-formula.sh
+// (D68).
 package installtest
 
 import (
@@ -191,7 +192,7 @@ func TestInstallSh(t *testing.T) {
 
 // The scripts are plain ASCII (see locales).
 func TestScriptsAreASCII(t *testing.T) {
-	for _, f := range []string{"../install.sh", "../install.ps1"} {
+	for _, f := range []string{"../install.sh", "../install.ps1", "../brew-formula.sh"} {
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

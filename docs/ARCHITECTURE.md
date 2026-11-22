@@ -27,7 +27,7 @@ a client command starts one (D52): it runs its own executable as
 | Package | Status | Responsibility |
 |---|---|---|
 | `cmd/denco` | ✅ | `main.go` only: calls `cli.Main`. |
-| `.github/workflows`, `scripts` | ✅ | CI on Linux/macOS/Windows (`ci.yml`); tagged releases (`release.yml` → `scripts/release-build.sh`), D53. `scripts/install.sh` / `install.ps1`: one-line installers (download, SHA-256 check, `denco setup`), tested by `scripts/installtest` against a fake loopback release, D67. `scripts/tuishots` (not in the binary): runs the real `tui.Run` against a demo daemon, captures frames with a small terminal emulator (`vt.go`) and writes the README screenshots `assets/tui-*.svg` (`svg.go`), D56. |
+| `.github/workflows`, `scripts` | ✅ | CI on Linux/macOS/Windows (`ci.yml`); tagged releases (`release.yml` → `scripts/release-build.sh`), D53. `scripts/install.sh` / `install.ps1`: one-line installers (download, SHA-256 check, `denco setup`), tested by `scripts/installtest` against a fake loopback release, D67. `scripts/brew-formula.sh`: writes the Homebrew formula (prebuilt archives + SHA256SUMS); `release.yml`'s `homebrew` job pushes it to `<owner>/homebrew-tap` with the `TAP_TOKEN` secret, D68. `scripts/tuishots` (not in the binary): runs the real `tui.Run` against a demo daemon, captures frames with a small terminal emulator (`vt.go`) and writes the README screenshots `assets/tui-*.svg` (`svg.go`), D56. |
 | `internal/bencode` | ✅ | Bencode decode/encode; raw byte spans of dict values (for info hash). |
 | `internal/metainfo` | ✅ | Parse + validate `.torrent`; info hash; file list with offsets; tracker tiers. |
 | `internal/format` | ✅ | Human-readable sizes, speeds, durations for CLI output. |

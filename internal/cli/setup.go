@@ -28,6 +28,9 @@ import (
 //
 // `denco setup -remove` undoes both; settings, resume data and downloads
 // stay. Running setup from a newer version replaces the installed one.
+//
+// A denco installed by Homebrew is already on PATH and is updated by
+// brew, so setup leaves it alone (D68).
 
 // pathEditor makes a folder reachable through PATH, and undoes it.
 type pathEditor interface {
@@ -59,6 +62,8 @@ type installer struct {
 	out        io.Writer
 	// show shortens paths in messages (~ for the home folder); nil: as is.
 	show func(string) string
+	// brew: the running executable belongs to Homebrew (D68).
+	brew bool
 }
 
 func (in *installer) disp(p string) string {
@@ -86,6 +91,11 @@ func (in *installer) Installed() bool { return in.samePath(in.exe, in.dest()) }
 // install copies the running executable into place and makes sure its
 // folder is on PATH.
 func (in *installer) install() error {
+	if in.brew {
+		fmt.Fprintf(in.out, "This denco was installed by Homebrew (%s), which already put it on your PATH; nothing to do.\n", in.disp(in.exe))
+		fmt.Fprintln(in.out, "Homebrew updates it (brew upgrade denco) and removes it (brew uninstall denco).")
+		return nil
+	}
 	dest := in.dest()
 	if in.Installed() {
 		fmt.Fprintf(in.out, "Denco is installed at %s.\n", in.disp(dest))
@@ -201,8 +211,24 @@ func (in *installer) remove(home string) error {
 		}
 		fmt.Fprintf(in.out, "Removed %s.\n", in.disp(dest))
 	}
+	if in.brew {
+		fmt.Fprintln(in.out, "This denco is Homebrew's: remove it with brew uninstall denco.")
+	}
 	fmt.Fprintf(in.out, "Your settings, resume data and downloads are kept (settings: %s).\n", in.disp(home))
 	return nil
+}
+
+// inHomebrew reports whether exe (symlinks resolved) is a file of
+// Homebrew's denco package: <prefix>/Cellar/denco/<version>/bin/denco, on
+// macOS and Linux alike, wherever the prefix is.
+func inHomebrew(exe string) bool {
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(exe)), "/")
+	for i := 0; i+2 < len(parts); i++ {
+		if parts[i] == "Cellar" && parts[i+1] == "denco" {
+			return true
+		}
+	}
+	return false
 }
 
 // newInstaller describes this system. A variable for tests.
@@ -224,6 +250,7 @@ func systemInstaller(e *env) (*installer, error) {
 	}
 	in := &installer{
 		goos: runtime.GOOS, exe: exe, name: "denco", lookPath: exec.LookPath, out: e.stdout,
+		brew:       inHomebrew(exe),
 		stopDaemon: func() (bool, error) { return stopDaemon(e) },
 	}
 	if in.goos == "windows" {

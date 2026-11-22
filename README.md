@@ -70,6 +70,18 @@ Open a new terminal and run `denco help`. Want to read the script first?
 It's [here](scripts/install.sh) ([Windows](scripts/install.ps1)). Needs
 Denco v0.3.1 or later (the first release with `denco setup`).
 
+### Homebrew (macOS, Linux)
+
+```sh
+brew install 7Eshaan/tap/denco
+```
+
+`brew upgrade denco` updates it and `brew uninstall denco` removes it.
+Homebrew puts it on your `PATH` itself, so there's no `denco setup` step
+(setup sees a Homebrew install and leaves it alone). Use either this or
+the one-liner, not both: run `denco setup -remove` first if you used the
+one-liner. Available from v0.3.2.
+
 ### Download a prebuilt binary
 
 Get the archive for your system from the

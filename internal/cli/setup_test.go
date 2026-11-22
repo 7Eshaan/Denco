@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"os"
@@ -337,5 +338,62 @@ func TestRunInstalledRefusesInTests(t *testing.T) {
 	}
 	if code := runInstalled("/bin/sh", []string{"-c", "exit 0"}); code == 0 {
 		t.Fatal("ran another executable from a test")
+	}
+}
+
+// A Homebrew denco is on PATH already and updated by brew: setup leaves
+// it alone (D68), and -remove says how to remove it.
+func TestSetupLeavesHomebrewAlone(t *testing.T) {
+	in, fp, out := testInstaller(t, "darwin")
+	in.brew = true
+	in.stopDaemon = func() (bool, error) { t.Error("stopped the daemon"); return false, nil }
+	if err := in.install(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(in.dest()); !errors.Is(err, os.ErrNotExist) || len(fp.added) != 0 {
+		t.Fatalf("installed anyway: %v, PATH %v", err, fp.added)
+	}
+	if !strings.Contains(out.String(), "installed by Homebrew") || !strings.Contains(out.String(), "brew upgrade denco") {
+		t.Fatalf("output:\n%s", out)
+	}
+
+	// -remove still undoes an earlier setup, and points at brew.
+	in.stopDaemon = func() (bool, error) { return false, nil }
+	in.brew = false
+	in.install()
+	in.brew = true
+	out.Reset()
+	if err := in.remove(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(in.dest()); !errors.Is(err, os.ErrNotExist) || !strings.Contains(out.String(), "brew uninstall denco") {
+		t.Fatalf("%v; output:\n%s", err, out)
+	}
+
+	// No install offer either.
+	t.Setenv("DENCO_HOME", t.TempDir())
+	oldNI := newInstaller
+	defer func() { newInstaller = oldNI }()
+	newInstaller = func(*env) (*installer, error) { return in, nil }
+	out.Reset()
+	if _, done := offerSetup(bufio.NewReader(strings.NewReader("\n")), out, out); done || out.Len() != 0 {
+		t.Fatalf("offered setup to a Homebrew denco:\n%s", out)
+	}
+}
+
+func TestInHomebrew(t *testing.T) {
+	for exe, want := range map[string]bool{
+		"/opt/homebrew/Cellar/denco/0.3.2/bin/denco":              true,
+		"/usr/local/Cellar/denco/0.3.2/bin/denco":                 true,
+		"/home/linuxbrew/.linuxbrew/Cellar/denco/0.3.2/bin/denco": true,
+		"/Users/me/homebrew/Cellar/denco/0.4.0_1/bin/denco":       true,
+		"/Users/me/.local/bin/denco":                              false,
+		"/opt/homebrew/Cellar/other/1.0/bin/denco":                false,
+		"/Users/me/Downloads/denco_v0.3.2_darwin_arm64/denco":     false,
+		"/Users/me/src/Cellar/denco":                              false, // no version folder
+	} {
+		if got := inHomebrew(filepath.FromSlash(exe)); got != want {
+			t.Errorf("inHomebrew(%s) = %v, want %v", exe, got, want)
+		}
 	}
 }

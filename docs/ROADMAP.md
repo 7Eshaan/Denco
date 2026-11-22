@@ -84,7 +84,7 @@ so older references stay valid.
         DHT; `transport: both|tcp|utp` (D64); checked on a real swarm: uTP
         handshakes with qBittorrent, Transmission and Deluge.
 
-- [ ] **Phase 16 — Easy setup** (user-selected 2026-11-22: installing
+- [x] **Phase 16 — Easy setup** (user-selected 2026-11-22: installing
       shouldn't need PATH knowledge on any platform).
   - [x] **16a — Double-click opens the dashboard (Windows).** No more
         flashing usage window (D65).
@@ -94,11 +94,13 @@ so older references stay valid.
   - [x] **16c — Install scripts.** (D67) `install.sh` (macOS/Linux) and
         `install.ps1` (Windows): detect OS/arch, download, verify
         `SHA256SUMS`, then set up as 16b.
-  - [ ] **16d — Package managers.** Homebrew tap (macOS + Linux), winget
-        and Scoop (Windows), updated by the release workflow (needs a tap
-        repo and tokens on the user's account).
-  - [ ] **16e — Windows installer (optional).** Per-user Inno Setup
-        installer next to the zip (needs approval for the build tool).
+  - [x] **16d — Homebrew.** (D68) `brew install 7Eshaan/tap/denco` on
+        macOS and Linux: the release workflow writes the formula
+        (`scripts/brew-formula.sh`) and pushes it to the user's
+        `homebrew-tap` repo; `denco setup` leaves a Homebrew denco alone.
+        Scoop and winget dropped (user's choice, 2026-11-22).
+  - ~~16e — Windows installer~~ — not planned (user's choice, 2026-11-22);
+    Windows has install.ps1 and the double-click install offer.
 
 Out of scope for now (may revisit): BitTorrent v2, GUI (uTP, MSE and web
 seeds moved into Phase 15 on 2026-11-21).

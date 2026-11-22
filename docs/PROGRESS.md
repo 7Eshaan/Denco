@@ -1,8 +1,26 @@
 # Progress
 
-**Current phase:** Phase 16 — easy setup (user-selected 2026-11-22:
-installing shouldn't need PATH knowledge; 16a–16e in ROADMAP). Phase 15
+**Current phase:** none in progress. Phase 16 — easy setup — is complete
+(16a–16d; the user dropped Scoop/winget and 16e on 2026-11-22). Phase 15
 (qBittorrent parity, part 1) is complete.
+
+**Phase 16d — Homebrew (D68) · ✅ done, not committed yet.**
+`brew install 7Eshaan/tap/denco` (macOS, Linux): `scripts/brew-formula.sh`
+writes the formula from a release's SHA256SUMS (prebuilt archives, four
+platforms); a new `homebrew` job in release.yml pushes it to the user's
+`homebrew-tap` repo with a `TAP_TOKEN` secret (warns and skips without
+it; skips pre-releases). `denco setup` now recognises a Homebrew denco
+(`…/Cellar/denco/…`) and leaves it alone. README has the brew line.
+Needs from the user before the next tag: the public `homebrew-tap` repo
+(with a README, so it has a branch) and the `TAP_TOKEN` secret. The
+formula's install and the job's push run for the first time on that tag.
+
+**Release v0.3.1 (Phase 16a–c) · published 2026-11-22** — CI green on
+389113e (the fixed install scripts passed on macOS, Linux and Windows, under
+both PowerShells). Verified for real by the user on macOS: the
+`curl … | sh` one-liner installed v0.3.1 from GitHub into `~/.local/bin`
+(already on their PATH via `~/.zprofile`, so no shell file changed); the
+old `go install` build in `~/go/bin` was removed by hand.
 
 **Release v0.3.0 (Phase 15) · published** — the user tagged 47c1ced (uTP);
 the Release workflow passed. It has no `denco setup` (16a–c came after).
@@ -169,18 +187,18 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** the user commits the CI fixes (with the v0.3.1 wording);
-CI green on all three OSes (the
-Windows job is install.ps1's first real run) → the user tags **v0.3.1**
-(16a–c: double-click, `denco setup`, install scripts), which makes the
-README's one-liners work. Then 16d (Homebrew tap, winget, Scoop — needs a
-tap repo and tokens on the user's account). Still open: a real-Windows try
-of the double-click / setup flow; the real-download smoke test.
+**Next action:** the user commits 16d, creates the `homebrew-tap` repo
+and the `TAP_TOKEN` secret, then tags v0.3.2. After that: check the
+tap got `Formula/denco.rb` and try `brew install 7Eshaan/tap/denco` (after
+`denco setup -remove`). No phase is planned after 16. Still open: a
+real-Windows try (install.ps1, double-click → install offer → dashboard,
+`denco setup -remove`); the real-download smoke test with the uTP + MSE
+defaults (offered, not run).
 Optional, any time: a release (v0.2.1 for the D57 fix, or v0.3.0 once
 some of Phase 15 is in). Open items, if wanted: the plain
 CLI should `clean` torrent names too (D55), the user's router check
 (D50), one memory budget for all torrents (D51), `denco service install`
-(D52), signing/Homebrew/Scoop (D53), and the out-of-scope list (v2, GUI).
+(D52), signing (D53), and the out-of-scope list (v2, GUI).
 
 ## Known issues
 - TUI on Windows (D55): raw mode, VT output and size polling are compiled
@@ -243,7 +261,23 @@ CLI should `clean` torrent names too (D55), the user's router check
 ## Open questions for the user
 - (none open)
 
-## Last test run (2026-11-22, Phase 16c, D67)
+## Last test run (2026-11-22, Phase 16d, D68)
+- `go test -race -count=1 ./...` — all 29 packages pass
+- stress: `-race -count=5 -cpu=1,2,8` on torrent, peer, cli and
+  scripts/installtest — all pass
+- `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
+  linux/windows/darwin × amd64/arm64 — all build
+- new tests: the formula generator under sh, dash and bash (URLs and
+  checksums per platform block, no Windows, `ruby -c` with Ruby 2.6
+  here), 7 refusals that write nothing, archive names pinned to
+  release-build.sh, ASCII; setup's Homebrew guard and `inHomebrew`
+- mutation-checked brew-formula.sh: 4 mutations, 3 caught; the 4th
+  (`|| true` after a checksum lookup) is equivalent (the `exit` inside
+  the subshell wins)
+- not run: `brew install` of a real release and the tap push (first run
+  on the next tag)
+
+## Previous test run (2026-11-22, Phase 16c, D67)
 - `go test -race -count=1 ./...` — all 29 packages pass (new:
   `scripts/installtest`)
 - install tests: 40 plain runs, 60 race runs at 1/4 CPUs under CPU load —
@@ -568,3 +602,4 @@ CLI should `clean` torrent names too (D55), the user's router check
 - **Phase 16a (2026-11-22):** double-click opens the dashboard (D65).
 - **Phase 16b (2026-11-22, commit b54a4e3, with 16a):** `denco setup` (D66).
 - **Phase 16c (2026-11-22):** install scripts (D67).
+- **Phase 16d (2026-11-22):** Homebrew tap (D68); Scoop, winget and 16e dropped.

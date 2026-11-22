@@ -131,7 +131,7 @@ func offerSetup(in *bufio.Reader, stdout, stderr io.Writer) (code int, done bool
 		return 0, false
 	}
 	inst, err := newInstaller(&env{home: home, stdout: stdout, stderr: stderr})
-	if err != nil || inst.Installed() {
+	if err != nil || inst.Installed() || inst.brew {
 		return 0, false
 	}
 	if _, err := os.Stat(filepath.Join(home, setupDeclined)); err == nil {

@@ -1727,3 +1727,49 @@ One short entry per decision. Newest at the bottom. Format:
      runs install.ps1 under both `powershell` (5.1) and `pwsh` (7), still
      with CI's inherited module path. **The fixed install.ps1 has again
      not run anywhere yet** — its next run is CI.
+
+### D68 — Homebrew tap, updated by the release workflow (Phase 16d)
+
+**Context.** 16d planned Homebrew, Scoop and winget. The user chose
+Homebrew only (2026-11-22) and dropped 16e (the Windows installer).
+Windows keeps install.ps1 and the double-click offer (D65–D67).
+
+**Decision.**
+- **A tap of our own, not homebrew-core.** `7Eshaan/homebrew-tap`, so
+  `brew install 7Eshaan/tap/denco`. homebrew-core wants a notable
+  project and a build from source; a tap needs neither, and no Apple
+  signing: brew downloads with curl, so no quarantine flag (as D67).
+- **Prebuilt archives, not a source build.** The formula points at the
+  release's `darwin`/`linux` × `arm64`/`amd64` tar.gz with their
+  SHA256SUMS checksums (`on_macos`/`on_linux` × `on_arm`/`on_intel`).
+  Users get the exact binary the release tested, with no Go toolchain
+  download and no compile. Brew steps into the archive's single top
+  folder, so `bin.install "denco"` finds it. `test do` checks
+  `denco version`.
+- **Generated, never hand-edited.** `scripts/brew-formula.sh <tag>
+  <SHA256SUMS>` writes it to stdout. It computes every checksum before
+  printing anything, so a missing or malformed entry, a bad tag or a
+  pre-release writes nothing. ASCII, POSIX sh, like install.sh.
+- **Published by a `homebrew` job** after `release` in release.yml. It
+  checks out the tap with `TAP_TOKEN`, a fine-grained token that can
+  write only to that one repository; the workflow's own token can't
+  reach another repo. It commits `Formula/denco.rb` as
+  github-actions[bot], and only if it changed. Pre-release tags are
+  skipped.
+  Without the secret it warns and skips instead of failing, so the
+  release itself never depends on the tap.
+- **`denco setup` leaves a Homebrew denco alone.** Copying it to
+  `~/.local/bin` would leave two dencos, one never updated by brew. The
+  running executable (symlinks resolved) under `…/Cellar/denco/<ver>/`
+  marks it, on macOS and Linux whatever the prefix. Setup says so and
+  points at `brew upgrade` / `brew uninstall`. `-remove` still undoes an
+  earlier one-liner install, and notes brew owns this copy. The
+  double-click offer is skipped too (moot today: that's Windows-only).
+
+**Not verified here.** The formula is tested by generating it from a fake
+SHA256SUMS: four URLs and checksums in the right blocks, nothing for
+Windows, refusals write nothing, and `ruby -c` when Ruby exists. The
+archive names are pinned to release-build.sh by a test.
+Not run: `brew install` of a real release (it downloads from GitHub) and
+the job's push. Their first run is the first tagged release after this
+change; check the tap's commit and `brew install 7Eshaan/tap/denco` then.
