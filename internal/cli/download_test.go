@@ -36,7 +36,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	for _, k := range []string{"HOME", "XDG_CONFIG_HOME", "AppData", "DENCO_HOME"} {
+	for _, k := range []string{"HOME", "XDG_CONFIG_HOME", "AppData", "LOCALAPPDATA", "DENCO_HOME"} {
 		os.Setenv(k, tmp)
 	}
 	// No test may contact the public DHT routers: daemons here start with

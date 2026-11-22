@@ -1544,3 +1544,104 @@ One short entry per decision. Newest at the bottom. Format:
   presumably firewalled or not forwarded, or uTP turned off; those are
   what the remembered TCP fallback is for. Throughput over uTP against
   real peers wasn't measured (that needs a download).
+
+### D65 — Double-clicking denco.exe opens the dashboard (Phase 16a)
+- **Context:** on Windows a downloaded `denco.exe` is often started by
+  double-clicking it. With no arguments Denco printed its usage and
+  exited, so a console window flashed and closed — the first impression
+  of a Windows user. (Part of making setup easy for people who don't use
+  a terminal; the plan is in PROGRESS / ROADMAP Phase 16.)
+- **Decision:** with no arguments, and only when Denco has its console to
+  itself (`GetConsoleProcessList` returns 1 — Windows made a new console
+  window just for it, as for a double-click or a shortcut), `cli.Main`
+  runs `denco tui`: it starts the background daemon if needed (as every
+  client command does, D52) and opens the dashboard. Quitting the
+  dashboard closes the window; the daemon keeps running (it has no
+  console of its own, D52). If the dashboard can't open, the window
+  explains that Denco is a command-line program and waits for Enter, so
+  the error can be read. From a shell (cmd, PowerShell, Windows Terminal)
+  the shell shares the console, so the usage is printed as before. With
+  arguments nothing changes.
+- **macOS/Linux:** nothing to detect — a double-clicked program runs in
+  a terminal's shell like any other (`console_other.go`).
+- **Alternatives:** a separate GUI-subsystem build (no console at all —
+  but the dashboard needs one); always pausing at exit (annoying in
+  scripts and terminals); checking the parent process name (fragile).
+- **Tests:** `cli.Main` with the detection stubbed: double-clicked → the
+  dashboard path (refused under `go test`, no terminal) then waits for
+  Enter; from a shell → usage, no wait; arguments → the command.
+  `ownConsole` itself is false for a test process (Windows CI). Mutation-
+  checked (no dashboard; no wait). **Not run on a real Windows desktop**
+  — like the TUI's Windows console code (D55), it needs a real machine.
+
+### D66 — `denco setup`: Denco installs itself per user (Phase 16b)
+- **Context:** the release archives leave `denco` in Downloads; putting it
+  on PATH means editing shell files or a Windows dialog, which many users
+  can't or won't do. User-selected 2026-11-22: setup must be hassle-free
+  on every platform; no administrator password.
+- **Decision:** `denco setup` copies the running executable into the
+  per-user place for programs and puts that folder on PATH;
+  `denco setup -remove` undoes both and keeps settings, resume data and
+  downloads. Running it again is harmless; running a newer version's
+  setup is the update (it stops a running daemon first — it may be
+  running from the file being replaced — and says the next command starts
+  it again).
+  - **Windows:** `%LocalAppData%\Programs\Denco\denco.exe` (the standard
+    per-user program folder); the folder is appended to the user PATH,
+    `HKCU\Environment\Path` (type and other entries kept; entries compared
+    case-insensitively with `%VARS%` expanded), then `WM_SETTINGCHANGE` is
+    broadcast so terminals opened afterwards see it. A running copy can't
+    be overwritten but can be renamed, so an update moves it to
+    `denco.exe.old` first. `-remove` from the installed copy itself hands
+    the deletion to a detached `cmd.exe` that waits ~2 s. The copy has no
+    Mark-of-the-Web, so SmartScreen asks only for the first run from
+    Downloads. Registry access via `syscall` + `advapi32`/`user32` procs
+    (no x/sys, no cgo).
+  - **macOS / Linux:** `~/.local/bin/denco` (no password — the user chose
+    this over `/usr/local/bin`); if that folder isn't on `$PATH`, one
+    marked line is appended to the startup file of the user's shell
+    (`$SHELL`): `~/.zshrc` (or `$ZDOTDIR/.zshrc`), `~/.bash_profile` on
+    macOS / `~/.bashrc` on Linux, `~/.config/fish/conf.d/denco.fish`
+    (a file of our own), else `~/.profile`. The line is
+    `export PATH="$HOME/.local/bin:$PATH"` after a marker comment;
+    `-remove` deletes exactly the marker, the line and the blank line we
+    put before it. A copy written fresh carries no macOS quarantine flag.
+  - Another `denco` already on PATH (Homebrew, `go install`) → a warning,
+    not a second silent copy.
+- **Double-click offer (Windows, the user's choice):** double-clicked
+  (D65) from anywhere but the installed location, Denco asks once
+  "Install Denco for your user, so 'denco' works in any terminal? [Y/n]".
+  Yes → setup, then the dashboard runs from the *installed* copy (so the
+  daemon runs from there, not from Downloads). No → remembered in Denco's
+  home (`setup-declined`), never asked again; `denco setup` still works.
+- **No Start menu shortcut** (the user's choice): writing `.lnk` files
+  without a library is fiddly; the optional installer (16e) does it.
+- **Found while testing — and the guard it led to:** the first test run
+  of the double-click offer used the real installer: Enter means yes, so
+  it installed the *test binary* into the test's temporary home and ran
+  it, which ran the tests again — ~100 nested copies before it was
+  stopped. Everything stayed in the temporary homes `TestMain` redirects
+  to (checked: the user's real `~/.local/bin`, shell files and processes
+  were untouched; the temp folders were deleted). Now the real installer
+  (`systemInstaller`) and `runInstalled` refuse to work inside any test
+  binary (`testing.Testing()`, as `spawnProcess` already did), tests
+  build installers by hand, and `TestMain` also redirects `LOCALAPPDATA`.
+- **Alternatives:** asking users to edit PATH (the problem); `/usr/local/
+  bin` (password on Apple Silicon); symlinking instead of copying (breaks
+  when Downloads is cleaned); writing the Windows PATH with `setx`
+  (truncates at 1024 characters).
+- **Tests:** install, re-run, update (daemon stopped), Windows-style
+  replacement via `.old`, warning about another denco, remove (incl. the
+  installed copy removing itself), shell file choice per shell/OS and
+  `ZDOTDIR`, add/remove leaving the file as it was (a missing final
+  newline is added), a folder already on `$PATH`, fish, the Windows PATH
+  list logic (case, `%VARS%`, trailing `\`, other entries untouched), the
+  command, the double-click offer (yes → installed copy runs the
+  dashboard; no → remembered), and both test guards. Mutation-checked:
+  10 mutations, each caught. Tried end to end on macOS with the real
+  binary and a temporary `HOME`: a new zsh finds `denco`, re-running
+  changes nothing, `-remove` restores `.zshrc` exactly.
+- **Not verified:** the Windows registry writes, `WM_SETTINGCHANGE`, the
+  self-delete and the double-click offer have only been compiled, vetted
+  and (list logic) tested — they need a real Windows machine; Linux shells
+  were tested through the same file logic, not on a Linux desktop.

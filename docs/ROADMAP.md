@@ -84,5 +84,21 @@ so older references stay valid.
         DHT; `transport: both|tcp|utp` (D64); checked on a real swarm: uTP
         handshakes with qBittorrent, Transmission and Deluge.
 
+- [ ] **Phase 16 — Easy setup** (user-selected 2026-11-22: installing
+      shouldn't need PATH knowledge on any platform).
+  - [x] **16a — Double-click opens the dashboard (Windows).** No more
+        flashing usage window (D65).
+  - [x] **16b — `denco setup`.** (D66; double-click offers it on Windows.) The binary installs itself per user
+        (`%LocalAppData%\Programs\Denco` + user PATH in the registry;
+        `~/.local/bin` + a shell rc line), `-remove` undoes it. No admin.
+  - [ ] **16c — Install scripts.** `install.sh` (macOS/Linux) and
+        `install.ps1` (Windows): detect OS/arch, download, verify
+        `SHA256SUMS`, then set up as 16b.
+  - [ ] **16d — Package managers.** Homebrew tap (macOS + Linux), winget
+        and Scoop (Windows), updated by the release workflow (needs a tap
+        repo and tokens on the user's account).
+  - [ ] **16e — Windows installer (optional).** Per-user Inno Setup
+        installer next to the zip (needs approval for the build tool).
+
 Out of scope for now (may revisit): BitTorrent v2, GUI (uTP, MSE and web
 seeds moved into Phase 15 on 2026-11-21).

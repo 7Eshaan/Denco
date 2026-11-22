@@ -54,14 +54,30 @@ ID  NAME                             SIZE      PROGRESS  STATUS       DOWN      
 Get the archive for your system from the
 [latest release](https://github.com/7Eshaan/Denco/releases/latest):
 `darwin` is macOS, `arm64` is Apple Silicon / ARM, `amd64` is Intel / AMD.
-Unpack it and put `denco` (`denco.exe` on Windows) in a folder on your
-`PATH`. `SHA256SUMS` lists the checksums if you want to check the download.
+Unpack it, then let Denco install itself, so `denco` works in any new
+terminal:
+
+- **Windows:** double-click `denco.exe` and answer *Y* to "Install Denco
+  for your user?" (or run `denco.exe setup`). It goes to
+  `%LocalAppData%\Programs\Denco` and onto your PATH; no admin rights.
+- **macOS / Linux:** in a terminal, `./denco setup` (on macOS, first do
+  the one-time `xattr` step below). It goes to
+  `~/.local/bin` and, if needed, one line is added to your shell's
+  startup file (e.g. `~/.zshrc`); no password.
+
+`denco setup -remove` undoes it (your settings and downloads stay); running
+`setup` from a newer version updates it. `SHA256SUMS` lists the checksums
+if you want to check the download.
 
 The binaries aren't code-signed, so the first run needs one extra step:
 
 - **macOS** blocks downloaded programs. Run
   `xattr -d com.apple.quarantine denco` once.
 - **Windows** SmartScreen may warn: choose *More info → Run anyway*.
+
+On Windows, double-clicking `denco.exe` starts Denco in the background and
+opens the dashboard (`denco tui`); closing the dashboard leaves Denco
+running. In a terminal, `denco tui` does the same on any system.
 
 `denco version` shows which version you have.
 

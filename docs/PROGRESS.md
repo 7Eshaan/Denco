@@ -1,10 +1,32 @@
 # Progress
 
-**Current phase:** Phase 15 — qBittorrent parity, part 1 (user-selected
-2026-11-21: queue control, per-torrent limits, full IPv6, web seeds,
-MSE/PE, uTP; sub-phases 15a–15f in ROADMAP).
+**Current phase:** Phase 16 — easy setup (user-selected 2026-11-22:
+installing shouldn't need PATH knowledge; 16a–16e in ROADMAP). Phase 15
+(qBittorrent parity, part 1) is complete.
 
-**Phase 15f — uTP (D64) · ✅ done, not committed yet.**
+**Phase 16b — `denco setup` (D66) · ✅ done, not committed yet (together
+with 16a).** Denco installs itself per user — Windows:
+`%LocalAppData%\Programs\Denco` + the user PATH in the registry; macOS/
+Linux: `~/.local/bin` + one marked line in the shell's startup file — no
+admin rights; `-remove` undoes it; a newer version's setup updates (stops
+the daemon first). Double-clicked on Windows from outside the install
+folder, it offers to install once (yes → dashboard from the installed
+copy; no → remembered). Tried end to end on macOS with a temporary HOME;
+the Windows parts are compiled and vetted, not run on real Windows.
+Incident while testing (D66): the first double-click test reached the
+real installer and recursively installed/ran the test binary inside temp
+homes (~100 copies; nothing outside temp touched, all cleaned up); the
+real installer and runInstalled now refuse to run in test binaries.
+
+**Phase 16a — double-click opens the dashboard (D65) · ✅ done, not
+committed yet.** On Windows, `denco.exe` started with a console of its own
+(double-click, shortcut) and no arguments opens `denco tui` — starting the
+daemon if needed — instead of flashing its usage; on failure the window
+waits for Enter. From a shell nothing changes. Tested with the detection
+stubbed; not yet run on a real Windows desktop.
+
+**Phase 15f — uTP (D64) · ✅ done, committed as 47c1ced; CI green on all
+three OSes.**
 New `internal/udpmux` (one UDP socket per family on the peer port's
 number, shared by the DHT and uTP) and `internal/utp` (BEP 29: SACK,
 fast/early retransmit, tail-loss probe, RTO; LEDBAT with a 100 ms target
@@ -128,9 +150,11 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** the user commits 15f (D64) and checks CI. That finishes
-Phase 15 (all six user-selected features). Then: pick the next set from
-the qBittorrent comparison, or a release (v0.3.0 with Phase 15).
+**Next action:** the user commits 16a + 16b (D65, D66) and checks CI —
+ideally someone tries `denco.exe` on a real Windows machine (double-click
+→ install offer → dashboard; `denco setup -remove`). Then **16c — install
+scripts** (`install.sh`, `install.ps1`). Release: v0.3.0 (Phase 15) is
+ready to tag; the real-download smoke test was offered and not yet run.
 Optional, any time: a release (v0.2.1 for the D57 fix, or v0.3.0 once
 some of Phase 15 is in). Open items, if wanted: the plain
 CLI should `clean` torrent names too (D55), the user's router check
@@ -198,7 +222,32 @@ CLI should `clean` torrent names too (D55), the user's router check
 ## Open questions for the user
 - (none open)
 
-## Last test run (2026-11-22, Phase 15f, D64)
+## Last test run (2026-11-22, Phase 16b, D66)
+- `go test -race -count=1 ./...` — all 28 packages pass; no temp homes
+  left behind
+- `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
+  linux/windows/darwin × amd64/arm64 — all build · Windows `cli` tests
+  compile
+- new tests: cli `TestSetupInstallsAndUpdates`,
+  `TestSetupWindowsMovesOldCopyAside`, `TestSetupWarnsAboutAnotherDenco`,
+  `TestSetupRemove`, `TestShellPathFiles`, `TestShellPathAddRemove`,
+  `TestWindowsPathList`, `TestSetupCommand`, `TestDoubleClickOffersSetup`,
+  `TestRunInstalledRefusesInTests`. Mutation-checked: 10 mutations, each
+  caught
+- end to end on macOS (real binary, temporary HOME): install, new zsh
+  finds denco, re-run, remove restores `.zshrc`
+- not run on real Windows (registry, broadcast, self-delete, double-click)
+
+## Previous test run (2026-11-22, Phase 16a, D65)
+- `go test -race -count=1 ./...` — all 28 packages pass
+- `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
+  linux/windows/darwin × amd64/arm64 — all build · the Windows test
+  binary of `cli` compiles
+- new tests: cli `TestDoubleClickOpensDashboard`, `TestOwnConsoleFromShell`
+  (Windows only, runs in CI). Mutation-checked: 2 mutations, both caught
+- not run on a real Windows desktop (double-click itself)
+
+## Previous test run (2026-11-22, Phase 15f, D64)
 - `go test -race -count=1 ./...` — all 28 packages pass (new: `udpmux`,
   `utp`)
 - stress `-race -count=5 -cpu=1,2,8` torrent, peer, utp, udpmux, engine
@@ -480,4 +529,6 @@ CLI should `clean` torrent names too (D55), the user's router check
   made deterministic (D62, CI failure on macOS); then a direct test of the
   bucket-filling rules (D62, commit 041fb83).
 - **Phase 15e (2026-11-22, commit ff013ea):** protocol encryption, MSE/PE (D63).
-- **Phase 15f (2026-11-22):** uTP (D64).
+- **Phase 15f (2026-11-22, commit 47c1ced):** uTP (D64).
+- **Phase 16a (2026-11-22):** double-click opens the dashboard (D65).
+- **Phase 16b (2026-11-22):** `denco setup` (D66).

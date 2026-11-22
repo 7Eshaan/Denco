@@ -15,10 +15,15 @@
 package cli
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"testing"
 
 	"github.com/7Eshaan/Denco/internal/config"
 	"github.com/7Eshaan/Denco/internal/ipc"
@@ -72,6 +77,8 @@ Standalone tools (no daemon needed):
   denco verify [-dir DIR] <file.torrent>       hash-check data already on disk (read-only)
   denco download [-dir DIR] [-seed] <file.torrent>   download one torrent in the foreground
 
+  denco setup [-remove]                        install Denco for your user so 'denco' works in
+                                               any new terminal (no admin rights); -remove undoes it
   denco version                                show the version
   denco help                                   show this help
 
@@ -80,7 +87,91 @@ Denco keeps its state in $DENCO_HOME (default: <user config dir>/denco).
 
 // Main runs the command line and returns the process exit code.
 func Main(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 && doubleClicked() {
+		return runDoubleClicked(stdout, stderr)
+	}
 	return run(args, stdout, stderr)
+}
+
+// doubleClicked reports whether Denco was started by double-clicking it
+// (Windows: it has a console window to itself). A variable for tests.
+var doubleClicked = ownConsole
+
+// consoleIn is where "Press Enter" is read from. A variable for tests.
+var consoleIn io.Reader = os.Stdin
+
+// runDoubleClicked opens the dashboard (starting the daemon if needed)
+// instead of printing the usage into a window that closes at once. The
+// first time, Denco offers to install itself (D66). If the dashboard
+// fails, the window waits for Enter so the message can be read. Quitting
+// the dashboard closes the window; the daemon keeps running.
+func runDoubleClicked(stdout, stderr io.Writer) int {
+	in := bufio.NewReader(consoleIn)
+	code, done := offerSetup(in, stdout, stderr)
+	if !done {
+		code = run([]string{"tui"}, stdout, stderr)
+	}
+	if code != 0 {
+		fmt.Fprint(stderr, "\nDenco is a command-line program: open a terminal and run \"denco help\" to see what it can do.\nPress Enter to close this window.")
+		in.ReadString('\n')
+	}
+	return code
+}
+
+// setupDeclined, in Denco's home, records a "no" to the install offer.
+const setupDeclined = "setup-declined"
+
+// offerSetup asks a double-clicking user once whether to install Denco
+// (D66). On yes it installs and runs the dashboard from the installed
+// copy (so the daemon runs from there, not from Downloads); done reports
+// that it did. A no is remembered.
+func offerSetup(in *bufio.Reader, stdout, stderr io.Writer) (code int, done bool) {
+	home, err := Home()
+	if err != nil {
+		return 0, false
+	}
+	inst, err := newInstaller(&env{home: home, stdout: stdout, stderr: stderr})
+	if err != nil || inst.Installed() {
+		return 0, false
+	}
+	if _, err := os.Stat(filepath.Join(home, setupDeclined)); err == nil {
+		return 0, false
+	}
+	fmt.Fprint(stdout, "Install Denco for your user, so 'denco' works in any terminal? [Y/n] ")
+	answer, _ := in.ReadString('\n')
+	if a := strings.ToLower(strings.TrimSpace(answer)); a == "n" || a == "no" {
+		os.MkdirAll(home, 0o700)
+		os.WriteFile(filepath.Join(home, setupDeclined), []byte("Answered no to installing Denco; run 'denco setup' to install.\n"), 0o600)
+		fmt.Fprintln(stdout, "OK, not asking again. Run 'denco setup' any time to install.")
+		return 0, false
+	}
+	if err := inst.install(); err != nil {
+		fmt.Fprintf(stderr, "denco: %v\n", err)
+		return 1, true
+	}
+	fmt.Fprintln(stdout, "Opening the dashboard…")
+	return runInstalled(inst.dest(), []string{"tui"}), true
+}
+
+// runInstalled runs the installed copy in this window. A variable for
+// tests.
+var runInstalled = func(path string, args []string) int {
+	if testing.Testing() {
+		fmt.Fprintln(os.Stderr, "denco: running another executable is disabled in tests")
+		return 1
+	}
+	cmd := exec.Command(path, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &exit):
+		return exit.ExitCode()
+	}
+	fmt.Fprintf(os.Stderr, "denco: %v\n", err)
+	return 1
 }
 
 // env is what every command needs to know about its surroundings.
@@ -178,6 +269,8 @@ func runEnv(e *env, args []string) int {
 		return cmdDownload(e, rest)
 	case "version", "--version":
 		return cmdVersion(rest, stdout, stderr)
+	case "setup":
+		return cmdSetup(e, rest)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return 0
