@@ -31,7 +31,9 @@ type peerState struct {
 
 	// Upload side (upload.go).
 	served   map[peer.Block]bool // their requests we've accepted and not yet sent
-	uploadQ  chan peer.Block     // blocks for the uploader goroutine to read
+	upOrder  []peer.Block        // served in arrival order (may hold cancelled ones)
+	upBusy   bool                // the uploader is reading a block we handed it
+	uploadQ  chan peer.Block     // hands the uploader one block at a time
 	uploaded int64               // payload bytes sent to them
 	upRate   rate                // our upload rate to them
 
@@ -61,7 +63,7 @@ func (s *Session) addPeer(ctx context.Context, c *peer.Conn) {
 		pending:     make(map[peer.Block]bool),
 		served:      make(map[peer.Block]bool),
 		pexSent:     make(map[netip.AddrPort]bool),
-		uploadQ:     make(chan peer.Block, maxQueuedUploads),
+		uploadQ:     make(chan peer.Block, 1),
 		connectedAt: time.Now(),
 	}
 	s.peers[p.addr] = p

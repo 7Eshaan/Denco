@@ -369,6 +369,80 @@ func TestTrySendFullQueue(t *testing.T) {
 	}
 }
 
+func TestWaitRoom(t *testing.T) {
+	// A Conn whose writer never runs, so the queue only drains by hand.
+	c := &Conn{out: make(chan *Message, 4), done: make(chan struct{}), drained: make(chan struct{}, 1)}
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		c.out <- Choke()
+	}
+	if err := c.WaitRoom(ctx); err != nil { // 2 of 4: room
+		t.Fatal(err)
+	}
+	c.out <- Choke() // 3 of 4: over three-quarters, must wait
+
+	got := make(chan error, 1)
+	go func() { got <- c.WaitRoom(ctx) }()
+	select {
+	case err := <-got:
+		t.Fatalf("WaitRoom returned %v with the queue full", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	<-c.out // the writer takes one and signals
+	c.drained <- struct{}{}
+	select {
+	case err := <-got:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("WaitRoom didn't wake after the queue drained")
+	}
+
+	c.out <- Choke()
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := c.WaitRoom(cctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled ctx: err = %v", err)
+	}
+	close(c.done)
+	if err := c.WaitRoom(ctx); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed conn: err = %v", err)
+	}
+}
+
+// A bulk sender that waits for room never overflows the queue, even when
+// the peer stops reading for a while: it is slowed down, not disconnected.
+func TestWaitRoomBackpressure(t *testing.T) {
+	d, a := pair(t, Options{PeerID: peerid.New(), QueueSize: 8}, Options{PeerID: peerid.New()})
+	const n = 2000 // 32 MiB: far more than the socket buffers hold
+	block := make([]byte, BlockSize)
+	sent := make(chan error, 1)
+	go func() {
+		for i := 0; i < n; i++ {
+			if err := d.WaitRoom(context.Background()); err != nil {
+				sent <- err
+				return
+			}
+			if !d.TrySend(Piece(uint32(i), 0, block)) {
+				sent <- errors.New("TrySend found the queue full after WaitRoom")
+				return
+			}
+		}
+		sent <- nil
+	}()
+	time.Sleep(200 * time.Millisecond) // not reading: the sender must stall
+	for i := 0; i < n; i++ {
+		idx, _, _, err := ParsePiece(recv(t, a))
+		if err != nil || idx != uint32(i) {
+			t.Fatalf("message %d: piece %d, %v", i, idx, err)
+		}
+	}
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReadLimiterThrottlesAndStopsOnClose(t *testing.T) {
 	lim := ratelimit.New(1 << 20) // 1 MiB/s, burst 256 KiB
 	d, acc := pair(t, Options{PeerID: peerid.New()}, Options{PeerID: peerid.New(), ReadLimiter: lim})

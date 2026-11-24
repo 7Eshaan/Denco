@@ -184,6 +184,9 @@ type Conn struct {
 	in   chan *Message
 	out  chan *Message
 	done chan struct{}
+	// drained gets a (coalesced) signal whenever the writer has taken
+	// messages off out, waking WaitRoom.
+	drained chan struct{}
 	// ctx is cancelled at shutdown, so a reader waiting on the rate
 	// limiter stops at once.
 	ctx    context.Context
@@ -420,6 +423,7 @@ func start(nc net.Conn, addr netip.AddrPort, theirs Handshake, outgoing bool, o 
 		in:       make(chan *Message, o.QueueSize),
 		out:      make(chan *Message, o.QueueSize),
 		done:     make(chan struct{}),
+		drained:  make(chan struct{}, 1),
 	}
 	go c.readLoop()
 	go c.writeLoop()
@@ -459,6 +463,28 @@ func (c *Conn) Send(m *Message) error {
 		return nil
 	case <-c.done:
 		return ErrClosed
+	}
+}
+
+// WaitRoom blocks while the send queue is more than three-quarters full,
+// and returns ErrClosed if the connection ends or ctx's error if ctx is
+// done first. A producer of bulk data (the torrent's per-peer uploader)
+// calls it before making each message, so a slow reader slows the
+// producer down instead of filling the queue; the free quarter stays for
+// small messages sent with TrySend (have, choke, keep-alive...).
+func (c *Conn) WaitRoom(ctx context.Context) error {
+	limit := cap(c.out) - cap(c.out)/4
+	for {
+		if len(c.out) < limit || cap(c.out) == 0 {
+			return nil
+		}
+		select {
+		case <-c.drained:
+		case <-c.done:
+			return ErrClosed
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
@@ -573,6 +599,10 @@ func (c *Conn) writeLoop() {
 			default:
 				break drain
 			}
+		}
+		select { // the queue has room again: wake WaitRoom
+		case c.drained <- struct{}{}:
+		default:
 		}
 		if err := w.Flush(); err != nil {
 			c.fail(c.writeErr(err))

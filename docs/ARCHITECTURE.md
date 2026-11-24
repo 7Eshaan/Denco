@@ -96,7 +96,7 @@ Dependency direction (lower never imports higher):
   use fakes. `List.AnnounceAll(ctx, announcer, req) []Result` (one per tier).
 - Peers everywhere are `netip.AddrPort` (D12).
 - `peer.Conn{Remote, Peer Handshake, Outgoing}` with `Incoming() <-chan *Message`,
-  `Send(*Message) error`, `Done()`, `Err()`, `Close()`, `BytesRead/Written()`.
+  `Send(*Message) error`, `TrySend`, `WaitRoom(ctx)` (backpressure, D69), `Done()`, `Err()`, `Close()`, `BytesRead/Written()`.
   `peer.Dial(ctx, addr, infoHash, Options)`, `peer.Accept(netConn, known, Options)`.
 - `peer.Message{ID, Payload}`; nil = keep-alive. `peer.Block{Index, Begin, Length}`.
 - `bitfield.Bitfield` — `New(n)`, `FromBytes(b, n)`, `Has/Set/Clear/SetAll/Count/Full/Bytes/Clone`.
@@ -242,7 +242,10 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
 - **torrent.Session** (D23): one loop goroutine owns all state. Helpers →
   `events` channel: per-peer forwarder + per-peer uploader (disk reads) (+ the
   Conn's own 2 goroutines), dialers (≤ DialParallel), announcer (1), hash/write
-  workers (process-wide limit NumCPU). Loop sends only via `TrySend`.
+  workers (process-wide limit NumCPU). Loop sends only via `TrySend`; the
+  uploader gets one block at a time from the loop and calls
+  `Conn.WaitRoom` before each read, so piece data never overflows the
+  send queue (D69).
   `Stats()`/`Peers()` read a snapshot under a mutex. `Run` waits for every
   helper before returning.
 - **torrent.Listener**: 1 accept goroutine + ≤ 64 handshake goroutines; hands
@@ -327,7 +330,7 @@ peer.Conn.Incoming() ─piece msg─▶ session ─▶ Manager.BlockReceived
   keep-alive. IDs 0–9 (BEP 3), 20 extended (BEP 10). Max 2 MiB incoming.
 - **Extended messages (BEP 10):** `<20><ext id><body>`. ID 0 = handshake,
   bencoded `{"m": {"ut_metadata": 1[, "ut_pex": 2]}, "metadata_size": N, "v": "Denco <version>",
-  "p": port, "reqq": 256}`. Other IDs are the *receiver's* numbers from its `m`.
+  "p": port, "reqq": 2000}` (D69). Other IDs are the *receiver's* numbers from its `m`.
 - **ut_metadata (BEP 9):** body = bencoded `{"msg_type": 0|1|2, "piece": i}`
   (+ `"total_size"` for data, followed directly by the piece bytes); pieces
   are 16 KiB, the last shorter.

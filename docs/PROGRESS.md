@@ -4,6 +4,22 @@
 (16a–16d; the user dropped Scoop/winget and 16e on 2026-11-22). Phase 15
 (qBittorrent parity, part 1) is complete.
 
+**Seeding stall fix (D69) · done 2026-11-24, not committed yet.** A
+benchmark against qBittorrent 5.3.1 / libtorrent 2.1.3 in Docker found
+that a qBittorrent leecher downloading from a Denco seed stalled at
+99.05% (5/5 runs): we ignored requests past 256 queued and libtorrent
+(up to 500 outstanding) never re-requests them. Now: 2000 queued
+requests (advertised as `reqq`; a peer over it is dropped, not
+ignored), the loop hands the uploader one block at a time in order
+(cancelled requests cost nothing), and the uploader waits for room in
+the send queue (`peer.Conn.WaitRoom`) before each read. Re-checked in
+the same Docker setup: Denco → qBittorrent 10/10 complete, median
+460 MiB/s vs qBittorrent → qBittorrent 476 MiB/s in the same session;
+Denco → Denco 563 MiB/s with the fix vs 558 without (interleaved A/B,
+no regression); seeder memory ~20–45 MiB (a scratch fix that only
+raised the limits used 79 MiB). Benchmark report and harness:
+~/Documents/DencoBenchmarks (outside the repo).
+
 **install.ps1 on real Windows · verified 2026-11-22** — the user ran the
 `irm … | iex` one-liner on a Windows PC: it picked the amd64 build from
 the v0.3.2 release and installed it, and `denco` worked. (Covers the
@@ -204,7 +220,9 @@ the commit *before* that fix.
 "0.0.1"). Release builds now stamp `internal/version.Tag` (was
 `cli.Version`). Committed as 0308bc0.
 
-**Next action:** none planned; Phase 16 is done and verified. The
+**Next action:** the user commits D69 (suggested message in the
+session), then tags **v0.3.3** so Homebrew and the install scripts ship
+the seeding fix. Phase 16 is done and verified. The
 TAP_TOKEN expires; renew it then (the homebrew job fails with an auth
 error). No phase is planned after 16. Still open: on
 real Windows, the double-click → install offer → dashboard path and
@@ -218,6 +236,16 @@ CLI should `clean` torrent names too (D55), the user's router check
 (D52), signing (D53), and the out-of-scope list (v2, GUI).
 
 ## Known issues
+- Seeding costs about 2× qBittorrent's CPU per byte (2.4 s vs 1.3 s per
+  2 GiB in the D69 benchmark): the uploader allocates a fresh 16 KiB
+  buffer and does one `ReadAt` per block. A buffer pool and reading
+  whole pieces would cut it.
+- On a real swarm (Ubuntu 26.10, whose tracker returns only one peer)
+  Denco got first data after 29.5 s vs qBittorrent's 6.1 s and held 41
+  vs 71 peers: DHT/PEX discovery ramps up more slowly. One sample, on
+  the user's campus Wi-Fi (~10 Mbps, Fortinet firewall); both clients
+  then saturated the link. Canonical's seed sends no bitfield (super-
+  seeding?) and Denco downloaded nothing from it.
 - TUI on Windows (D55): raw mode, VT output and size polling are compiled
   and vetted, and the non-console path is tested in CI, but nothing has
   run in a real Windows console yet.
@@ -278,7 +306,25 @@ CLI should `clean` torrent names too (D55), the user's router check
 ## Open questions for the user
 - (none open)
 
-## Last test run (2026-11-22, Phase 16d, D68)
+## Last test run (2026-11-24, D69 seeding fix)
+- `go test -race -count=1 ./...` — all 29 packages pass
+- stress: `-race -count=5 -cpu=1,2,8` on torrent and peer — pass
+  (404 s, 106 s)
+- `go vet` (darwin, linux, windows) clean · gofmt clean · cross-compile
+  linux/windows — build
+- new tests: `TestUploadServesDeepPipeline` (1500 pipelined requests,
+  reader pauses 300 ms: all replies, in order, no disconnect),
+  `TestUploadDropsRequestFlood`, `TestWaitRoom`,
+  `TestWaitRoomBackpressure`. Checked against the old code: both
+  torrent tests fail there (replies jump from 256 to 642; the flood is
+  ignored), and the deep-pipeline test also fails on a limit-only fix
+  (disconnect).
+- against real qBittorrent 5.3.1 in Docker (2 vCPU VM, 2 GiB): Denco
+  seed → qBittorrent 10/10 complete (was 0/5), median 460 MiB/s;
+  qBittorrent → qBittorrent 476 MiB/s; Denco → Denco 563 (fix) vs 558
+  (before), interleaved
+
+## Previous test run (2026-11-22, Phase 16d, D68)
 - `go test -race -count=1 ./...` — all 29 packages pass
 - stress: `-race -count=5 -cpu=1,2,8` on torrent, peer, cli and
   scripts/installtest — all pass

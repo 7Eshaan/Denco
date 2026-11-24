@@ -11,9 +11,12 @@ import (
 )
 
 const (
-	// maxQueuedUploads caps how many of a peer's requests we hold at once.
-	// Extra requests are ignored; the peer will re-request after a timeout.
-	maxQueuedUploads = 256
+	// maxQueuedUploads caps how many of a peer's requests we hold at once,
+	// and is what we advertise as "reqq". libtorrent keeps up to 500
+	// requests outstanding per peer whatever reqq says, and never
+	// re-requests one we silently ignore, so its download stalls (D69).
+	// 2000 is libtorrent's own limit; a peer going past it is dropped.
+	maxQueuedUploads = 2000
 	// maxRequestLen is the largest block we serve. 16 KiB is the norm; a
 	// little leeway avoids dropping slightly unusual clients.
 	maxRequestLen = 2 * peer.BlockSize
@@ -22,10 +25,12 @@ const (
 // --- serving requests ----------------------------------------------------------
 
 // startUploader runs a goroutine that performs disk reads for p's requests,
-// so the loop never waits on the disk. The loop decides afterwards whether
-// the block is still wanted (the peer may have cancelled or been choked).
-// The upload limit is applied here, before each read, so queues never fill
-// up behind a throttled socket.
+// so the loop never waits on the disk. The loop hands it one block at a
+// time (feedUploader) and decides afterwards whether the block is still
+// wanted (the peer may have cancelled or been choked). Before each read it
+// waits for room in the connection's send queue, then for the upload
+// limit, so a slow or throttled peer slows the reads down instead of
+// overflowing the queue and getting disconnected (D69).
 func (s *Session) startUploader(ctx context.Context, p *peerState) {
 	pctx, cancel := context.WithCancel(ctx) // ends when the peer goes away
 	s.goHelper(func() {
@@ -40,8 +45,10 @@ func (s *Session) startUploader(ctx context.Context, p *peerState) {
 		for {
 			select {
 			case b := <-p.uploadQ:
-				// The torrent's own limit, then the global one (D59).
-				if s.cfg.TorrentUpLimiter.WaitN(pctx, int(b.Length)) != nil ||
+				// Room to send it, then the torrent's own limit, then the
+				// global one (D59).
+				if p.conn.WaitRoom(pctx) != nil ||
+					s.cfg.TorrentUpLimiter.WaitN(pctx, int(b.Length)) != nil ||
 					s.cfg.UploadLimiter.WaitN(pctx, int(b.Length)) != nil {
 					return // peer or session gone
 				}
@@ -79,42 +86,92 @@ func (s *Session) onRequest(p *peerState, m *peer.Message) {
 		int64(b.Begin)+int64(b.Length) > s.info.PieceSize(idx):
 		s.drop(p, "bad request range")
 		return
-	case !s.m.HasPiece(idx), p.served[b], len(p.served) >= maxQueuedUploads:
-		return // don't have it yet / duplicate / too many queued: ignore
+	case !s.m.HasPiece(idx), p.served[b]:
+		return // don't have it yet / already queued: one answer covers both
+	case len(p.served) >= maxQueuedUploads:
+		// Ignoring it would leave the peer waiting for it forever (D69).
+		s.drop(p, "too many queued requests")
+		return
 	}
-	select {
-	case p.uploadQ <- b:
-		p.served[b] = true
-	default: // uploader backlog full (cancelled entries still queued): ignore
+	p.served[b] = true
+	p.upOrder = append(p.upOrder, b)
+	if len(p.upOrder) > 2*maxQueuedUploads {
+		p.compactUpOrder() // many cancelled entries: bound the memory
 	}
+	s.feedUploader(p)
 }
 
 func (s *Session) onCancel(p *peerState, m *peer.Message) {
 	if b, err := peer.ParseBlock(m); err == nil {
-		delete(p.served, b) // if the read is in flight, onUploadRead skips it
+		// Its upOrder entry is skipped later; if the read is in flight,
+		// onUploadRead doesn't send it.
+		delete(p.served, b)
 	}
+}
+
+// feedUploader hands p's uploader the oldest request still wanted, unless
+// it is busy with one already. Handing over one block at a time keeps
+// cancelled requests out of any channel: they cost nothing (D69).
+func (s *Session) feedUploader(p *peerState) {
+	if p.upBusy {
+		return
+	}
+	for len(p.upOrder) > 0 {
+		b := p.upOrder[0]
+		p.upOrder = p.upOrder[1:]
+		if !p.served[b] {
+			continue // cancelled, or a duplicate entry already answered
+		}
+		select {
+		case p.uploadQ <- b:
+			p.upBusy = true
+		default: // can't happen: the uploader takes one block at a time
+			s.drop(p, "uploader out of step")
+		}
+		return
+	}
+	p.upOrder = nil // let the emptied backing array go
+}
+
+// compactUpOrder drops cancelled and duplicate entries, keeping the order.
+func (p *peerState) compactUpOrder() {
+	seen := make(map[peer.Block]bool, len(p.served))
+	kept := make([]peer.Block, 0, len(p.served))
+	for _, b := range p.upOrder {
+		if p.served[b] && !seen[b] {
+			seen[b] = true
+			kept = append(kept, b)
+		}
+	}
+	p.upOrder = kept
 }
 
 func (s *Session) onUploadRead(e uploadRead) {
 	p := e.p
-	if s.peers[p.addr] != p || !p.served[e.b] {
-		return // peer gone, block cancelled, or peer choked meanwhile
+	if s.peers[p.addr] != p {
+		return // peer gone
 	}
-	delete(p.served, e.b)
-	if e.err != nil {
-		s.log.Warn("reading block for upload failed", "piece", e.b.Index, "err", e.err)
-		s.drop(p, "local read error")
-		return
+	p.upBusy = false
+	if p.served[e.b] { // else cancelled, or the peer was choked meanwhile
+		delete(p.served, e.b)
+		if e.err != nil {
+			s.log.Warn("reading block for upload failed", "piece", e.b.Index, "err", e.err)
+			s.drop(p, "local read error")
+			return
+		}
+		// The uploader waited for room before reading, so this only fails
+		// if the connection is closing.
+		if !p.conn.TrySend(peer.Piece(e.b.Index, e.b.Begin, e.data)) {
+			p.conn.Close()
+			return
+		}
+		n := int64(len(e.data))
+		p.uploaded += n
+		p.upRate.add(n)
+		s.upRate.add(n)
+		s.uploaded.Add(n)
 	}
-	if !p.conn.TrySend(peer.Piece(e.b.Index, e.b.Begin, e.data)) {
-		p.conn.Close() // can't keep up with what it asked for
-		return
-	}
-	n := int64(len(e.data))
-	p.uploaded += n
-	p.upRate.add(n)
-	s.upRate.add(n)
-	s.uploaded.Add(n)
+	s.feedUploader(p)
 }
 
 // --- choking ---------------------------------------------------------------------
@@ -136,6 +193,7 @@ func (s *Session) setChoke(p *peerState, choke bool) {
 	p.amChoking = choke
 	if choke {
 		clear(p.served)
+		p.upOrder = nil
 		s.sendTo(p, peer.Choke())
 	} else {
 		s.sendTo(p, peer.Unchoke())

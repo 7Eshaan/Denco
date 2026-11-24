@@ -209,7 +209,9 @@ One short entry per decision. Newest at the bottom. Format:
   on one channel: a forwarder per peer conn (messages, close), dial attempts,
   the announcer, and hash+write workers (bounded by a process-wide semaphore of
   NumCPU). The loop never blocks on I/O: it uses `peer.Conn.TrySend` and drops
-  peers whose 256-message queue is full. Stats are published as an immutable
+  peers whose 256-message queue is full (*amended in D69:* the per-peer
+  uploader waits for room in that queue before each read, so serving
+  uploads no longer fills it). Stats are published as an immutable
   snapshot (every tick and on completion) behind a mutex for other goroutines.
   `Run` returns only after every helper has exited (WaitGroup + draining).
 - **Alternatives:** mutex around shared state touched by per-peer goroutines.
@@ -257,9 +259,11 @@ One short entry per decision. Newest at the bottom. Format:
     are queued, not refused).
   - **Serving:** requests are validated (≤ 32 KiB, inside the piece, piece
     verified); bad ranges / nonexistent pieces disconnect the peer; requests
-    while choked are ignored (BEP 3). Up to 256 queued per peer. A per-peer
-    uploader goroutine does disk reads; the loop then sends only if the block
-    wasn't cancelled and the peer wasn't choked meanwhile.
+    while choked are ignored (BEP 3). Up to 256 queued per peer
+    (*amended in D69:* 2000, and a peer over the limit is dropped instead
+    of ignored). A per-peer uploader goroutine does disk reads; the loop
+    then sends only if the block wasn't cancelled and the peer wasn't
+    choked meanwhile.
   - **Choker:** every 10s unchoke the 4 interested peers with the best rate —
     their upload to us while downloading, our upload to them while seeding —
     plus 1 optimistic unchoke rotated every 30s. Newly interested peers get a
@@ -1773,3 +1777,64 @@ archive names are pinned to release-build.sh by a test.
 Not run: `brew install` of a real release (it downloads from GitHub) and
 the job's push. Their first run is the first tagged release after this
 change; check the tap's commit and `brew install 7Eshaan/tap/denco` then.
+
+### D69 — Serve deep request pipelines; backpressure instead of drops
+
+**Context.** A benchmark against qBittorrent 5.3.1 (libtorrent 2.1.3) in
+Docker (2026-11-24) found that a qBittorrent leecher downloading from a
+Denco seed stalled at 99.05% in 5 of 5 runs. Denco advertised `reqq`
+256 and silently ignored requests past 256 queued, expecting the peer to
+re-request after a timeout. libtorrent keeps up to 500 requests
+outstanding per peer (`max_out_request_queue`) whatever `reqq` says, and
+never re-requests one that was ignored: it waits, snubs us after 60 s
+and drops the connection. Debug logging counted 1,244 ignored requests
+in one run. Denco ↔ Denco never hit it: our requester stays under the
+limit. A second silent drop existed too: the 256-slot `uploadQ` channel
+also held cancelled requests, and a request arriving while it was full
+was ignored. Raising only the limit made things worse (5/5 stalled
+early): the uploader then read faster than the socket drained, the
+256-message send queue filled, `TrySend` failed and the peer was
+disconnected.
+
+**Decision.**
+- **2000 queued requests per peer**, advertised as `reqq`. That is
+  libtorrent's own `max_allowed_in_request_queue`. A peer that goes past
+  it is **dropped**, never silently ignored: ignoring guarantees a stall,
+  a drop makes it reconnect and re-request. Duplicates of a queued
+  request and requests for pieces we don't have are still ignored (one
+  answer covers a duplicate; the latter is the peer's mistake). A
+  queued request costs a map entry, not a buffer.
+- **The loop keeps the order; the uploader gets one block at a time.**
+  `peerState.upOrder` holds accepted requests in arrival order;
+  `feedUploader` hands the next one still in `served` to the uploader
+  when it is idle (`upBusy`), and again when its read comes back.
+  Cancelled requests are skipped there, so they never occupy a channel
+  (`uploadQ` is now 1 slot). `upOrder` is compacted if cancellations
+  leave it over twice the limit. The loop still owns all state (D23).
+- **Backpressure: `peer.Conn.WaitRoom(ctx)`.** It blocks while the send
+  queue is more than three-quarters full (the writer signals after each
+  batch it takes). The uploader calls it before each read, then the rate
+  limits (D59), then reads. A slow reader slows the reads down instead of
+  being disconnected, the loop's `TrySend` of a piece can then only fail
+  on a closing connection, and the free quarter stays for small control
+  messages. Queued piece data per peer stays bounded by the send queue
+  (≤ 192 × 16 KiB), as before.
+
+**Alternatives.** Raising both the limit and the send queue to ~2000
+(what the benchmark's scratch fix did): it worked, 5/5 at 675 MiB/s, but
+seeder memory went from 29 to 79 MiB because the uploader read ahead
+into the bigger queue. A blocking `Send` from the uploader with a
+mutex-guarded `served`: it would split state ownership between the loop
+and per-peer goroutines (against D23). Implementing the Fast extension
+(BEP 6) so we could send reject messages: more protocol for the same
+effect here; still possible later.
+
+**Tests.** `TestUploadServesDeepPipeline`: a raw peer pipelines 1500
+requests (24 MiB of replies, more than queues and socket buffers hold)
+and stops reading for 300 ms; every reply must arrive, in order, without
+a disconnect. `TestUploadDropsRequestFlood`: past 2000 queued (uploads
+throttled so they pile up) the peer is dropped. Both fail on the old
+code (replies jump from 256 to 642; the flood is ignored), and the first
+also fails on the limit-only fix (disconnect). `TestWaitRoom`,
+`TestWaitRoomBackpressure` (peer): waiting, waking, cancel, close, and a
+32 MiB burst through an 8-message queue at a peer that pauses reading.

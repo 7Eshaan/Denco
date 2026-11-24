@@ -14,6 +14,7 @@ import (
 	"github.com/7Eshaan/Denco/internal/metainfo"
 	"github.com/7Eshaan/Denco/internal/peer"
 	"github.com/7Eshaan/Denco/internal/peerid"
+	"github.com/7Eshaan/Denco/internal/ratelimit"
 )
 
 // writeFixture puts the whole torrent on disk under dir and returns a full
@@ -310,6 +311,67 @@ func TestCancelledRequestNotSent(t *testing.T) {
 	if cancelledSent > 3 {
 		t.Errorf("%d of 20 cancelled blocks were still sent", cancelledSent)
 	}
+}
+
+// overlappingBlocks returns n distinct 16 KiB requests inside piece 0 (each
+// starting one byte later), so a tiny torrent can take a deep pipeline.
+func overlappingBlocks(n int) []peer.Block {
+	bs := make([]peer.Block, n)
+	for i := range bs {
+		bs[i] = peer.Block{Index: 0, Begin: uint32(i), Length: pl}
+	}
+	return bs
+}
+
+// libtorrent keeps up to 500 requests outstanding whatever reqq says, and
+// waits forever for any we ignore (D69). A deep pipeline must be served in
+// full, and a peer that stops reading for a while must be slowed down, not
+// disconnected.
+func TestUploadServesDeepPipeline(t *testing.T) {
+	f := makeTorrent(t, 2*pl, 2*pl) // one 32 KiB piece
+	seed := seedNode(t, f, testConfig())
+	l := dialRaw(t, seed.ln.Addr(), f.mi)
+	l.c.Send(peer.Interested())
+	l.next(peer.MsgUnchoke)
+
+	const n = 1500 // 24 MiB of replies: more than the queues and socket buffers hold
+	reqs := overlappingBlocks(n)
+	go func() {
+		for _, b := range reqs {
+			l.c.Send(peer.Request(b))
+		}
+	}()
+	time.Sleep(300 * time.Millisecond) // don't read: the seed's send queue fills up
+
+	got := 0
+	for got < n {
+		idx, begin, data, err := peer.ParsePiece(l.next(peer.MsgPiece))
+		if err != nil || idx != 0 || int(begin) != got {
+			t.Fatalf("reply %d: piece %d begin %d, %v (want begin %d, in order)", got, idx, begin, err, got)
+		}
+		if !bytes.Equal(data, f.data[begin:begin+pl]) {
+			t.Fatalf("reply %d: wrong data", got)
+		}
+		got++
+	}
+}
+
+// A peer that queues more than we advertised is dropped, never silently
+// ignored (which would stall it).
+func TestUploadDropsRequestFlood(t *testing.T) {
+	f := makeTorrent(t, 2*pl, 2*pl)
+	cfg := testConfig()
+	cfg.UploadLimiter = ratelimit.New(pl) // ~1 block/s: requests pile up
+	seed := seedNode(t, f, cfg)
+	l := dialRaw(t, seed.ln.Addr(), f.mi)
+	l.c.Send(peer.Interested())
+	l.next(peer.MsgUnchoke)
+	for _, b := range overlappingBlocks(maxQueuedUploads + 10) {
+		if l.c.Send(peer.Request(b)) != nil {
+			break // dropped already
+		}
+	}
+	l.expectClosed()
 }
 
 func TestChokerLimitsSlots(t *testing.T) {
